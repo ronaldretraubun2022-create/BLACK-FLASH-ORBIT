@@ -1,0 +1,35 @@
+{
+  "name": "black-flash-orbit",
+  "version": "1.0.0",
+  "description": "BLACK FLASH ORBIT Prime Engineering Ecosystem",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "nodemon server/index.js",
+    "test": "node -e \"console.log('No tests configured yet')\""
+  },
+  "keywords": [
+    "black-flash",
+    "orbit",
+    "express",
+    "ai",
+    "dashboard",
+    "osint",
+    "security"
+  ],
+  "author": "BLACK FLASH",
+  "license": "MIT",
+  "dependencies": {
+    "compression": "^1.8.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
+    "morgan": "^1.10.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
