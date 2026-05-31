@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="BLACK FLASH ORBIT newsroom intelligence dashboard."
+    />
+    <title>BLACK FLASH ORBIT</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from "react";
+      import { createRoot } from "react-dom/client";
+      import App from "/src/App.jsx";
+
+      createRoot(document.getElementById("root")).render(
+        React.createElement(React.StrictMode, null, React.createElement(App)),
+      );
+    </script>
+  </body>
+</html>
