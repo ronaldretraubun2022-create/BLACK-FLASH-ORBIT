@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 
 export default defineConfig({
   root: resolve(__dirname, "apps/web"),
+  envDir: resolve(__dirname),
   plugins: [react(), tailwindcss()],
   server: {
     host: "0.0.0.0",

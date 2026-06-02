@@ -25,6 +25,7 @@
   "author": "BLACK FLASH",
   "license": "MIT",
   "dependencies": {
+    "@supabase/supabase-js": "^2.107.0",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
