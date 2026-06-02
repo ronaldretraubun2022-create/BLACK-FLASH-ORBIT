@@ -28,7 +28,9 @@ export function Register() {
       setMessage(
         data.session
           ? "Akun berhasil dibuat. Anda sudah masuk ke dashboard."
-          : "Registrasi berhasil. Periksa email untuk konfirmasi akun.",
+          : data.profileError
+            ? "Registrasi berhasil. Konfirmasi email, lalu login untuk menyinkronkan profile."
+            : "Registrasi berhasil. Periksa email untuk konfirmasi akun.",
       );
     } catch (authError) {
       setError(authError.message);

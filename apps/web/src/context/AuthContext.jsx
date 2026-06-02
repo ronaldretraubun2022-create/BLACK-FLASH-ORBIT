@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
+import { insertRegisteredUserProfile } from "../services/profile";
 
 const AuthContext = createContext(null);
 
@@ -72,7 +73,17 @@ export function AuthProvider({ children }) {
 
         if (error) throw error;
 
-        return data;
+        let profileError = null;
+
+        if (data.user) {
+          try {
+            await insertRegisteredUserProfile(data.user);
+          } catch (insertError) {
+            profileError = insertError;
+          }
+        }
+
+        return { ...data, profileError };
       },
       async signOut() {
         if (!supabase) return;

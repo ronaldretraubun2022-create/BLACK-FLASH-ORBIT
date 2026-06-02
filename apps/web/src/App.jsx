@@ -13,6 +13,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { Dashboard } from "./pages/Dashboard";
+import { AIWorkspace } from "./pages/AIWorkspace";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
 
@@ -29,14 +30,7 @@ function App() {
             <Route index element={<Dashboard />} />
             <Route
               path="ai-workspace"
-              element={
-                <ModulePlaceholder
-                  description="Workspace produksi AI untuk berita otomatis, transkrip audio, dan visual jurnalistik."
-                  eyebrow="AI OPERATIONS"
-                  icon={Bot}
-                  title="AI Workspace"
-                />
-              }
+              element={<AIWorkspace />}
             />
             <Route
               path="security"
