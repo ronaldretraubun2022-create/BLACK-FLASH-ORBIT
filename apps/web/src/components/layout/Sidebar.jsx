@@ -8,14 +8,15 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
+import { NavLink } from "react-router-dom";
 
 const navigation = [
-  { label: "Dashboard", href: "#dashboard", icon: LayoutDashboard },
-  { label: "AI Workspace", href: "#ai-workspace", icon: Bot },
-  { label: "Monitoring", href: "#monitoring", icon: Activity },
-  { label: "Security", href: "#security", icon: ShieldCheck },
-  { label: "Reports", href: "#reports", icon: FileText },
-  { label: "Settings", href: "#settings", icon: Settings },
+  { label: "Dashboard", to: "/", icon: LayoutDashboard },
+  { label: "AI Workspace", to: "/ai-workspace", icon: Bot },
+  { label: "Monitoring", to: "/monitoring", icon: Activity },
+  { label: "Security", to: "/security", icon: ShieldCheck },
+  { label: "Reports", to: "/reports", icon: FileText },
+  { label: "Settings", to: "/settings", icon: Settings },
 ];
 
 export function Sidebar({ isOpen, onClose }) {
@@ -36,7 +37,7 @@ export function Sidebar({ isOpen, onClose }) {
         }`}
       >
         <div className="flex items-center justify-between">
-          <a className="flex items-center gap-3" href="#dashboard" onClick={onClose}>
+          <NavLink className="flex items-center gap-3" to="/" onClick={onClose}>
             <span className="flex size-11 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-cyan-300">
               <RadioTower size={20} />
             </span>
@@ -48,7 +49,7 @@ export function Sidebar({ isOpen, onClose }) {
                 ORBIT
               </span>
             </span>
-          </a>
+          </NavLink>
 
           <button
             aria-label="Close sidebar"
@@ -65,20 +66,23 @@ export function Sidebar({ isOpen, onClose }) {
         </div>
 
         <nav className="mt-4 grid gap-1.5" aria-label="Main navigation">
-          {navigation.map(({ label, href, icon: Icon }, index) => (
-            <a
-              className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition ${
-                index === 0
-                  ? "border border-cyan-300/20 bg-cyan-300/10 text-cyan-200"
-                  : "border border-transparent text-slate-400 hover:border-white/10 hover:bg-white/5 hover:text-white"
-              }`}
-              href={href}
-              key={href}
+          {navigation.map(({ label, to, icon: Icon }) => (
+            <NavLink
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-xl border px-3 py-3 text-sm font-semibold transition ${
+                  isActive
+                    ? "border-cyan-300/20 bg-cyan-300/10 text-cyan-200"
+                    : "border-transparent text-slate-400 hover:border-white/10 hover:bg-white/5 hover:text-white"
+                }`
+              }
+              end={to === "/"}
+              key={to}
               onClick={onClose}
+              to={to}
             >
               <Icon size={17} />
               {label}
-            </a>
+            </NavLink>
           ))}
         </nav>
 
