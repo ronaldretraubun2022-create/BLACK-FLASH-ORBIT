@@ -5,9 +5,13 @@
   "main": "server/index.js",
   "type": "commonjs",
   "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,magenta \"npm:server\" \"npm:web\"",
     "start": "node server/index.js",
-    "dev": "nodemon server/index.js",
-    "test": "node -e \"console.log('No tests configured yet')\""
+    "test": "node -e \"console.log('No tests configured yet')\"",
+    "server": "nodemon server/index.js",
+    "web": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "keywords": [
     "black-flash",
@@ -30,11 +34,16 @@
     "lucide-react": "^1.17.0",
     "morgan": "^1.10.1",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "react-router-dom": "^7.16.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
     "@vitejs/plugin-react": "^6.0.2",
+    "autoprefixer": "^10.5.0",
     "concurrently": "^10.0.0",
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^4.3.0"
   }
 }

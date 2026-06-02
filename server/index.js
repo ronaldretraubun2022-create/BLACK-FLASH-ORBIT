@@ -28,6 +28,17 @@ app.use(
   }),
 );
 
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    status: "online",
+    service: "BLACK FLASH ORBIT",
+    version: "1.0.0",
+    environment: NODE_ENV,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000,
