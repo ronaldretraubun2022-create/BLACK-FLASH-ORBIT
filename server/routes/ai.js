@@ -4,6 +4,7 @@ const router = express.Router();
 
 const OPENROUTER_CHAT_COMPLETIONS_URL =
   "https://openrouter.ai/api/v1/chat/completions";
+
 const DEFAULT_OPENROUTER_MODEL = "openrouter/auto";
 const OPENROUTER_TIMEOUT_MS = 30000;
 
@@ -22,35 +23,20 @@ function getOpenRouterErrorMessage(data) {
   );
 }
 
-function logOpenRouterError({ data, message, model, status }) {
-  const providerError = getOpenRouterError(data);
-
-  console.error("[OpenRouter]", {
-    model,
-    status,
-    message,
-    providerError: providerError
-      ? {
-          code: providerError.code,
-          message: providerError.message,
-          metadata: providerError.metadata,
-        }
-      : null,
-  });
-}
-
 router.post("/chat", async (req, res) => {
   const apiKey = process.env.OPENROUTER_API_KEY;
 
   if (!apiKey) {
     return res.status(500).json({
       success: false,
-      message: "OPENROUTER_API_KEY belum dikonfigurasi di server.",
+      status: 500,
+      message: "OPENROUTER_API_KEY belum dikonfigurasi di file .env.",
     });
   }
 
   const message =
     typeof req.body?.message === "string" ? req.body.message.trim() : "";
+
   const model =
     typeof req.body?.model === "string" && req.body.model.trim()
       ? req.body.model.trim()
@@ -59,6 +45,7 @@ router.post("/chat", async (req, res) => {
   if (!message) {
     return res.status(400).json({
       success: false,
+      status: 400,
       message: "Message tidak boleh kosong.",
     });
   }
@@ -72,8 +59,6 @@ router.post("/chat", async (req, res) => {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "BLACK FLASH ORBIT",
       },
       body: JSON.stringify({
         model,
@@ -81,7 +66,7 @@ router.post("/chat", async (req, res) => {
           {
             role: "system",
             content:
-              "Anda adalah asisten AI BLACK FLASH ORBIT untuk newsroom, jurnalistik Indonesia, multimedia, dan operasi dashboard. Jawab jelas, profesional, dan langsung.",
+              "Anda adalah BLACK FLASH ORBIT AI, asisten untuk AI Workspace, monitoring, security center, laporan, dan operasi dashboard. Jawab jelas, profesional, dan jangan mengarang jika informasi tidak tersedia.",
           },
           {
             role: "user",
@@ -95,20 +80,20 @@ router.post("/chat", async (req, res) => {
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
-      const message = getOpenRouterErrorMessage(data);
       const providerError = getOpenRouterError(data);
+      const errorMessage = getOpenRouterErrorMessage(data);
 
-      logOpenRouterError({
-        data,
-        message,
-        model,
+      console.error("[OpenRouter API Error]", {
         status: response.status,
+        model,
+        message: errorMessage,
+        providerError,
       });
 
       return res.status(response.status).json({
         success: false,
         status: response.status,
-        message,
+        message: errorMessage,
         providerError,
       });
     }
@@ -116,19 +101,15 @@ router.post("/chat", async (req, res) => {
     const aiResponse = data?.choices?.[0]?.message?.content;
 
     if (!aiResponse) {
-      const message = "OpenRouter tidak mengembalikan jawaban AI.";
-
-      logOpenRouterError({
-        data,
-        message,
+      console.error("[OpenRouter Empty Response]", {
         model,
-        status: 502,
+        data,
       });
 
       return res.status(502).json({
         success: false,
         status: 502,
-        message,
+        message: "OpenRouter tidak mengembalikan jawaban AI.",
         providerError: getOpenRouterError(data),
       });
     }
@@ -136,26 +117,27 @@ router.post("/chat", async (req, res) => {
     return res.status(200).json({
       success: true,
       response: aiResponse,
+      model,
     });
   } catch (error) {
-    if (error.name === "AbortError") {
-      return res.status(504).json({
-        success: false,
-        status: 504,
-        message: "Request ke OpenRouter timeout.",
-      });
-    }
+    const isAbort = error.name === "AbortError";
 
-    console.error("[OpenRouter]", {
+    console.error("[OpenRouter Fetch Error]", {
       model,
-      status: 500,
+      name: error.name,
       message: error.message,
+      cause: error.cause?.message || null,
+      code: error.cause?.code || null,
     });
 
-    return res.status(500).json({
+    return res.status(isAbort ? 504 : 502).json({
       success: false,
-      status: 500,
-      message: "Terjadi error saat menghubungi OpenRouter.",
+      status: isAbort ? 504 : 502,
+      message: isAbort
+        ? "Request ke OpenRouter timeout."
+        : `Gagal terhubung ke OpenRouter: ${error.message}`,
+      cause: error.cause?.message || null,
+      code: error.cause?.code || null,
     });
   } finally {
     clearTimeout(timeout);

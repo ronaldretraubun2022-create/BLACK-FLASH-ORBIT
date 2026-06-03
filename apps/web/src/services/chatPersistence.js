@@ -1,5 +1,4 @@
 import { supabase } from "../lib/supabase";
-import { api } from "./api";
 
 const DEFAULT_MODEL = "openrouter/auto";
 const DEFAULT_SESSION_TITLE = "Percakapan AI Workspace";
@@ -14,6 +13,25 @@ function requireSupabase() {
   return supabase;
 }
 
+async function getCurrentUserId() {
+  const client = requireSupabase();
+
+  const {
+    data: { session },
+    error,
+  } = await client.auth.getSession();
+
+  if (error) throw error;
+
+  const userId = session?.user?.id;
+
+  if (!userId) {
+    throw new Error("Session login tidak aktif. Silakan login ulang.");
+  }
+
+  return userId;
+}
+
 function normalizeMessage(message) {
   return {
     id: message.id,
@@ -22,6 +40,18 @@ function normalizeMessage(message) {
     model: message.model || DEFAULT_MODEL,
     content: message.content,
     createdAt: message.created_at,
+  };
+}
+
+function normalizeSession(session) {
+  return {
+    id: session.id,
+    userId: session.user_id,
+    title: session.title || DEFAULT_SESSION_TITLE,
+    model: session.model || DEFAULT_MODEL,
+    pinned: Boolean(session.pinned),
+    createdAt: session.created_at,
+    updatedAt: session.updated_at || session.created_at,
   };
 }
 
@@ -47,18 +77,6 @@ function getFriendlyError(error) {
   return error;
 }
 
-function normalizeSession(session) {
-  return {
-    id: session.id,
-    userId: session.user_id,
-    title: session.title || DEFAULT_SESSION_TITLE,
-    model: session.model || DEFAULT_MODEL,
-    pinned: Boolean(session.pinned),
-    createdAt: session.created_at,
-    updatedAt: session.updated_at || session.created_at,
-  };
-}
-
 export async function getChatSessions(userId) {
   const client = requireSupabase();
 
@@ -69,58 +87,30 @@ export async function getChatSessions(userId) {
     .order("pinned", { ascending: false })
     .order("created_at", { ascending: false });
 
-  if (error) {
-    if (!isModelSchemaError(error)) throw error;
-
-    const { data: fallbackData, error: fallbackError } = await client
-      .from("chat_sessions")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false });
-
-    if (fallbackError) throw getFriendlyError(fallbackError);
-
-    return (fallbackData || []).map(normalizeSession);
-  }
+  if (error) throw getFriendlyError(error);
 
   return (data || []).map(normalizeSession);
 }
 
 export async function createChatSession({ model, title, userId }) {
   const client = requireSupabase();
-  const sessionPayload = {
-    user_id: userId,
-    title: title || DEFAULT_SESSION_TITLE,
-  };
 
-  const { data: newSession, error: insertError } = await client
+  const { data, error } = await client
     .from("chat_sessions")
     .insert([
       {
-        ...sessionPayload,
+        user_id: userId,
+        title: title || DEFAULT_SESSION_TITLE,
         model: model || DEFAULT_MODEL,
+        pinned: false,
       },
     ])
     .select("*")
     .single();
 
-  if (insertError) {
-    if (!isModelSchemaError(insertError)) {
-      throw getFriendlyError(insertError);
-    }
+  if (error) throw getFriendlyError(error);
 
-    const { data: fallbackSession, error: fallbackError } = await client
-      .from("chat_sessions")
-      .insert([sessionPayload])
-      .select("*")
-      .single();
-
-    if (fallbackError) throw getFriendlyError(fallbackError);
-
-    return normalizeSession(fallbackSession);
-  }
-
-  return normalizeSession(newSession);
+  return normalizeSession(data);
 }
 
 export async function getOrCreateActiveChatSession({ model, userId }) {
@@ -135,72 +125,78 @@ export async function getOrCreateActiveChatSession({ model, userId }) {
   });
 }
 
-async function getAccessToken() {
-  const client = requireSupabase();
-  const {
-    data: { session },
-    error,
-  } = await client.auth.getSession();
-
-  if (error) throw error;
-
-  if (session?.access_token) {
-    return session.access_token;
-  }
-
-  const {
-    data: { session: refreshedSession },
-    error: refreshError,
-  } = await client.auth.refreshSession();
-
-  if (refreshError) throw refreshError;
-
-  if (refreshedSession?.access_token) {
-    return refreshedSession.access_token;
-  }
-
-  throw new Error(
-    "Access token login tidak tersedia. Silakan logout lalu login ulang.",
-  );
-}
-
 export async function renameChatSession({ sessionId, title }) {
+  const client = requireSupabase();
+  const userId = await getCurrentUserId();
   const cleanTitle = title.trim();
 
   if (!cleanTitle) {
     throw new Error("Nama chat tidak boleh kosong.");
   }
 
-  const accessToken = await getAccessToken();
-  const response = await api.renameChatSession({
-    accessToken,
-    sessionId,
-    title: cleanTitle,
-  });
+  const { data, error } = await client
+    .from("chat_sessions")
+    .update({ title: cleanTitle })
+    .eq("id", sessionId)
+    .eq("user_id", userId)
+    .select("*")
+    .maybeSingle();
 
-  return normalizeSession(response.data);
+  if (error) throw getFriendlyError(error);
+
+  if (!data) {
+    throw new Error(
+      "Chat session tidak ditemukan atau bukan milik user login.",
+    );
+  }
+
+  return normalizeSession(data);
 }
 
 export async function deleteChatSession(sessionId) {
-  const accessToken = await getAccessToken();
+  const client = requireSupabase();
+  const userId = await getCurrentUserId();
 
-  const response = await api.deleteChatSession({
-    accessToken,
-    sessionId,
-  });
+  const { error: messagesError } = await client
+    .from("chat_messages")
+    .delete()
+    .eq("session_id", sessionId)
+    .eq("user_id", userId);
 
-  return response.data;
+  if (messagesError) throw getFriendlyError(messagesError);
+
+  const { error: sessionError } = await client
+    .from("chat_sessions")
+    .delete()
+    .eq("id", sessionId)
+    .eq("user_id", userId);
+
+  if (sessionError) throw getFriendlyError(sessionError);
+
+  return { id: sessionId };
 }
 
 export async function togglePinChatSession({ pinned, sessionId }) {
-  const accessToken = await getAccessToken();
-  const response = await api.togglePinChatSession({
-    accessToken,
-    pinned,
-    sessionId,
-  });
+  const client = requireSupabase();
+  const userId = await getCurrentUserId();
 
-  return normalizeSession(response.data);
+  const { data, error } = await client
+    .from("chat_sessions")
+    .update({ pinned: Boolean(pinned) })
+    .eq("id", sessionId)
+    .eq("user_id", userId)
+    .select("*")
+    .maybeSingle();
+
+  if (error) throw getFriendlyError(error);
+
+  if (!data) {
+    throw new Error(
+      "Chat session tidak ditemukan atau bukan milik user login.",
+    );
+  }
+
+  return normalizeSession(data);
 }
 
 export async function getChatMessages(sessionId) {
@@ -212,7 +208,7 @@ export async function getChatMessages(sessionId) {
     .eq("session_id", sessionId)
     .order("created_at", { ascending: true });
 
-  if (error) throw error;
+  if (error) throw getFriendlyError(error);
 
   return (data || []).map(normalizeMessage);
 }
@@ -225,45 +221,22 @@ export async function saveChatMessage({
   userId,
 }) {
   const client = requireSupabase();
-  const messagePayload = {
-    session_id: sessionId,
-    user_id: userId,
-    role,
-    content,
-  };
 
   const { data, error } = await client
     .from("chat_messages")
     .insert([
       {
-        ...messagePayload,
+        session_id: sessionId,
+        user_id: userId,
+        role,
+        content,
         model: model || DEFAULT_MODEL,
       },
     ])
     .select("*")
     .single();
 
-  if (error) {
-    if (!isModelSchemaError(error)) {
-      throw getFriendlyError(error);
-    }
-
-    const { data: fallbackMessage, error: fallbackError } = await client
-      .from("chat_messages")
-      .insert([
-        {
-          session_id: sessionId,
-          role,
-          content,
-        },
-      ])
-      .select("*")
-      .single();
-
-    if (fallbackError) throw getFriendlyError(fallbackError);
-
-    return normalizeMessage(fallbackMessage);
-  }
+  if (error) throw getFriendlyError(error);
 
   return normalizeMessage(data);
 }

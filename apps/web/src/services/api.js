@@ -2,7 +2,7 @@ const DEFAULT_TIMEOUT_MS = 30000;
 
 function requireAccessToken(accessToken) {
   if (typeof accessToken !== "string" || !accessToken.trim()) {
-    throw new Error("Access token login tidak tersedia. Silakan login ulang.");
+    throw new Error("Session login tidak aktif. Silakan login ulang.");
   }
 
   return accessToken.trim();
@@ -28,11 +28,11 @@ async function request(path, options = {}) {
       const providerMessage =
         errorBody?.providerError?.message ||
         errorBody?.providerError?.metadata?.raw;
+
       const message =
         [errorBody?.message, errorBody?.error, providerMessage]
           .filter(Boolean)
-          .join(" | ") ||
-        `API request failed with status ${response.status}.`;
+          .join(" | ") || `API request failed with status ${response.status}.`;
 
       throw new Error(message);
     }
@@ -53,12 +53,14 @@ export const api = {
   getHealth() {
     return request("/api/health");
   },
+
   sendAiChat({ message, model }) {
     return request("/api/ai/chat", {
       method: "POST",
       body: JSON.stringify({ message, model }),
     });
   },
+
   renameChatSession({ accessToken, sessionId, title }) {
     const token = requireAccessToken(accessToken);
 
@@ -70,6 +72,7 @@ export const api = {
       body: JSON.stringify({ title }),
     });
   },
+
   deleteChatSession({ accessToken, sessionId }) {
     const token = requireAccessToken(accessToken);
 
@@ -80,6 +83,7 @@ export const api = {
       },
     });
   },
+
   togglePinChatSession({ accessToken, pinned, sessionId }) {
     const token = requireAccessToken(accessToken);
 
