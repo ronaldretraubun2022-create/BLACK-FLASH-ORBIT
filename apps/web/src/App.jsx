@@ -9,13 +9,13 @@ import {
   Activity,
   Bot,
   FileText,
-  Settings,
   ShieldCheck,
 } from "lucide-react";
 import { Dashboard } from "./pages/Dashboard";
 import { AIWorkspace } from "./pages/AIWorkspace";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
+import { Settings } from "./pages/Settings";
 
 function App() {
   return (
@@ -67,14 +67,7 @@ function App() {
             />
             <Route
               path="settings"
-              element={
-                <ModulePlaceholder
-                  description="Konfigurasi workspace, preferensi operasional, dan integrasi produksi."
-                  eyebrow="SYSTEM CONFIGURATION"
-                  icon={Settings}
-                  title="Settings"
-                />
-              }
+              element={<Settings />}
             />
           </Route>
         </Route>

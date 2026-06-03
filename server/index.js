@@ -9,6 +9,7 @@ const rateLimit = require("express-rate-limit");
 
 const apiRoutes = require("./routes");
 const aiRoutes = require("./routes/ai");
+const backupRoutes = require("./routes/backup");
 const chatRoutes = require("./routes/chat.routes");
 const notFound = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
@@ -77,6 +78,7 @@ app.get("/", (req, res) => {
 
 app.use("/api/v1", requireRouteHandler("routes/index.js", apiRoutes));
 app.use("/api/ai", requireRouteHandler("routes/ai.js", aiRoutes));
+app.use("/api/backup", requireRouteHandler("routes/backup.js", backupRoutes));
 app.use("/api/chat", requireRouteHandler("routes/chat.routes.js", chatRoutes));
 
 app.use(notFound);

@@ -8,6 +8,14 @@ const OPENROUTER_CHAT_COMPLETIONS_URL =
 const DEFAULT_OPENROUTER_MODEL = "openrouter/auto";
 const OPENROUTER_TIMEOUT_MS = 30000;
 
+function getSafeOpenRouterApiKey() {
+  return String(process.env.OPENROUTER_API_KEY || "").trim();
+}
+
+function hasInvalidHeaderCharacters(value) {
+  return /[^\x20-\x7E]/.test(value);
+}
+
 function getOpenRouterError(data) {
   return data?.error || data?.provider_error || data?.providerError || null;
 }
@@ -24,13 +32,22 @@ function getOpenRouterErrorMessage(data) {
 }
 
 router.post("/chat", async (req, res) => {
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  const apiKey = getSafeOpenRouterApiKey();
 
   if (!apiKey) {
     return res.status(500).json({
       success: false,
       status: 500,
       message: "OPENROUTER_API_KEY belum dikonfigurasi di file .env.",
+    });
+  }
+
+  if (hasInvalidHeaderCharacters(apiKey)) {
+    return res.status(500).json({
+      success: false,
+      status: 500,
+      message:
+        "OPENROUTER_API_KEY tidak valid. Pastikan tidak ada spasi, newline, emoji, huruf non-ASCII, atau karakter hasil copy-paste yang rusak.",
     });
   }
 
@@ -59,6 +76,8 @@ router.post("/chat", async (req, res) => {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:4173",
+        "X-Title": "BLACK FLASH ORBIT",
       },
       body: JSON.stringify({
         model,
@@ -101,11 +120,6 @@ router.post("/chat", async (req, res) => {
     const aiResponse = data?.choices?.[0]?.message?.content;
 
     if (!aiResponse) {
-      console.error("[OpenRouter Empty Response]", {
-        model,
-        data,
-      });
-
       return res.status(502).json({
         success: false,
         status: 502,
