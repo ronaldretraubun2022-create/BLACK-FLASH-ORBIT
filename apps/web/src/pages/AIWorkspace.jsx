@@ -38,6 +38,10 @@ import {
   togglePromptTemplateFavorite,
   updatePromptTemplate,
 } from "../services/promptTemplates";
+import {
+  getConversationSearchErrorMessage,
+  searchConversations,
+} from "../services/conversationSearch";
 
 const modelOptions = [
   { label: "OpenRouter Auto", value: "openrouter/auto" },
@@ -63,6 +67,15 @@ export function AIWorkspace() {
   const [sessions, setSessions] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [sessionSearchQuery, setSessionSearchQuery] = useState("");
+  const [conversationSearchQuery, setConversationSearchQuery] = useState("");
+  const [debouncedConversationSearchQuery, setDebouncedConversationSearchQuery] =
+    useState("");
+  const [conversationSearchResults, setConversationSearchResults] = useState(
+    [],
+  );
+  const [conversationSearchError, setConversationSearchError] = useState("");
+  const [isConversationSearchLoading, setIsConversationSearchLoading] =
+    useState(false);
   const [renameDialogSession, setRenameDialogSession] = useState(null);
   const [renameTitle, setRenameTitle] = useState("");
   const [deleteDialogSession, setDeleteDialogSession] = useState(null);
@@ -88,7 +101,8 @@ export function AIWorkspace() {
   const [messages, setMessages] = useState([]);
 
   const conversationCount = useMemo(
-    () => messages.filter((message) => message.role === "user").length,
+    () =>
+      (messages || []).filter((message) => message?.role === "user").length,
     [messages],
   );
   const selectedModelLabel =
@@ -97,21 +111,24 @@ export function AIWorkspace() {
   const filteredMessages = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
-    if (!query) return messages;
+    const safeMessages = Array.isArray(messages) ? messages : [];
 
-    return messages.filter((message) =>
+    if (!query) return safeMessages;
+
+    return safeMessages.filter((message) =>
       [message.content, message.model, message.role]
         .filter(Boolean)
-        .some((value) => value.toLowerCase().includes(query)),
+        .some((value) => String(value).toLowerCase().includes(query)),
     );
   }, [messages, searchQuery]);
   const filteredSessions = useMemo(() => {
     const query = sessionSearchQuery.trim().toLowerCase();
+    const safeSessions = Array.isArray(sessions) ? sessions : [];
 
-    if (!query) return sessions;
+    if (!query) return safeSessions;
 
-    return sessions.filter((session) =>
-      session.title.toLowerCase().includes(query),
+    return safeSessions.filter((session) =>
+      String(session?.title || "").toLowerCase().includes(query),
     );
   }, [sessionSearchQuery, sessions]);
   const promptTemplateCategories = useMemo(() => {
@@ -246,8 +263,67 @@ export function AIWorkspace() {
     };
   }, [user?.id]);
 
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedConversationSearchQuery(conversationSearchQuery.trim());
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [conversationSearchQuery]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadConversationSearchResults() {
+      if (!user?.id || !debouncedConversationSearchQuery) {
+        setConversationSearchResults([]);
+        setConversationSearchError("");
+        setIsConversationSearchLoading(false);
+        return;
+      }
+
+      setIsConversationSearchLoading(true);
+      setConversationSearchError("");
+
+      try {
+        const results = await searchConversations({
+          query: debouncedConversationSearchQuery,
+          userId: user.id,
+        });
+
+        if (!isMounted) return;
+
+        setConversationSearchResults(results);
+      } catch (searchError) {
+        if (!isMounted) return;
+
+        setConversationSearchResults([]);
+        setConversationSearchError(
+          getConversationSearchErrorMessage(searchError),
+        );
+      } finally {
+        if (isMounted) {
+          setIsConversationSearchLoading(false);
+        }
+      }
+    }
+
+    loadConversationSearchResults();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [debouncedConversationSearchQuery, user?.id]);
+
   async function selectSession(session) {
-    if (isSending || isSessionActionLoading || session.id === activeSession?.id) {
+    if (
+      !session?.id ||
+      isSending ||
+      isSessionActionLoading ||
+      session.id === activeSession?.id
+    ) {
       return;
     }
 
@@ -267,6 +343,16 @@ export function AIWorkspace() {
     } finally {
       setIsLoadingHistory(false);
     }
+  }
+
+  async function openConversationSearchResult(result) {
+    const targetSession =
+      sessions.find((session) => session.id === result?.session?.id) ||
+      result?.session;
+
+    if (!targetSession?.id) return;
+
+    await selectSession(targetSession);
   }
 
   async function handleNewChat() {
@@ -1035,6 +1121,95 @@ export function AIWorkspace() {
 
         <aside className="grid gap-6">
           <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
+            <div className="flex items-center gap-2">
+              <Search className="text-cyan-300" size={18} />
+              <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
+                SEARCH CONVERSATION
+              </p>
+            </div>
+
+            <label className="mt-4 flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-slate-500 transition focus-within:border-cyan-300/40">
+              <Search size={15} />
+              <input
+                className="w-full bg-transparent text-xs font-bold text-slate-100 outline-none placeholder:text-slate-600"
+                onChange={(event) =>
+                  setConversationSearchQuery(event.target.value)
+                }
+                placeholder="Cari supabase, openrouter, title..."
+                value={conversationSearchQuery}
+              />
+            </label>
+
+            <div className="mt-4 grid max-h-80 gap-3 overflow-y-auto pr-1">
+              {isConversationSearchLoading && (
+                <p className="rounded-2xl border border-cyan-300/20 bg-cyan-300/5 p-4 text-xs font-bold text-cyan-200">
+                  Mencari conversation...
+                </p>
+              )}
+              {!isConversationSearchLoading && conversationSearchError && (
+                <p className="rounded-2xl border border-rose-300/20 bg-rose-300/5 p-4 text-xs font-bold text-rose-200">
+                  {conversationSearchError}
+                </p>
+              )}
+              {!isConversationSearchLoading &&
+                !conversationSearchError &&
+                !debouncedConversationSearchQuery && (
+                  <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
+                    Cari title session, model, prompt user, atau response AI.
+                  </p>
+                )}
+              {!isConversationSearchLoading &&
+                !conversationSearchError &&
+                debouncedConversationSearchQuery &&
+                conversationSearchResults.length === 0 && (
+                  <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
+                    Conversation tidak ditemukan.
+                  </p>
+                )}
+              {!isConversationSearchLoading &&
+                conversationSearchResults.map((result) => {
+                  const firstMessage = result.messages?.[0];
+
+                  return (
+                    <button
+                      className="rounded-2xl border border-white/10 bg-black/15 p-4 text-left transition hover:border-cyan-300/30 hover:bg-cyan-300/5"
+                      key={result.id}
+                      onClick={() => openConversationSearchResult(result)}
+                      type="button"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h4 className="line-clamp-1 text-sm font-black text-white">
+                            {highlightMatch(
+                              result.session?.title,
+                              debouncedConversationSearchQuery,
+                            )}
+                          </h4>
+                          <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">
+                            {highlightMatch(
+                              result.session?.model,
+                              debouncedConversationSearchQuery,
+                            )}
+                          </p>
+                        </div>
+                        <span className="shrink-0 rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold text-slate-500">
+                          {result.messages?.length || "title"}
+                        </span>
+                      </div>
+                      <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-500">
+                        {highlightMatch(
+                          firstMessage?.content ||
+                            "Match ditemukan pada session title atau model.",
+                          debouncedConversationSearchQuery,
+                        )}
+                      </p>
+                    </button>
+                  );
+                })}
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Library className="text-cyan-300" size={18} />
@@ -1340,6 +1515,33 @@ function sortSessions(sessionList) {
 
     return new Date(second.createdAt || 0) - new Date(first.createdAt || 0);
   });
+}
+
+function highlightMatch(value, query) {
+  const text = String(value || "");
+  const cleanQuery = String(query || "").trim();
+
+  if (!cleanQuery) return text;
+
+  const lowerText = text.toLowerCase();
+  const lowerQuery = cleanQuery.toLowerCase();
+  const matchIndex = lowerText.indexOf(lowerQuery);
+
+  if (matchIndex < 0) return text;
+
+  const before = text.slice(0, matchIndex);
+  const match = text.slice(matchIndex, matchIndex + cleanQuery.length);
+  const after = text.slice(matchIndex + cleanQuery.length);
+
+  return (
+    <>
+      {before}
+      <mark className="rounded bg-cyan-300/20 px-1 text-cyan-100">
+        {match}
+      </mark>
+      {after}
+    </>
+  );
 }
 
 function sortPromptTemplates(templateList) {
