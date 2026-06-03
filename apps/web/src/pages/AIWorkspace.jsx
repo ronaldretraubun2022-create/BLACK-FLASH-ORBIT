@@ -38,6 +38,10 @@ import {
   togglePromptTemplateFavorite,
   updatePromptTemplate,
 } from "../services/promptTemplates";
+import {
+  getConversationSearchErrorMessage,
+  searchConversations,
+} from "../services/conversationSearch";
 
 const modelOptions = [
   { label: "OpenRouter Auto", value: "openrouter/auto" },
@@ -79,6 +83,10 @@ export function AIWorkspace() {
   );
   const [deletePromptTemplateDialogItem, setDeletePromptTemplateDialogItem] =
     useState(null);
+  const [conversationSearchQuery, setConversationSearchQuery] = useState("");
+  const [conversationSearchResults, setConversationSearchResults] = useState([]);
+  const [isConversationSearchLoading, setIsConversationSearchLoading] =
+    useState(false);
   const [isPromptTemplateLoading, setIsPromptTemplateLoading] = useState(false);
   const [isPromptTemplateActionLoading, setIsPromptTemplateActionLoading] =
     useState(false);
@@ -245,6 +253,51 @@ export function AIWorkspace() {
       isMounted = false;
     };
   }, [user?.id]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const cleanQuery = conversationSearchQuery.trim();
+
+    if (!user?.id || !cleanQuery) {
+      setConversationSearchResults([]);
+      setIsConversationSearchLoading(false);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    setIsConversationSearchLoading(true);
+
+    const searchTimeout = setTimeout(async () => {
+      try {
+        const results = await searchConversations({
+          query: cleanQuery,
+          userId: user.id,
+        });
+
+        if (!isMounted) return;
+
+        setConversationSearchResults(results);
+      } catch (searchError) {
+        if (!isMounted) return;
+
+        setConversationSearchResults([]);
+        setError(
+          getConversationSearchErrorMessage(searchError) ||
+            "Gagal search conversation.",
+        );
+      } finally {
+        if (isMounted) {
+          setIsConversationSearchLoading(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(searchTimeout);
+    };
+  }, [conversationSearchQuery, user?.id]);
 
   async function selectSession(session) {
     if (isSending || isSessionActionLoading || session.id === activeSession?.id) {
@@ -708,6 +761,12 @@ export function AIWorkspace() {
     setPrompt(libraryPrompt);
   }
 
+  async function openConversationSearchResult(result) {
+    if (!result?.session) return;
+
+    await selectSession(result.session);
+  }
+
   function handleExportConversation(format) {
     if (!activeSession?.id) {
       setError("Pilih chat session sebelum export.");
@@ -873,6 +932,80 @@ export function AIWorkspace() {
               {sessions.length > 0 && filteredSessions.length === 0 && (
                 <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
                   Session tidak ditemukan.
+                </p>
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
+            <div className="flex items-center gap-2">
+              <Search className="text-cyan-300" size={18} />
+              <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
+                SEARCH CONVERSATION
+              </p>
+            </div>
+
+            <label className="mt-4 flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-slate-500 transition focus-within:border-cyan-300/40">
+              <Search size={15} />
+              <input
+                className="w-full bg-transparent text-xs font-bold text-slate-100 outline-none placeholder:text-slate-600"
+                onChange={(event) =>
+                  setConversationSearchQuery(event.target.value)
+                }
+                placeholder="Cari judul, prompt, response..."
+                value={conversationSearchQuery}
+              />
+            </label>
+
+            <div className="mt-4 grid max-h-[360px] gap-2 overflow-y-auto pr-1">
+              {isConversationSearchLoading && (
+                <p className="rounded-2xl border border-cyan-300/20 bg-cyan-300/5 p-4 text-xs font-bold text-cyan-200">
+                  Mencari conversation...
+                </p>
+              )}
+              {!isConversationSearchLoading &&
+                conversationSearchResults.map((result) => (
+                  <button
+                    className="rounded-2xl border border-white/10 bg-black/15 p-3 text-left transition hover:border-cyan-300/30 hover:bg-cyan-300/5"
+                    key={result.id}
+                    onClick={() => openConversationSearchResult(result)}
+                    type="button"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="line-clamp-1 text-xs font-black text-white">
+                          <HighlightedText
+                            query={conversationSearchQuery}
+                            text={result.session.title}
+                          />
+                        </p>
+                        <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">
+                          {getConversationSearchTypeLabel(result)}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold text-slate-500">
+                        {result.session.model}
+                      </span>
+                    </div>
+                    <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-500">
+                      <HighlightedText
+                        query={conversationSearchQuery}
+                        text={result.snippet}
+                      />
+                    </p>
+                  </button>
+                ))}
+              {!isConversationSearchLoading &&
+                conversationSearchQuery.trim() &&
+                conversationSearchResults.length === 0 && (
+                  <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
+                    Tidak ada conversation yang cocok.
+                  </p>
+                )}
+              {!conversationSearchQuery.trim() && (
+                <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
+                  Cari berdasarkan judul session, user prompt, atau assistant
+                  response.
                 </p>
               )}
             </div>
@@ -1350,6 +1483,37 @@ function sortPromptTemplates(templateList) {
 
     return new Date(second.updatedAt || 0) - new Date(first.updatedAt || 0);
   });
+}
+
+function getConversationSearchTypeLabel(result) {
+  if (result.type === "session") return "Session Title";
+  if (result.role === "user") return "User Prompt";
+  if (result.role === "assistant") return "Assistant Response";
+
+  return "Conversation";
+}
+
+function HighlightedText({ query, text }) {
+  const value = String(text || "");
+  const cleanQuery = query.trim();
+
+  if (!cleanQuery) return value;
+
+  const escapedQuery = cleanQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = value.split(new RegExp(`(${escapedQuery})`, "gi"));
+
+  return parts.map((part, index) =>
+    part.toLowerCase() === cleanQuery.toLowerCase() ? (
+      <mark
+        className="rounded bg-cyan-300/20 px-0.5 font-black text-cyan-100"
+        key={`${part}-${index}`}
+      >
+        {part}
+      </mark>
+    ) : (
+      <span key={`${part}-${index}`}>{part}</span>
+    ),
+  );
 }
 
 function exportConversation({ format, messages, modelLabel, session }) {
