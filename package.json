@@ -10,7 +10,7 @@
     "test": "node -e \"console.log('No tests configured yet')\"",
     "server": "nodemon server/index.js",
     "web": "vite",
-    "build": "vite build",
+    "build": "node scripts/build-web.mjs",
     "preview": "vite preview"
   },
   "keywords": [
