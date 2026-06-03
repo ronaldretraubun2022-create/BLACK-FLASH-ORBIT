@@ -138,27 +138,32 @@ router.get("/automation", (req, res) => {
     auditEngine: {
       name: "Project Audit",
       status: "ONLINE",
-      description: "Inspect workspace structure, runtime health, and project readiness.",
+      description:
+        "Inspect workspace structure, runtime health, and project readiness.",
     },
     fixEngine: {
       name: "Code Repair",
       status: "READY",
-      description: "Prepare focused fixes for detected issues and build failures.",
+      description:
+        "Prepare focused fixes for detected issues and build failures.",
     },
     workspaceScanner: {
       name: "Repository Scan",
       status: "ACTIVE",
-      description: "Track project modules and surface operational workspace signals.",
+      description:
+        "Track project modules and surface operational workspace signals.",
     },
     moduleInstaller: {
       name: "Module Registry",
       status: "SYNCED",
-      description: "Coordinate approved module installation and dependency readiness.",
+      description:
+        "Coordinate approved module installation and dependency readiness.",
     },
     deployEngine: {
       name: "Deploy Pipeline",
       status: "READY",
-      description: "Prepare validated production builds for controlled release.",
+      description:
+        "Prepare validated production builds for controlled release.",
     },
   });
 });

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bot,
-  Check,
   Clock3,
   Library,
   MessageSquare,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Send,
@@ -24,6 +25,7 @@ import {
   getOrCreateActiveChatSession,
   renameChatSession,
   saveChatMessage,
+  togglePinChatSession,
 } from "../services/chatPersistence";
 
 const modelOptions = [
@@ -65,8 +67,10 @@ export function AIWorkspace() {
   const [activeSession, setActiveSession] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [editingSessionId, setEditingSessionId] = useState("");
-  const [editingTitle, setEditingTitle] = useState("");
+  const [sessionSearchQuery, setSessionSearchQuery] = useState("");
+  const [renameDialogSession, setRenameDialogSession] = useState(null);
+  const [renameTitle, setRenameTitle] = useState("");
+  const [deleteDialogSession, setDeleteDialogSession] = useState(null);
   const [isSessionActionLoading, setIsSessionActionLoading] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isSending, setIsSending] = useState(false);
@@ -90,6 +94,15 @@ export function AIWorkspace() {
         .some((value) => value.toLowerCase().includes(query)),
     );
   }, [messages, searchQuery]);
+  const filteredSessions = useMemo(() => {
+    const query = sessionSearchQuery.trim().toLowerCase();
+
+    if (!query) return sessions;
+
+    return sessions.filter((session) =>
+      session.title.toLowerCase().includes(query),
+    );
+  }, [sessionSearchQuery, sessions]);
 
   const loadSessionMessages = useCallback(async (sessionId) => {
     const databaseMessages = await getChatMessages(sessionId);
@@ -208,28 +221,49 @@ export function AIWorkspace() {
     }
   }
 
-  function startRenameSession(session) {
-    setEditingSessionId(session.id);
-    setEditingTitle(session.title);
+  function openRenameDialog(session) {
+    setRenameDialogSession(session);
+    setRenameTitle(session.title);
   }
 
-  function cancelRenameSession() {
-    setEditingSessionId("");
-    setEditingTitle("");
+  function closeRenameDialog() {
+    setRenameDialogSession(null);
+    setRenameTitle("");
   }
 
   async function submitRenameSession(event) {
     event.preventDefault();
 
-    if (!editingSessionId || isSessionActionLoading) return;
+    const cleanTitle = renameTitle.trim();
+
+    if (!renameDialogSession?.id || !cleanTitle || isSessionActionLoading) {
+      return;
+    }
 
     setError("");
     setIsSessionActionLoading(true);
 
+    const previousSessions = sessions;
+    const previousActiveSession = activeSession;
+    const optimisticSession = {
+      ...renameDialogSession,
+      title: cleanTitle,
+    };
+
+    setSessions((currentSessions) =>
+      currentSessions.map((session) =>
+        session.id === optimisticSession.id ? optimisticSession : session,
+      ),
+    );
+
+    if (activeSession?.id === optimisticSession.id) {
+      setActiveSession(optimisticSession);
+    }
+
     try {
       const renamedSession = await renameChatSession({
-        sessionId: editingSessionId,
-        title: editingTitle,
+        sessionId: renameDialogSession.id,
+        title: cleanTitle,
       });
 
       setSessions((currentSessions) =>
@@ -242,8 +276,10 @@ export function AIWorkspace() {
         setActiveSession(renamedSession);
       }
 
-      cancelRenameSession();
+      closeRenameDialog();
     } catch (sessionError) {
+      setSessions(previousSessions);
+      setActiveSession(previousActiveSession);
       setError(
         getChatPersistenceErrorMessage(sessionError) ||
           "Gagal rename chat session.",
@@ -253,27 +289,21 @@ export function AIWorkspace() {
     }
   }
 
-  async function handleDeleteSession(session) {
-    if (isSessionActionLoading) return;
-
-    const isConfirmed = window.confirm(
-      `Hapus chat "${session.title}" dan semua message di dalamnya?`,
-    );
-
-    if (!isConfirmed) return;
+  async function confirmDeleteSession() {
+    if (!deleteDialogSession?.id || isSessionActionLoading) return;
 
     setError("");
     setIsSessionActionLoading(true);
     setIsLoadingHistory(true);
 
     try {
-      await deleteChatSession(session.id);
+      await deleteChatSession(deleteDialogSession.id);
       const remainingSessions = await refreshSessions(user.id);
       const currentSessionStillExists = remainingSessions.find(
         (item) => item.id === activeSession?.id,
       );
       const nextSession =
-        session.id === activeSession?.id
+        deleteDialogSession.id === activeSession?.id
           ? remainingSessions[0] || null
           : currentSessionStillExists;
 
@@ -293,6 +323,8 @@ export function AIWorkspace() {
       }
 
       setSearchQuery("");
+      setSessionSearchQuery("");
+      setDeleteDialogSession(null);
     } catch (sessionError) {
       setError(
         getChatPersistenceErrorMessage(sessionError) ||
@@ -300,6 +332,51 @@ export function AIWorkspace() {
       );
     } finally {
       setIsLoadingHistory(false);
+      setIsSessionActionLoading(false);
+    }
+  }
+
+  async function handleTogglePinSession(session) {
+    if (isSessionActionLoading) return;
+
+    setError("");
+    setIsSessionActionLoading(true);
+
+    const previousSessions = sessions;
+    const nextPinned = !session.pinned;
+
+    setSessions((currentSessions) =>
+      sortSessions(
+        currentSessions.map((item) =>
+          item.id === session.id ? { ...item, pinned: nextPinned } : item,
+        ),
+      ),
+    );
+
+    try {
+      const pinnedSession = await togglePinChatSession({
+        sessionId: session.id,
+        pinned: nextPinned,
+      });
+
+      setSessions((currentSessions) =>
+        sortSessions(
+          currentSessions.map((item) =>
+            item.id === pinnedSession.id ? pinnedSession : item,
+          ),
+        ),
+      );
+
+      if (activeSession?.id === pinnedSession.id) {
+        setActiveSession(pinnedSession);
+      }
+    } catch (sessionError) {
+      setSessions(previousSessions);
+      setError(
+        getChatPersistenceErrorMessage(sessionError) ||
+          "Gagal mengubah status pin session.",
+      );
+    } finally {
       setIsSessionActionLoading(false);
     }
   }
@@ -317,6 +394,7 @@ export function AIWorkspace() {
     try {
       await saveChatMessage({
         sessionId: activeSession.id,
+        userId: user.id,
         role: "user",
         content: cleanPrompt,
         model: selectedModel,
@@ -330,6 +408,7 @@ export function AIWorkspace() {
 
       await saveChatMessage({
         sessionId: activeSession.id,
+        userId: user.id,
         role: "assistant",
         content: data.response,
         model: selectedModel,
@@ -413,9 +492,20 @@ export function AIWorkspace() {
             </div>
 
             <div className="mt-4 grid max-h-[460px] gap-2 overflow-y-auto pr-1">
-              {sessions.map((session) => {
+              <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-slate-500 transition focus-within:border-cyan-300/40">
+                <Search size={15} />
+                <input
+                  className="w-full bg-transparent text-xs font-bold text-slate-100 outline-none placeholder:text-slate-600"
+                  onChange={(event) =>
+                    setSessionSearchQuery(event.target.value)
+                  }
+                  placeholder="Cari session..."
+                  value={sessionSearchQuery}
+                />
+              </label>
+
+              {filteredSessions.map((session) => {
                 const isActive = session.id === activeSession?.id;
-                const isEditing = session.id === editingSessionId;
 
                 return (
                   <article
@@ -426,78 +516,63 @@ export function AIWorkspace() {
                     }`}
                     key={session.id}
                   >
-                    {isEditing ? (
-                      <form
-                        className="grid gap-2"
-                        onSubmit={submitRenameSession}
+                    <div className="flex items-start gap-2">
+                      <button
+                        className="block min-w-0 flex-1 text-left"
+                        disabled={isSessionActionLoading || isSending}
+                        onClick={() => selectSession(session)}
+                        type="button"
                       >
-                        <input
-                          className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs font-bold text-white outline-none focus:border-cyan-300/40"
-                          onChange={(event) =>
-                            setEditingTitle(event.target.value)
-                          }
-                          value={editingTitle}
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            className="inline-flex size-8 items-center justify-center rounded-lg border border-cyan-300/30 bg-cyan-300/15 text-cyan-100"
-                            disabled={isSessionActionLoading}
-                            title="Simpan rename"
-                            type="submit"
-                          >
-                            <Check size={14} />
-                          </button>
-                          <button
-                            className="inline-flex size-8 items-center justify-center rounded-lg border border-white/10 bg-black/20 text-slate-300"
-                            onClick={cancelRenameSession}
-                            title="Batal rename"
-                            type="button"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      </form>
-                    ) : (
-                      <>
-                        <button
-                          className="block w-full text-left"
-                          disabled={isSessionActionLoading || isSending}
-                          onClick={() => selectSession(session)}
-                          type="button"
-                        >
+                        <span className="flex items-center gap-2">
+                          {session.pinned && (
+                            <Pin className="shrink-0 text-amber-300" size={13} />
+                          )}
                           <span className="line-clamp-1 text-sm font-black text-white">
                             {session.title}
                           </span>
-                          <span className="mt-1 block line-clamp-1 text-[10px] font-bold text-slate-500">
-                            {session.model}
-                          </span>
-                        </button>
-                        <div className="mt-3 flex gap-2">
-                          <button
-                            className="inline-flex size-8 items-center justify-center rounded-lg border border-white/10 bg-black/20 text-slate-300 transition hover:border-cyan-300/30 hover:text-cyan-200"
-                            onClick={() => startRenameSession(session)}
-                            title="Rename chat"
-                            type="button"
-                          >
-                            <Pencil size={14} />
-                          </button>
-                          <button
-                            className="inline-flex size-8 items-center justify-center rounded-lg border border-rose-300/20 bg-rose-300/5 text-rose-200 transition hover:bg-rose-300/10"
-                            onClick={() => handleDeleteSession(session)}
-                            title="Delete chat"
-                            type="button"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </>
-                    )}
+                        </span>
+                        <span className="mt-1 block line-clamp-1 text-[10px] font-bold text-slate-500">
+                          {session.model}
+                        </span>
+                      </button>
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        className="inline-flex size-8 items-center justify-center rounded-lg border border-white/10 bg-black/20 text-slate-300 transition hover:border-amber-300/30 hover:text-amber-200"
+                        onClick={() => handleTogglePinSession(session)}
+                        title={session.pinned ? "Unpin chat" : "Pin chat"}
+                        type="button"
+                      >
+                        {session.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                      </button>
+                      <button
+                        className="inline-flex size-8 items-center justify-center rounded-lg border border-white/10 bg-black/20 text-slate-300 transition hover:border-cyan-300/30 hover:text-cyan-200"
+                        onClick={() => openRenameDialog(session)}
+                        title="Rename chat"
+                        type="button"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        className="inline-flex size-8 items-center justify-center rounded-lg border border-rose-300/20 bg-rose-300/5 text-rose-200 transition hover:bg-rose-300/10"
+                        onClick={() => setDeleteDialogSession(session)}
+                        title="Delete chat"
+                        type="button"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </article>
                 );
               })}
               {sessions.length === 0 && (
                 <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
                   Session akan dibuat otomatis saat workspace dibuka.
+                </p>
+              )}
+              {sessions.length > 0 && filteredSessions.length === 0 && (
+                <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
+                  Session tidak ditemukan.
                 </p>
               )}
             </div>
@@ -698,6 +773,105 @@ export function AIWorkspace() {
           </section>
         </aside>
       </section>
+
+      {renameDialogSession && (
+        <SessionModal
+          actionLabel="Simpan"
+          isLoading={isSessionActionLoading}
+          onClose={closeRenameDialog}
+          onSubmit={submitRenameSession}
+          title="Rename Session"
+        >
+          <label className="grid gap-2 text-xs font-bold text-slate-400">
+            Nama session
+            <input
+              className="rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/40"
+              onChange={(event) => setRenameTitle(event.target.value)}
+              value={renameTitle}
+            />
+          </label>
+        </SessionModal>
+      )}
+
+      {deleteDialogSession && (
+        <SessionModal
+          actionLabel="Hapus"
+          danger
+          isLoading={isSessionActionLoading}
+          onClose={() => setDeleteDialogSession(null)}
+          onSubmit={(event) => {
+            event.preventDefault();
+            confirmDeleteSession();
+          }}
+          title="Delete Session"
+        >
+          <p className="text-sm leading-6 text-slate-300">
+            Hapus chat "{deleteDialogSession.title}" dan semua message di
+            dalamnya?
+          </p>
+        </SessionModal>
+      )}
+    </div>
+  );
+}
+
+function sortSessions(sessionList) {
+  return [...sessionList].sort((first, second) => {
+    if (first.pinned !== second.pinned) {
+      return first.pinned ? -1 : 1;
+    }
+
+    return new Date(second.createdAt || 0) - new Date(first.createdAt || 0);
+  });
+}
+
+function SessionModal({
+  actionLabel,
+  children,
+  danger = false,
+  isLoading,
+  onClose,
+  onSubmit,
+  title,
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 py-6 backdrop-blur-sm">
+      <form
+        className="w-full max-w-md rounded-3xl border border-white/10 bg-[#080d16] p-5 shadow-2xl shadow-black/50"
+        onSubmit={onSubmit}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-lg font-black text-white">{title}</h3>
+          <button
+            className="inline-flex size-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-slate-300"
+            onClick={onClose}
+            type="button"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="mt-5">{children}</div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-black text-slate-300"
+            onClick={onClose}
+            type="button"
+          >
+            Batal
+          </button>
+          <button
+            className={`rounded-xl border px-4 py-2 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${
+              danger
+                ? "border-rose-300/30 bg-rose-300/10 text-rose-100 hover:bg-rose-300/15"
+                : "border-cyan-300/30 bg-cyan-300/15 text-cyan-100 hover:bg-cyan-300/20"
+            }`}
+            disabled={isLoading}
+            type="submit"
+          >
+            {isLoading ? "Memproses..." : actionLabel}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

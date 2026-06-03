@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { api } from "./api";
 
 const DEFAULT_MODEL = "openrouter/auto";
 const DEFAULT_SESSION_TITLE = "Percakapan AI Workspace";
@@ -31,7 +32,9 @@ function isModelSchemaError(error) {
 
   return (
     error?.code === "PGRST204" &&
-    message.includes("model") &&
+    (message.includes("model") ||
+      message.includes("pinned") ||
+      message.includes("user_id")) &&
     (message.includes("schema cache") || message.includes("column"))
   );
 }
@@ -50,6 +53,7 @@ function normalizeSession(session) {
     userId: session.user_id,
     title: session.title || DEFAULT_SESSION_TITLE,
     model: session.model || DEFAULT_MODEL,
+    pinned: Boolean(session.pinned),
     createdAt: session.created_at,
     updatedAt: session.updated_at || session.created_at,
   };
@@ -62,9 +66,22 @@ export async function getChatSessions(userId) {
     .from("chat_sessions")
     .select("*")
     .eq("user_id", userId)
+    .order("pinned", { ascending: false })
     .order("created_at", { ascending: false });
 
-  if (error) throw error;
+  if (error) {
+    if (!isModelSchemaError(error)) throw error;
+
+    const { data: fallbackData, error: fallbackError } = await client
+      .from("chat_sessions")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (fallbackError) throw getFriendlyError(fallbackError);
+
+    return (fallbackData || []).map(normalizeSession);
+  }
 
   return (data || []).map(normalizeSession);
 }
@@ -118,42 +135,72 @@ export async function getOrCreateActiveChatSession({ model, userId }) {
   });
 }
 
-export async function renameChatSession({ sessionId, title }) {
+async function getAccessToken() {
   const client = requireSupabase();
+  const {
+    data: { session },
+    error,
+  } = await client.auth.getSession();
+
+  if (error) throw error;
+
+  if (session?.access_token) {
+    return session.access_token;
+  }
+
+  const {
+    data: { session: refreshedSession },
+    error: refreshError,
+  } = await client.auth.refreshSession();
+
+  if (refreshError) throw refreshError;
+
+  if (refreshedSession?.access_token) {
+    return refreshedSession.access_token;
+  }
+
+  throw new Error(
+    "Access token login tidak tersedia. Silakan logout lalu login ulang.",
+  );
+}
+
+export async function renameChatSession({ sessionId, title }) {
   const cleanTitle = title.trim();
 
   if (!cleanTitle) {
     throw new Error("Nama chat tidak boleh kosong.");
   }
 
-  const { data, error } = await client
-    .from("chat_sessions")
-    .update({ title: cleanTitle })
-    .eq("id", sessionId)
-    .select("*")
-    .single();
+  const accessToken = await getAccessToken();
+  const response = await api.renameChatSession({
+    accessToken,
+    sessionId,
+    title: cleanTitle,
+  });
 
-  if (error) throw error;
-
-  return normalizeSession(data);
+  return normalizeSession(response.data);
 }
 
 export async function deleteChatSession(sessionId) {
-  const client = requireSupabase();
+  const accessToken = await getAccessToken();
 
-  const { error: messagesError } = await client
-    .from("chat_messages")
-    .delete()
-    .eq("session_id", sessionId);
+  const response = await api.deleteChatSession({
+    accessToken,
+    sessionId,
+  });
 
-  if (messagesError) throw messagesError;
+  return response.data;
+}
 
-  const { error } = await client
-    .from("chat_sessions")
-    .delete()
-    .eq("id", sessionId);
+export async function togglePinChatSession({ pinned, sessionId }) {
+  const accessToken = await getAccessToken();
+  const response = await api.togglePinChatSession({
+    accessToken,
+    pinned,
+    sessionId,
+  });
 
-  if (error) throw error;
+  return normalizeSession(response.data);
 }
 
 export async function getChatMessages(sessionId) {
@@ -170,10 +217,17 @@ export async function getChatMessages(sessionId) {
   return (data || []).map(normalizeMessage);
 }
 
-export async function saveChatMessage({ content, model, role, sessionId }) {
+export async function saveChatMessage({
+  content,
+  model,
+  role,
+  sessionId,
+  userId,
+}) {
   const client = requireSupabase();
   const messagePayload = {
     session_id: sessionId,
+    user_id: userId,
     role,
     content,
   };
@@ -196,7 +250,13 @@ export async function saveChatMessage({ content, model, role, sessionId }) {
 
     const { data: fallbackMessage, error: fallbackError } = await client
       .from("chat_messages")
-      .insert([messagePayload])
+      .insert([
+        {
+          session_id: sessionId,
+          role,
+          content,
+        },
+      ])
       .select("*")
       .single();
 

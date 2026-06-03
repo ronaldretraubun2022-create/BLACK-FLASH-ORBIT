@@ -19,6 +19,14 @@ const PORT = process.env.PORT || 5000;
 const NODE_ENV = process.env.NODE_ENV || "development";
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000";
 
+function requireRouteHandler(routeName, handler) {
+  if (typeof handler !== "function") {
+    throw new TypeError(`${routeName} harus export Express router/function.`);
+  }
+
+  return handler;
+}
+
 app.use(helmet());
 app.use(compression());
 app.use(express.json({ limit: "1mb" }));
@@ -67,9 +75,9 @@ app.get("/", (req, res) => {
   });
 });
 
-app.use("/api/v1", apiRoutes);
-app.use("/api/ai", aiRoutes);
-app.use("/api/chat", chatRoutes);
+app.use("/api/v1", requireRouteHandler("routes/index.js", apiRoutes));
+app.use("/api/ai", requireRouteHandler("routes/ai.js", aiRoutes));
+app.use("/api/chat", requireRouteHandler("routes/chat.routes.js", chatRoutes));
 
 app.use(notFound);
 app.use(errorHandler);
