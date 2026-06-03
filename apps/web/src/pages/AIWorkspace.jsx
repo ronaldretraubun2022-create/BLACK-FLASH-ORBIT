@@ -3,7 +3,6 @@ import {
   Bot,
   Clock3,
   Download,
-  Library,
   MessageSquare,
   Pencil,
   Pin,
@@ -12,7 +11,6 @@ import {
   Search,
   Send,
   Sparkles,
-  Star,
   Trash2,
   X,
 } from "lucide-react";
@@ -31,17 +29,10 @@ import {
   updateChatSessionModel,
 } from "../services/chatPersistence";
 import {
-  createPromptTemplate,
-  deletePromptTemplate,
-  getPromptTemplateErrorMessage,
-  getPromptTemplates,
-  togglePromptTemplateFavorite,
-  updatePromptTemplate,
-} from "../services/promptTemplates";
-import {
   getConversationSearchErrorMessage,
   searchConversations,
 } from "../services/conversationSearch";
+import { PromptLibrary } from "../components/PromptLibrary";
 
 const modelOptions = [
   { label: "OpenRouter Auto", value: "openrouter/auto" },
@@ -50,13 +41,6 @@ const modelOptions = [
   { label: "Claude 3.5 Haiku", value: "anthropic/claude-3.5-haiku" },
   { label: "DeepSeek Chat", value: "deepseek/deepseek-chat" },
 ];
-
-const emptyPromptTemplateForm = {
-  title: "",
-  category: "Umum",
-  prompt: "",
-  isFavorite: false,
-};
 
 export function AIWorkspace() {
   const { user } = useAuth();
@@ -79,22 +63,6 @@ export function AIWorkspace() {
   const [renameDialogSession, setRenameDialogSession] = useState(null);
   const [renameTitle, setRenameTitle] = useState("");
   const [deleteDialogSession, setDeleteDialogSession] = useState(null);
-  const [promptTemplates, setPromptTemplates] = useState([]);
-  const [promptTemplateSearchQuery, setPromptTemplateSearchQuery] =
-    useState("");
-  const [promptTemplateCategory, setPromptTemplateCategory] = useState("Semua");
-  const [promptTemplateDialogMode, setPromptTemplateDialogMode] =
-    useState("");
-  const [promptTemplateDialogItem, setPromptTemplateDialogItem] =
-    useState(null);
-  const [promptTemplateForm, setPromptTemplateForm] = useState(
-    emptyPromptTemplateForm,
-  );
-  const [deletePromptTemplateDialogItem, setDeletePromptTemplateDialogItem] =
-    useState(null);
-  const [isPromptTemplateLoading, setIsPromptTemplateLoading] = useState(false);
-  const [isPromptTemplateActionLoading, setIsPromptTemplateActionLoading] =
-    useState(false);
   const [isSessionActionLoading, setIsSessionActionLoading] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isSending, setIsSending] = useState(false);
@@ -131,30 +99,6 @@ export function AIWorkspace() {
       String(session?.title || "").toLowerCase().includes(query),
     );
   }, [sessionSearchQuery, sessions]);
-  const promptTemplateCategories = useMemo(() => {
-    const categorySet = new Set(
-      promptTemplates.map((template) => template.category).filter(Boolean),
-    );
-
-    return ["Semua", ...Array.from(categorySet).sort()];
-  }, [promptTemplates]);
-  const filteredPromptTemplates = useMemo(() => {
-    const query = promptTemplateSearchQuery.trim().toLowerCase();
-
-    return promptTemplates.filter((template) => {
-      const matchesCategory =
-        promptTemplateCategory === "Semua" ||
-        template.category === promptTemplateCategory;
-      const matchesSearch =
-        !query ||
-        [template.title, template.prompt, template.category]
-          .filter(Boolean)
-          .some((value) => value.toLowerCase().includes(query));
-
-      return matchesCategory && matchesSearch;
-    });
-  }, [promptTemplateCategory, promptTemplateSearchQuery, promptTemplates]);
-
   const loadSessionMessages = useCallback(async (sessionId) => {
     const databaseMessages = await getChatMessages(sessionId);
     setMessages(databaseMessages);
@@ -164,12 +108,6 @@ export function AIWorkspace() {
     const databaseSessions = await getChatSessions(userId);
     setSessions(databaseSessions);
     return databaseSessions;
-  }, []);
-
-  const refreshPromptTemplates = useCallback(async (userId) => {
-    const databasePromptTemplates = await getPromptTemplates(userId);
-    setPromptTemplates(databasePromptTemplates);
-    return databasePromptTemplates;
   }, []);
 
   useEffect(() => {
@@ -222,46 +160,6 @@ export function AIWorkspace() {
       isMounted = false;
     };
   }, [loadSessionMessages, refreshSessions, user?.id]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadPromptTemplates() {
-      if (!user?.id) {
-        setPromptTemplates([]);
-        setIsPromptTemplateLoading(false);
-        return;
-      }
-
-      setIsPromptTemplateLoading(true);
-
-      try {
-        const databasePromptTemplates = await getPromptTemplates(user.id);
-
-        if (!isMounted) return;
-
-        setPromptTemplates(databasePromptTemplates);
-      } catch (templateError) {
-        if (!isMounted) return;
-
-        setError(
-          getPromptTemplateErrorMessage(templateError) ||
-            "Gagal memuat prompt template.",
-        );
-        setPromptTemplates([]);
-      } finally {
-        if (isMounted) {
-          setIsPromptTemplateLoading(false);
-        }
-      }
-    }
-
-    loadPromptTemplates();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [user?.id]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -590,154 +488,6 @@ export function AIWorkspace() {
         getChatPersistenceErrorMessage(sessionError) ||
           "Gagal menyimpan model session.",
       );
-    }
-  }
-
-  function openCreatePromptTemplateDialog() {
-    setPromptTemplateDialogMode("create");
-    setPromptTemplateDialogItem(null);
-    setPromptTemplateForm(emptyPromptTemplateForm);
-  }
-
-  function openEditPromptTemplateDialog(template) {
-    setPromptTemplateDialogMode("edit");
-    setPromptTemplateDialogItem(template);
-    setPromptTemplateForm({
-      title: template.title,
-      category: template.category || "Umum",
-      prompt: template.prompt,
-      isFavorite: Boolean(template.isFavorite),
-    });
-  }
-
-  function closePromptTemplateDialog() {
-    setPromptTemplateDialogMode("");
-    setPromptTemplateDialogItem(null);
-    setPromptTemplateForm(emptyPromptTemplateForm);
-  }
-
-  function updatePromptTemplateForm(field, value) {
-    setPromptTemplateForm((currentForm) => ({
-      ...currentForm,
-      [field]: value,
-    }));
-  }
-
-  async function submitPromptTemplate(event) {
-    event.preventDefault();
-
-    if (!user?.id || isPromptTemplateActionLoading) return;
-
-    setError("");
-    setIsPromptTemplateActionLoading(true);
-
-    try {
-      if (promptTemplateDialogMode === "edit" && promptTemplateDialogItem?.id) {
-        const updatedTemplate = await updatePromptTemplate({
-          id: promptTemplateDialogItem.id,
-          userId: user.id,
-          ...promptTemplateForm,
-        });
-
-        setPromptTemplates((currentTemplates) =>
-          sortPromptTemplates(
-            currentTemplates.map((template) =>
-              template.id === updatedTemplate.id ? updatedTemplate : template,
-            ),
-          ),
-        );
-      } else {
-        const createdTemplate = await createPromptTemplate({
-          userId: user.id,
-          ...promptTemplateForm,
-        });
-
-        setPromptTemplates((currentTemplates) =>
-          sortPromptTemplates([createdTemplate, ...currentTemplates]),
-        );
-      }
-
-      await refreshPromptTemplates(user.id);
-      closePromptTemplateDialog();
-    } catch (templateError) {
-      setError(
-        getPromptTemplateErrorMessage(templateError) ||
-          "Gagal menyimpan prompt template.",
-      );
-    } finally {
-      setIsPromptTemplateActionLoading(false);
-    }
-  }
-
-  async function handleTogglePromptTemplateFavorite(template) {
-    if (!user?.id || isPromptTemplateActionLoading) return;
-
-    setError("");
-    setIsPromptTemplateActionLoading(true);
-
-    const previousPromptTemplates = promptTemplates;
-    const nextFavorite = !template.isFavorite;
-
-    setPromptTemplates((currentTemplates) =>
-      sortPromptTemplates(
-        currentTemplates.map((item) =>
-          item.id === template.id
-            ? { ...item, isFavorite: nextFavorite }
-            : item,
-        ),
-      ),
-    );
-
-    try {
-      const updatedTemplate = await togglePromptTemplateFavorite({
-        id: template.id,
-        isFavorite: nextFavorite,
-        userId: user.id,
-      });
-
-      setPromptTemplates((currentTemplates) =>
-        sortPromptTemplates(
-          currentTemplates.map((item) =>
-            item.id === updatedTemplate.id ? updatedTemplate : item,
-          ),
-        ),
-      );
-    } catch (templateError) {
-      setPromptTemplates(previousPromptTemplates);
-      setError(
-        getPromptTemplateErrorMessage(templateError) ||
-          "Gagal mengubah favorite prompt.",
-      );
-    } finally {
-      setIsPromptTemplateActionLoading(false);
-    }
-  }
-
-  async function confirmDeletePromptTemplate() {
-    if (!user?.id || !deletePromptTemplateDialogItem?.id) return;
-
-    setError("");
-    setIsPromptTemplateActionLoading(true);
-
-    try {
-      await deletePromptTemplate({
-        id: deletePromptTemplateDialogItem.id,
-        userId: user.id,
-      });
-
-      setPromptTemplates((currentTemplates) =>
-        currentTemplates.filter(
-          (template) => template.id !== deletePromptTemplateDialogItem.id,
-        ),
-      );
-      setDeletePromptTemplateDialogItem(null);
-    } catch (templateError) {
-      setError(
-        getPromptTemplateErrorMessage(templateError) ||
-          "Gagal menghapus prompt template.",
-      );
-    } finally {
-      setIsPromptTemplateActionLoading(false);
     }
   }
 
@@ -1209,148 +959,7 @@ export function AIWorkspace() {
             </div>
           </section>
 
-          <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <Library className="text-cyan-300" size={18} />
-                <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
-                  PROMPT LIBRARY
-                </p>
-              </div>
-              <button
-                className="inline-flex size-9 items-center justify-center rounded-xl border border-cyan-300/30 bg-cyan-300/15 text-cyan-100 transition hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!user?.id || isPromptTemplateActionLoading}
-                onClick={openCreatePromptTemplateDialog}
-                title="Add Prompt"
-                type="button"
-              >
-                <Plus size={16} />
-              </button>
-            </div>
-
-            <div className="mt-4 grid gap-2">
-              <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-slate-500 transition focus-within:border-cyan-300/40">
-                <Search size={15} />
-                <input
-                  className="w-full bg-transparent text-xs font-bold text-slate-100 outline-none placeholder:text-slate-600"
-                  onChange={(event) =>
-                    setPromptTemplateSearchQuery(event.target.value)
-                  }
-                  placeholder="Cari prompt..."
-                  value={promptTemplateSearchQuery}
-                />
-              </label>
-              <select
-                className="rounded-xl border border-white/10 bg-[#0c1320] px-3 py-2 text-xs font-bold text-slate-100 outline-none transition focus:border-cyan-300/40"
-                onChange={(event) =>
-                  setPromptTemplateCategory(event.target.value)
-                }
-                value={promptTemplateCategory}
-              >
-                {promptTemplateCategories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="mt-4 grid max-h-[520px] gap-3 overflow-y-auto pr-1">
-              {isPromptTemplateLoading && (
-                <p className="rounded-2xl border border-cyan-300/20 bg-cyan-300/5 p-4 text-xs font-bold text-cyan-200">
-                  Memuat prompt template...
-                </p>
-              )}
-              {!isPromptTemplateLoading &&
-                filteredPromptTemplates.map((template) => (
-                  <article
-                    className="rounded-2xl border border-white/10 bg-black/15 p-4 transition hover:border-cyan-300/30 hover:bg-cyan-300/5"
-                    key={template.id}
-                  >
-                    <button
-                      className="block w-full text-left"
-                      onClick={() => useLibraryPrompt(template.prompt)}
-                      type="button"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <h4 className="line-clamp-1 text-sm font-black text-white">
-                            {template.title}
-                          </h4>
-                          <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">
-                            {template.category}
-                          </p>
-                        </div>
-                        {template.isFavorite && (
-                          <Star
-                            className="shrink-0 fill-amber-300 text-amber-300"
-                            size={15}
-                          />
-                        )}
-                      </div>
-                      <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-500">
-                        {template.prompt}
-                      </p>
-                    </button>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        className="inline-flex size-8 items-center justify-center rounded-lg border border-white/10 bg-black/20 text-slate-300 transition hover:border-amber-300/30 hover:text-amber-200"
-                        disabled={isPromptTemplateActionLoading}
-                        onClick={() =>
-                          handleTogglePromptTemplateFavorite(template)
-                        }
-                        title={
-                          template.isFavorite
-                            ? "Hapus Favorite"
-                            : "Favorite Prompt"
-                        }
-                        type="button"
-                      >
-                        <Star
-                          className={
-                            template.isFavorite
-                              ? "fill-amber-300 text-amber-300"
-                              : ""
-                          }
-                          size={14}
-                        />
-                      </button>
-                      <button
-                        className="inline-flex size-8 items-center justify-center rounded-lg border border-white/10 bg-black/20 text-slate-300 transition hover:border-cyan-300/30 hover:text-cyan-200"
-                        disabled={isPromptTemplateActionLoading}
-                        onClick={() => openEditPromptTemplateDialog(template)}
-                        title="Edit Prompt"
-                        type="button"
-                      >
-                        <Pencil size={14} />
-                      </button>
-                      <button
-                        className="inline-flex size-8 items-center justify-center rounded-lg border border-rose-300/20 bg-rose-300/5 text-rose-200 transition hover:bg-rose-300/10"
-                        disabled={isPromptTemplateActionLoading}
-                        onClick={() => setDeletePromptTemplateDialogItem(template)}
-                        title="Delete Prompt"
-                        type="button"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              {!isPromptTemplateLoading && promptTemplates.length === 0 && (
-                <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
-                  Belum ada prompt template. Tambahkan prompt untuk workflow
-                  newsroom yang sering dipakai.
-                </p>
-              )}
-              {!isPromptTemplateLoading &&
-                promptTemplates.length > 0 &&
-                filteredPromptTemplates.length === 0 && (
-                  <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
-                    Prompt template tidak ditemukan.
-                  </p>
-                )}
-            </div>
-          </section>
+          <PromptLibrary onSelectTemplate={useLibraryPrompt} />
 
           <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
             <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
@@ -1426,83 +1035,6 @@ export function AIWorkspace() {
         </SessionModal>
       )}
 
-      {promptTemplateDialogMode && (
-        <SessionModal
-          actionLabel={
-            promptTemplateDialogMode === "edit" ? "Simpan" : "Tambah"
-          }
-          isLoading={isPromptTemplateActionLoading}
-          onClose={closePromptTemplateDialog}
-          onSubmit={submitPromptTemplate}
-          title={
-            promptTemplateDialogMode === "edit"
-              ? "Edit Prompt"
-              : "Add Prompt"
-          }
-        >
-          <div className="grid gap-4">
-            <label className="grid gap-2 text-xs font-bold text-slate-400">
-              Judul prompt
-              <input
-                className="rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/40"
-                onChange={(event) =>
-                  updatePromptTemplateForm("title", event.target.value)
-                }
-                value={promptTemplateForm.title}
-              />
-            </label>
-            <label className="grid gap-2 text-xs font-bold text-slate-400">
-              Category
-              <input
-                className="rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/40"
-                onChange={(event) =>
-                  updatePromptTemplateForm("category", event.target.value)
-                }
-                value={promptTemplateForm.category}
-              />
-            </label>
-            <label className="grid gap-2 text-xs font-bold text-slate-400">
-              Isi prompt
-              <textarea
-                className="min-h-40 resize-y rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300/40"
-                onChange={(event) =>
-                  updatePromptTemplateForm("prompt", event.target.value)
-                }
-                value={promptTemplateForm.prompt}
-              />
-            </label>
-            <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-xs font-bold text-slate-300">
-              <input
-                checked={promptTemplateForm.isFavorite}
-                className="size-4 accent-cyan-300"
-                onChange={(event) =>
-                  updatePromptTemplateForm("isFavorite", event.target.checked)
-                }
-                type="checkbox"
-              />
-              Favorite Prompt
-            </label>
-          </div>
-        </SessionModal>
-      )}
-
-      {deletePromptTemplateDialogItem && (
-        <SessionModal
-          actionLabel="Hapus"
-          danger
-          isLoading={isPromptTemplateActionLoading}
-          onClose={() => setDeletePromptTemplateDialogItem(null)}
-          onSubmit={(event) => {
-            event.preventDefault();
-            confirmDeletePromptTemplate();
-          }}
-          title="Delete Prompt"
-        >
-          <p className="text-sm leading-6 text-slate-300">
-            Hapus prompt "{deletePromptTemplateDialogItem.title}" dari library?
-          </p>
-        </SessionModal>
-      )}
     </div>
   );
 }
@@ -1542,16 +1074,6 @@ function highlightMatch(value, query) {
       {after}
     </>
   );
-}
-
-function sortPromptTemplates(templateList) {
-  return [...templateList].sort((first, second) => {
-    if (first.isFavorite !== second.isFavorite) {
-      return first.isFavorite ? -1 : 1;
-    }
-
-    return new Date(second.updatedAt || 0) - new Date(first.updatedAt || 0);
-  });
 }
 
 function exportConversation({ format, messages, modelLabel, session }) {
