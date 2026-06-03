@@ -27,6 +27,7 @@ import {
   renameChatSession,
   saveChatMessage,
   togglePinChatSession,
+  updateChatSessionModel,
 } from "../services/chatPersistence";
 import {
   createPromptTemplate,
@@ -459,6 +460,52 @@ export function AIWorkspace() {
     }
   }
 
+  async function handleModelChange(nextModel) {
+    const previousModel = selectedModel;
+    const previousActiveSession = activeSession;
+    const previousSessions = sessions;
+
+    setSelectedModel(nextModel);
+
+    if (!activeSession?.id || !user?.id) return;
+
+    const optimisticSession = {
+      ...activeSession,
+      model: nextModel,
+    };
+
+    setActiveSession(optimisticSession);
+    setSessions((currentSessions) =>
+      currentSessions.map((session) =>
+        session.id === activeSession.id
+          ? { ...session, model: nextModel }
+          : session,
+      ),
+    );
+
+    try {
+      const updatedSession = await updateChatSessionModel({
+        sessionId: activeSession.id,
+        model: nextModel,
+      });
+
+      setActiveSession(updatedSession);
+      setSessions((currentSessions) =>
+        currentSessions.map((session) =>
+          session.id === updatedSession.id ? updatedSession : session,
+        ),
+      );
+    } catch (sessionError) {
+      setSelectedModel(previousModel);
+      setActiveSession(previousActiveSession);
+      setSessions(previousSessions);
+      setError(
+        getChatPersistenceErrorMessage(sessionError) ||
+          "Gagal menyimpan model session.",
+      );
+    }
+  }
+
   function openCreatePromptTemplateDialog() {
     setPromptTemplateDialogMode("create");
     setPromptTemplateDialogItem(null);
@@ -819,7 +866,7 @@ export function AIWorkspace() {
                 MODEL SELECTOR
                 <select
                   className="rounded-xl border border-white/10 bg-[#0c1320] px-3 py-2 text-sm font-bold normal-case tracking-normal text-slate-100 outline-none transition focus:border-cyan-300/40"
-                  onChange={(event) => setSelectedModel(event.target.value)}
+                  onChange={(event) => handleModelChange(event.target.value)}
                   value={selectedModel}
                 >
                   {modelOptions.map((model) => (

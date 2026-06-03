@@ -199,6 +199,31 @@ export async function togglePinChatSession({ pinned, sessionId }) {
   return normalizeSession(data);
 }
 
+export async function updateChatSessionModel({ model, sessionId }) {
+  const client = requireSupabase();
+  const userId = await getCurrentUserId();
+  const nextModel =
+    typeof model === "string" && model.trim() ? model.trim() : DEFAULT_MODEL;
+
+  const { data, error } = await client
+    .from("chat_sessions")
+    .update({ model: nextModel })
+    .eq("id", sessionId)
+    .eq("user_id", userId)
+    .select("*")
+    .maybeSingle();
+
+  if (error) throw getFriendlyError(error);
+
+  if (!data) {
+    throw new Error(
+      "Chat session tidak ditemukan atau bukan milik user login.",
+    );
+  }
+
+  return normalizeSession(data);
+}
+
 export async function getChatMessages(sessionId) {
   const client = requireSupabase();
 
