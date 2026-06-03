@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bot,
   Clock3,
+  Download,
   Library,
   MessageSquare,
   Pencil,
@@ -707,6 +708,34 @@ export function AIWorkspace() {
     setPrompt(libraryPrompt);
   }
 
+  function handleExportConversation(format) {
+    if (!activeSession?.id) {
+      setError("Pilih chat session sebelum export.");
+      return;
+    }
+
+    if (messages.length === 0) {
+      setError("Conversation masih kosong. Tidak ada data untuk diexport.");
+      return;
+    }
+
+    setError("");
+
+    try {
+      exportConversation({
+        format,
+        messages,
+        modelLabel: selectedModelLabel,
+        session: {
+          ...activeSession,
+          model: activeSession.model || selectedModel,
+        },
+      });
+    } catch (exportError) {
+      setError(exportError.message || "Gagal export conversation.");
+    }
+  }
+
   return (
     <div className="mx-auto max-w-7xl">
       <section className="relative overflow-hidden rounded-3xl border border-cyan-300/15 bg-[radial-gradient(circle_at_top_right,_rgba(8,145,178,0.28),_transparent_42%),linear-gradient(135deg,_rgba(255,255,255,0.06),_rgba(255,255,255,0.02))] p-5 shadow-2xl shadow-cyan-950/20 sm:p-7 lg:p-9">
@@ -861,7 +890,7 @@ export function AIWorkspace() {
               </h3>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-[minmax(180px,240px)_minmax(180px,260px)]">
+            <div className="grid gap-3 sm:grid-cols-[minmax(180px,240px)_minmax(180px,260px)] xl:grid-cols-[minmax(170px,220px)_minmax(180px,240px)_minmax(180px,220px)]">
               <label className="grid gap-2 text-[10px] font-black tracking-[0.18em] text-slate-500">
                 MODEL SELECTOR
                 <select
@@ -888,6 +917,28 @@ export function AIWorkspace() {
                   />
                 </span>
               </label>
+              <div className="grid gap-2 text-[10px] font-black tracking-[0.18em] text-slate-500">
+                EXPORT
+                <div className="grid grid-cols-3 gap-2">
+                  {["md", "pdf", "docx"].map((format) => (
+                    <button
+                      className="inline-flex items-center justify-center gap-1 rounded-xl border border-white/10 bg-[#0c1320] px-2 py-2 text-xs font-black uppercase tracking-normal text-slate-100 transition hover:border-cyan-300/30 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={
+                        !activeSession?.id ||
+                        messages.length === 0 ||
+                        isLoadingHistory
+                      }
+                      key={format}
+                      onClick={() => handleExportConversation(format)}
+                      title={`Export ${format.toUpperCase()}`}
+                      type="button"
+                    >
+                      <Download size={13} />
+                      {format}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1298,6 +1349,425 @@ function sortPromptTemplates(templateList) {
     }
 
     return new Date(second.updatedAt || 0) - new Date(first.updatedAt || 0);
+  });
+}
+
+function exportConversation({ format, messages, modelLabel, session }) {
+  const exportData = createConversationExportData({
+    messages,
+    modelLabel,
+    session,
+  });
+  const filename = `${slugifyFilename(exportData.title)}-${formatDateForFilename(
+    new Date(),
+  )}.${format}`;
+
+  if (format === "md") {
+    downloadBlob({
+      blob: new Blob([createMarkdownExport(exportData)], {
+        type: "text/markdown;charset=utf-8",
+      }),
+      filename,
+    });
+    return;
+  }
+
+  if (format === "pdf") {
+    downloadBlob({
+      blob: createPdfExport(exportData),
+      filename,
+    });
+    return;
+  }
+
+  if (format === "docx") {
+    downloadBlob({
+      blob: createDocxExport(exportData),
+      filename,
+    });
+    return;
+  }
+
+  throw new Error("Format export tidak didukung.");
+}
+
+function createConversationExportData({ messages, modelLabel, session }) {
+  return {
+    title: session?.title || "AI Workspace Conversation",
+    model: session?.model || modelLabel || "openrouter/auto",
+    modelLabel,
+    createdAt: session?.createdAt || new Date().toISOString(),
+    exportedAt: new Date().toISOString(),
+    messages: messages.map((message) => ({
+      role: message.role === "user" ? "User" : "Assistant",
+      model: message.model || session?.model || "openrouter/auto",
+      createdAt: message.createdAt,
+      content: message.content || "",
+    })),
+  };
+}
+
+function createMarkdownExport(exportData) {
+  const lines = [
+    "# BLACK FLASH ORBIT",
+    "",
+    "## AI Workspace Export",
+    "",
+    `**Session Title:** ${exportData.title}`,
+    `**Model:** ${exportData.modelLabel || exportData.model}`,
+    `**Created At:** ${formatDisplayDate(exportData.createdAt)}`,
+    `**Exported At:** ${formatDisplayDate(exportData.exportedAt)}`,
+    "",
+    "---",
+    "",
+  ];
+
+  exportData.messages.forEach((message, index) => {
+    lines.push(`## ${index + 1}. ${message.role}`);
+    lines.push("");
+    lines.push(`**Model:** ${message.model}`);
+    lines.push(`**Created At:** ${formatDisplayDate(message.createdAt)}`);
+    lines.push("");
+    lines.push(message.content);
+    lines.push("");
+  });
+
+  return `${lines.join("\n")}\n`;
+}
+
+function createPdfExport(exportData) {
+  const textLines = createPlainTextExport(exportData);
+  const pages = paginateLines(textLines, 42);
+  const objects = [];
+  const pageObjectNumbers = [];
+
+  objects.push("<< /Type /Catalog /Pages 2 0 R >>");
+  objects.push("<< /Type /Pages /Kids [] /Count 0 >>");
+  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+
+  pages.forEach((pageLines) => {
+    const contentObjectNumber = objects.length + 1;
+    const pageObjectNumber = objects.length + 2;
+    const stream = createPdfPageStream(pageLines);
+
+    objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectNumber} 0 R >>`,
+    );
+    pageObjectNumbers.push(pageObjectNumber);
+  });
+
+  objects[1] = `<< /Type /Pages /Kids [${pageObjectNumbers
+    .map((objectNumber) => `${objectNumber} 0 R`)
+    .join(" ")}] /Count ${pageObjectNumbers.length} >>`;
+
+  return new Blob([buildPdf(objects)], { type: "application/pdf" });
+}
+
+function createPdfPageStream(lines) {
+  const escapedLines = lines.map((line) => escapePdfText(line));
+  const commands = ["BT", "/F1 11 Tf", "50 750 Td", "14 TL"];
+
+  escapedLines.forEach((line, index) => {
+    if (index > 0) {
+      commands.push("T*");
+    }
+
+    commands.push(`(${line}) Tj`);
+  });
+
+  commands.push("ET");
+  return commands.join("\n");
+}
+
+function buildPdf(objects) {
+  const chunks = ["%PDF-1.4\n"];
+  const offsets = [0];
+
+  objects.forEach((object, index) => {
+    offsets.push(chunks.join("").length);
+    chunks.push(`${index + 1} 0 obj\n${object}\nendobj\n`);
+  });
+
+  const xrefOffset = chunks.join("").length;
+  chunks.push(`xref\n0 ${objects.length + 1}\n`);
+  chunks.push("0000000000 65535 f \n");
+  offsets.slice(1).forEach((offset) => {
+    chunks.push(`${String(offset).padStart(10, "0")} 00000 n \n`);
+  });
+  chunks.push(
+    `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
+  );
+
+  return chunks.join("");
+}
+
+function createDocxExport(exportData) {
+  const paragraphs = createPlainTextExport(exportData).map((line) =>
+    line
+      ? `<w:p><w:r><w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r></w:p>`
+      : "<w:p/>",
+  );
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs.join("")}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
+
+  return new Blob(
+    [
+      createZip([
+        {
+          path: "[Content_Types].xml",
+          content:
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+        },
+        {
+          path: "_rels/.rels",
+          content:
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+        },
+        {
+          path: "word/document.xml",
+          content: documentXml,
+        },
+      ]),
+    ],
+    {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    },
+  );
+}
+
+function createPlainTextExport(exportData) {
+  const lines = [
+    "BLACK FLASH ORBIT",
+    "AI Workspace Export",
+    "",
+    `Session Title: ${exportData.title}`,
+    `Model: ${exportData.modelLabel || exportData.model}`,
+    `Created At: ${formatDisplayDate(exportData.createdAt)}`,
+    `Exported At: ${formatDisplayDate(exportData.exportedAt)}`,
+    "",
+    "Conversation",
+    "",
+  ];
+
+  exportData.messages.forEach((message, index) => {
+    lines.push(`${index + 1}. ${message.role}`);
+    lines.push(`Model: ${message.model}`);
+    lines.push(`Created At: ${formatDisplayDate(message.createdAt)}`);
+    splitLongLines(message.content).forEach((line) => lines.push(line));
+    lines.push("");
+  });
+
+  return lines;
+}
+
+function createZip(files) {
+  const encoder = new TextEncoder();
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  files.forEach((file) => {
+    const nameBytes = encoder.encode(file.path);
+    const contentBytes = encoder.encode(file.content);
+    const crc = crc32(contentBytes);
+    const localHeader = createZipLocalHeader({
+      contentLength: contentBytes.length,
+      crc,
+      nameBytes,
+    });
+
+    localParts.push(localHeader, contentBytes);
+    centralParts.push(
+      createZipCentralHeader({
+        contentLength: contentBytes.length,
+        crc,
+        nameBytes,
+        offset,
+      }),
+    );
+    offset += localHeader.length + contentBytes.length;
+  });
+
+  const centralSize = centralParts.reduce((total, part) => total + part.length, 0);
+  const endRecord = createZipEndRecord({
+    centralOffset: offset,
+    centralSize,
+    fileCount: files.length,
+  });
+
+  return concatUint8Arrays([...localParts, ...centralParts, endRecord]);
+}
+
+function createZipLocalHeader({ contentLength, crc, nameBytes }) {
+  const header = new Uint8Array(30 + nameBytes.length);
+  const view = new DataView(header.buffer);
+
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 0, true);
+  view.setUint16(8, 0, true);
+  view.setUint16(10, 0, true);
+  view.setUint16(12, 0, true);
+  view.setUint32(14, crc, true);
+  view.setUint32(18, contentLength, true);
+  view.setUint32(22, contentLength, true);
+  view.setUint16(26, nameBytes.length, true);
+  view.setUint16(28, 0, true);
+  header.set(nameBytes, 30);
+
+  return header;
+}
+
+function createZipCentralHeader({ contentLength, crc, nameBytes, offset }) {
+  const header = new Uint8Array(46 + nameBytes.length);
+  const view = new DataView(header.buffer);
+
+  view.setUint32(0, 0x02014b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 20, true);
+  view.setUint16(8, 0, true);
+  view.setUint16(10, 0, true);
+  view.setUint16(12, 0, true);
+  view.setUint16(14, 0, true);
+  view.setUint32(16, crc, true);
+  view.setUint32(20, contentLength, true);
+  view.setUint32(24, contentLength, true);
+  view.setUint16(28, nameBytes.length, true);
+  view.setUint16(30, 0, true);
+  view.setUint16(32, 0, true);
+  view.setUint16(34, 0, true);
+  view.setUint16(36, 0, true);
+  view.setUint32(38, 0, true);
+  view.setUint32(42, offset, true);
+  header.set(nameBytes, 46);
+
+  return header;
+}
+
+function createZipEndRecord({ centralOffset, centralSize, fileCount }) {
+  const header = new Uint8Array(22);
+  const view = new DataView(header.buffer);
+
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(4, 0, true);
+  view.setUint16(6, 0, true);
+  view.setUint16(8, fileCount, true);
+  view.setUint16(10, fileCount, true);
+  view.setUint32(12, centralSize, true);
+  view.setUint32(16, centralOffset, true);
+  view.setUint16(20, 0, true);
+
+  return header;
+}
+
+function concatUint8Arrays(parts) {
+  const length = parts.reduce((total, part) => total + part.length, 0);
+  const output = new Uint8Array(length);
+  let offset = 0;
+
+  parts.forEach((part) => {
+    output.set(part, offset);
+    offset += part.length;
+  });
+
+  return output;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+
+  for (let index = 0; index < bytes.length; index += 1) {
+    crc ^= bytes[index];
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+    }
+  }
+
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function paginateLines(lines, pageSize) {
+  const pages = [];
+
+  for (let index = 0; index < lines.length; index += pageSize) {
+    pages.push(lines.slice(index, index + pageSize));
+  }
+
+  return pages.length > 0 ? pages : [["BLACK FLASH ORBIT", "AI Workspace Export"]];
+}
+
+function splitLongLines(text) {
+  const output = [];
+
+  String(text || "")
+    .split(/\r?\n/)
+    .forEach((line) => {
+      if (!line) {
+        output.push("");
+        return;
+      }
+
+      for (let index = 0; index < line.length; index += 92) {
+        output.push(line.slice(index, index + 92));
+      }
+    });
+
+  return output;
+}
+
+function downloadBlob({ blob, filename }) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function escapePdfText(value) {
+  return String(value || "")
+    .replace(/[^\x09\x0a\x0d\x20-\x7e]/g, "?")
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
+}
+
+function escapeXml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function slugifyFilename(value) {
+  const slug = String(value || "ai-workspace-export")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return slug || "ai-workspace-export";
+}
+
+function formatDateForFilename(value) {
+  return value.toISOString().slice(0, 19).replace(/[:T]/g, "-");
+}
+
+function formatDisplayDate(value) {
+  if (!value) return "-";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleString("id-ID", {
+    dateStyle: "medium",
+    timeStyle: "short",
   });
 }
 
