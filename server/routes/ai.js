@@ -1,4 +1,5 @@
 const express = require("express");
+const { createClient } = require("@supabase/supabase-js");
 
 const router = express.Router();
 
@@ -8,8 +9,128 @@ const OPENROUTER_CHAT_COMPLETIONS_URL =
 const DEFAULT_OPENROUTER_MODEL = "openrouter/auto";
 const OPENROUTER_TIMEOUT_MS = 30000;
 
+let supabaseAuthClient = null;
+let supabaseAuthClientKey = "";
+
 function getSafeOpenRouterApiKey() {
   return String(process.env.OPENROUTER_API_KEY || "").trim();
+}
+
+function createHttpError(message, statusCode = 500, code = "SERVER_ERROR") {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
+function getSupabaseAuthConfig() {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+  const supabaseAnonKey =
+    process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw createHttpError(
+      "Supabase environment belum lengkap untuk autentikasi AI.",
+      500,
+      "SUPABASE_ENV_MISSING",
+    );
+  }
+
+  return { supabaseAnonKey, supabaseUrl };
+}
+
+function getSupabaseAuthClient() {
+  const { supabaseAnonKey, supabaseUrl } = getSupabaseAuthConfig();
+  const nextClientKey = `${supabaseUrl}:${supabaseAnonKey.slice(0, 12)}`;
+
+  if (!supabaseAuthClient || supabaseAuthClientKey !== nextClientKey) {
+    supabaseAuthClient = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+    });
+    supabaseAuthClientKey = nextClientKey;
+  }
+
+  return supabaseAuthClient;
+}
+
+function getBearerToken(req) {
+  const authorization = req.headers.authorization || "";
+
+  if (!authorization) {
+    logAuthDebug(req, "missing_authorization");
+    throw createHttpError(
+      "missing_authorization",
+      401,
+      "missing_authorization",
+    );
+  }
+
+  if (!authorization.startsWith("Bearer ")) {
+    logAuthDebug(req, "invalid_bearer_format");
+    throw createHttpError(
+      "invalid_bearer_format",
+      401,
+      "invalid_bearer_format",
+    );
+  }
+
+  const token = authorization.slice("Bearer ".length).trim();
+
+  if (!token) {
+    logAuthDebug(req, "invalid_bearer_format");
+    throw createHttpError(
+      "invalid_bearer_format",
+      401,
+      "invalid_bearer_format",
+    );
+  }
+
+  return token;
+}
+
+function getAuthDebug(req) {
+  const authorization = req.headers.authorization || "";
+  const authHeaderStartsWithBearer = authorization.startsWith("Bearer ");
+  const token = authHeaderStartsWithBearer
+    ? authorization.slice("Bearer ".length).trim()
+    : "";
+
+  return {
+    hasAuthorization: Boolean(authorization),
+    authHeaderStartsWithBearer,
+    tokenLength: token.length,
+  };
+}
+
+function logAuthDebug(req, reason) {
+  console.warn("[AI Auth]", {
+    ...getAuthDebug(req),
+    reason,
+  });
+}
+
+async function requireAuthenticatedUser(req) {
+  const token = getBearerToken(req);
+  const supabase = getSupabaseAuthClient();
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser(token);
+
+  if (error || !user?.id) {
+    logAuthDebug(req, "invalid_supabase_user");
+    throw createHttpError(
+      "invalid_supabase_user",
+      401,
+      "invalid_supabase_user",
+    );
+  }
+
+  return user;
 }
 
 function hasInvalidHeaderCharacters(value) {
@@ -32,25 +153,6 @@ function getOpenRouterErrorMessage(data) {
 }
 
 router.post("/chat", async (req, res) => {
-  const apiKey = getSafeOpenRouterApiKey();
-
-  if (!apiKey) {
-    return res.status(500).json({
-      success: false,
-      status: 500,
-      message: "OPENROUTER_API_KEY belum dikonfigurasi di file .env.",
-    });
-  }
-
-  if (hasInvalidHeaderCharacters(apiKey)) {
-    return res.status(500).json({
-      success: false,
-      status: 500,
-      message:
-        "OPENROUTER_API_KEY tidak valid. Pastikan tidak ada spasi, newline, emoji, huruf non-ASCII, atau karakter hasil copy-paste yang rusak.",
-    });
-  }
-
   const message =
     typeof req.body?.message === "string" ? req.body.message.trim() : "";
 
@@ -59,18 +161,41 @@ router.post("/chat", async (req, res) => {
       ? req.body.model.trim()
       : DEFAULT_OPENROUTER_MODEL;
 
-  if (!message) {
-    return res.status(400).json({
-      success: false,
-      status: 400,
-      message: "Message tidak boleh kosong.",
-    });
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+  let timeout = null;
 
   try {
+    await requireAuthenticatedUser(req);
+
+    const apiKey = getSafeOpenRouterApiKey();
+
+    if (!apiKey) {
+      return res.status(500).json({
+        success: false,
+        status: 500,
+        message: "OPENROUTER_API_KEY belum dikonfigurasi di file .env.",
+      });
+    }
+
+    if (hasInvalidHeaderCharacters(apiKey)) {
+      return res.status(500).json({
+        success: false,
+        status: 500,
+        message:
+          "OPENROUTER_API_KEY tidak valid. Pastikan tidak ada spasi, newline, emoji, huruf non-ASCII, atau karakter hasil copy-paste yang rusak.",
+      });
+    }
+
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        status: 400,
+        message: "Message tidak boleh kosong.",
+      });
+    }
+
+    const controller = new AbortController();
+    timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+
     const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
       method: "POST",
       headers: {
@@ -134,6 +259,15 @@ router.post("/chat", async (req, res) => {
       model,
     });
   } catch (error) {
+    if (error.statusCode || error.status) {
+      return res.status(error.statusCode || error.status).json({
+        success: false,
+        status: error.statusCode || error.status,
+        message: error.message || "Request tidak valid.",
+        code: error.code || null,
+      });
+    }
+
     const isAbort = error.name === "AbortError";
 
     console.error("[OpenRouter Fetch Error]", {
@@ -154,7 +288,9 @@ router.post("/chat", async (req, res) => {
       code: error.cause?.code || null,
     });
   } finally {
-    clearTimeout(timeout);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 });
 

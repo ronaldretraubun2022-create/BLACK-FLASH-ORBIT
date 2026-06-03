@@ -1,3 +1,5 @@
+import { supabase } from "../lib/supabase";
+
 const DEFAULT_TIMEOUT_MS = 30000;
 
 function requireAccessToken(accessToken) {
@@ -6,6 +8,22 @@ function requireAccessToken(accessToken) {
   }
 
   return accessToken.trim();
+}
+
+async function getSupabaseAccessToken() {
+  if (!supabase) {
+    throw new Error("Supabase environment belum dikonfigurasi.");
+  }
+
+  const { data, error } = await supabase.auth.getSession();
+
+  if (error) throw error;
+
+  if (!data.session?.user?.id) {
+    throw new Error("Session login tidak aktif. Silakan login ulang.");
+  }
+
+  return requireAccessToken(data.session.access_token);
 }
 
 async function request(path, options = {}) {
@@ -54,9 +72,14 @@ export const api = {
     return request("/api/health");
   },
 
-  sendAiChat({ message, model }) {
+  async sendAiChat({ message, model }) {
+    const accessToken = await getSupabaseAccessToken();
+
     return request("/api/ai/chat", {
       method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
       body: JSON.stringify({ message, model }),
     });
   },
