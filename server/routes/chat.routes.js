@@ -5,6 +5,8 @@ const router = express.Router();
 
 const DEFAULT_MODEL = "openrouter/auto";
 const DEFAULT_SESSION_TITLE = "Percakapan Baru";
+const SCHEMA_SYNC_MESSAGE =
+  "Schema chat belum sinkron. Jalankan SQL migration model chat, lalu refresh Supabase schema cache.";
 
 let supabaseClient = null;
 let supabaseClientKey = "";
@@ -67,14 +69,31 @@ function sendSupabaseError(res, error, fallbackMessage) {
     });
   }
 
+  if (isModelSchemaError(error)) {
+    return res.status(500).json({
+      success: false,
+      message: SCHEMA_SYNC_MESSAGE,
+      code: error.code || null,
+    });
+  }
+
   return res.status(500).json({
     success: false,
     message: fallbackMessage,
-    error: error.message,
-    details: error.details || null,
-    hint: error.hint || null,
     code: error.code || null,
   });
+}
+
+function isModelSchemaError(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${
+    error?.hint || ""
+  }`;
+
+  return (
+    error?.code === "PGRST204" &&
+    message.includes("model") &&
+    (message.includes("schema cache") || message.includes("column"))
+  );
 }
 
 // Manual PowerShell test:
@@ -106,13 +125,30 @@ router.post("/sessions", async (req, res) => {
     const title = normalizeOptionalText(req.body?.title, DEFAULT_SESSION_TITLE);
     const model = normalizeOptionalText(req.body?.model, DEFAULT_MODEL);
 
+    const sessionPayload = { title };
+
     const { data, error } = await supabase
       .from("chat_sessions")
-      .insert([{ title, model }])
+      .insert([{ ...sessionPayload, model }])
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      if (!isModelSchemaError(error)) throw error;
+
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from("chat_sessions")
+        .insert([sessionPayload])
+        .select()
+        .single();
+
+      if (fallbackError) throw fallbackError;
+
+      return res.status(201).json({
+        success: true,
+        data: { ...fallbackData, model: DEFAULT_MODEL },
+      });
+    }
 
     return res.status(201).json({ success: true, data });
   } catch (error) {
@@ -160,13 +196,34 @@ router.post("/messages", async (req, res) => {
       });
     }
 
+    const messagePayload = {
+      session_id: sessionId,
+      role,
+      content,
+    };
+
     const { data, error } = await supabase
       .from("chat_messages")
-      .insert([{ session_id: sessionId, role, content, model }])
+      .insert([{ ...messagePayload, model }])
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      if (!isModelSchemaError(error)) throw error;
+
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from("chat_messages")
+        .insert([messagePayload])
+        .select()
+        .single();
+
+      if (fallbackError) throw fallbackError;
+
+      return res.status(201).json({
+        success: true,
+        data: { ...fallbackData, model: DEFAULT_MODEL },
+      });
+    }
 
     return res.status(201).json({ success: true, data });
   } catch (error) {

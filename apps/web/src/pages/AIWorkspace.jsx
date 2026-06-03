@@ -18,6 +18,7 @@ import { useAuth } from "../context/AuthContext";
 import {
   createChatSession,
   deleteChatSession,
+  getChatPersistenceErrorMessage,
   getChatMessages,
   getChatSessions,
   getOrCreateActiveChatSession,
@@ -134,7 +135,7 @@ export function AIWorkspace() {
         if (!isMounted) return;
 
         setError(
-          sessionError.message ||
+          getChatPersistenceErrorMessage(sessionError) ||
             "Gagal memuat session dan history chat dari Supabase.",
         );
         setMessages([]);
@@ -165,7 +166,10 @@ export function AIWorkspace() {
     try {
       await loadSessionMessages(session.id);
     } catch (sessionError) {
-      setError(sessionError.message || "Gagal memuat chat session.");
+      setError(
+        getChatPersistenceErrorMessage(sessionError) ||
+          "Gagal memuat chat session.",
+      );
       setMessages([]);
     } finally {
       setIsLoadingHistory(false);
@@ -194,7 +198,10 @@ export function AIWorkspace() {
       setMessages([]);
       setSearchQuery("");
     } catch (sessionError) {
-      setError(sessionError.message || "Gagal membuat chat baru.");
+      setError(
+        getChatPersistenceErrorMessage(sessionError) ||
+          "Gagal membuat chat baru.",
+      );
     } finally {
       setIsLoadingHistory(false);
       setIsSessionActionLoading(false);
@@ -237,7 +244,10 @@ export function AIWorkspace() {
 
       cancelRenameSession();
     } catch (sessionError) {
-      setError(sessionError.message || "Gagal rename chat session.");
+      setError(
+        getChatPersistenceErrorMessage(sessionError) ||
+          "Gagal rename chat session.",
+      );
     } finally {
       setIsSessionActionLoading(false);
     }
@@ -284,7 +294,10 @@ export function AIWorkspace() {
 
       setSearchQuery("");
     } catch (sessionError) {
-      setError(sessionError.message || "Gagal menghapus chat session.");
+      setError(
+        getChatPersistenceErrorMessage(sessionError) ||
+          "Gagal menghapus chat session.",
+      );
     } finally {
       setIsLoadingHistory(false);
       setIsSessionActionLoading(false);
@@ -325,7 +338,8 @@ export function AIWorkspace() {
       await refreshSessions(user.id);
     } catch (chatError) {
       const message =
-        chatError.message || "Gagal mengambil jawaban AI dari OpenRouter.";
+        getChatPersistenceErrorMessage(chatError) ||
+        "Gagal mengambil jawaban AI dari OpenRouter.";
 
       setError(message);
 

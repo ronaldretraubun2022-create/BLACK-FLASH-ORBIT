@@ -2,6 +2,8 @@ import { supabase } from "../lib/supabase";
 
 const DEFAULT_MODEL = "openrouter/auto";
 const DEFAULT_SESSION_TITLE = "Percakapan AI Workspace";
+const SCHEMA_SYNC_MESSAGE =
+  "Schema chat belum sinkron. Jalankan SQL migration model chat, lalu refresh Supabase schema cache.";
 
 function requireSupabase() {
   if (!supabase) {
@@ -20,6 +22,26 @@ function normalizeMessage(message) {
     content: message.content,
     createdAt: message.created_at,
   };
+}
+
+function isModelSchemaError(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${
+    error?.hint || ""
+  }`;
+
+  return (
+    error?.code === "PGRST204" &&
+    message.includes("model") &&
+    (message.includes("schema cache") || message.includes("column"))
+  );
+}
+
+function getFriendlyError(error) {
+  if (isModelSchemaError(error)) {
+    return new Error(SCHEMA_SYNC_MESSAGE);
+  }
+
+  return error;
 }
 
 function normalizeSession(session) {
@@ -49,20 +71,37 @@ export async function getChatSessions(userId) {
 
 export async function createChatSession({ model, title, userId }) {
   const client = requireSupabase();
+  const sessionPayload = {
+    user_id: userId,
+    title: title || DEFAULT_SESSION_TITLE,
+  };
 
   const { data: newSession, error: insertError } = await client
     .from("chat_sessions")
     .insert([
       {
-        user_id: userId,
-        title: title || DEFAULT_SESSION_TITLE,
+        ...sessionPayload,
         model: model || DEFAULT_MODEL,
       },
     ])
     .select("*")
     .single();
 
-  if (insertError) throw insertError;
+  if (insertError) {
+    if (!isModelSchemaError(insertError)) {
+      throw getFriendlyError(insertError);
+    }
+
+    const { data: fallbackSession, error: fallbackError } = await client
+      .from("chat_sessions")
+      .insert([sessionPayload])
+      .select("*")
+      .single();
+
+    if (fallbackError) throw getFriendlyError(fallbackError);
+
+    return normalizeSession(fallbackSession);
+  }
 
   return normalizeSession(newSession);
 }
@@ -133,21 +172,42 @@ export async function getChatMessages(sessionId) {
 
 export async function saveChatMessage({ content, model, role, sessionId }) {
   const client = requireSupabase();
+  const messagePayload = {
+    session_id: sessionId,
+    role,
+    content,
+  };
 
   const { data, error } = await client
     .from("chat_messages")
     .insert([
       {
-        session_id: sessionId,
-        role,
-        content,
+        ...messagePayload,
         model: model || DEFAULT_MODEL,
       },
     ])
     .select("*")
     .single();
 
-  if (error) throw error;
+  if (error) {
+    if (!isModelSchemaError(error)) {
+      throw getFriendlyError(error);
+    }
+
+    const { data: fallbackMessage, error: fallbackError } = await client
+      .from("chat_messages")
+      .insert([messagePayload])
+      .select("*")
+      .single();
+
+    if (fallbackError) throw getFriendlyError(fallbackError);
+
+    return normalizeMessage(fallbackMessage);
+  }
 
   return normalizeMessage(data);
+}
+
+export function getChatPersistenceErrorMessage(error) {
+  return getFriendlyError(error).message || "Gagal memproses data chat.";
 }
