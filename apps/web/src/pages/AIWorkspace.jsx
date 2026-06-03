@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bot,
   Clock3,
@@ -7,8 +7,20 @@ import {
   Send,
   Sparkles,
 } from "lucide-react";
+import { api } from "../services/api";
+import { useAuth } from "../context/AuthContext";
+import {
+  getChatMessages,
+  getOrCreateActiveChatSession,
+  saveChatMessage,
+} from "../services/chatPersistence";
 
-const modelOptions = ["OpenAI", "Gemini", "Anthropic", "OpenRouter"];
+const modelOptions = [
+  { label: "OpenAI", value: "openrouter/auto" },
+  { label: "Gemini", value: "google/gemini-2.0-flash-001" },
+  { label: "Anthropic", value: "anthropic/claude-3.5-haiku" },
+  { label: "OpenRouter", value: "openrouter/auto" },
+];
 
 const promptLibrary = [
   {
@@ -33,60 +45,118 @@ const promptLibrary = [
   },
 ];
 
-function createLocalResponse(prompt, model) {
-  return `Draft lokal siap diproses dengan ${model}. Integrasi API AI belum aktif, tetapi prompt sudah masuk ke conversation history: "${prompt.slice(
-    0,
-    120,
-  )}${prompt.length > 120 ? "..." : ""}"`;
-}
-
 export function AIWorkspace() {
-  const [selectedModel, setSelectedModel] = useState("OpenAI");
+  const { user } = useAuth();
+  const [selectedModel, setSelectedModel] = useState("openrouter/auto");
   const [prompt, setPrompt] = useState("");
-  const [messages, setMessages] = useState([
-    {
-      id: "welcome",
-      role: "assistant",
-      model: "System",
-      content:
-        "Selamat datang di AI Workspace. Pilih model, tulis prompt, lalu submit untuk menyimpan percakapan lokal.",
-      createdAt: new Date().toISOString(),
-    },
-  ]);
+  const [error, setError] = useState("");
+  const [activeSession, setActiveSession] = useState(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [isSending, setIsSending] = useState(false);
+  const [messages, setMessages] = useState([]);
 
   const conversationCount = useMemo(
     () => messages.filter((message) => message.role === "user").length,
     [messages],
   );
+  const selectedModelLabel =
+    modelOptions.find((model) => model.value === selectedModel)?.label ||
+    "OpenAI";
 
-  function handleSubmit(event) {
+  const loadSessionMessages = useCallback(async (sessionId) => {
+    const databaseMessages = await getChatMessages(sessionId);
+    setMessages(databaseMessages);
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function initializeChatSession() {
+      if (!user?.id) {
+        setActiveSession(null);
+        setMessages([]);
+        setIsLoadingHistory(false);
+        return;
+      }
+
+      setIsLoadingHistory(true);
+      setError("");
+
+      try {
+        const session = await getOrCreateActiveChatSession({
+          model: selectedModel,
+          userId: user.id,
+        });
+
+        if (!isMounted) return;
+
+        setActiveSession(session);
+        await loadSessionMessages(session.id);
+      } catch (sessionError) {
+        if (!isMounted) return;
+
+        setError(
+          sessionError.message ||
+            "Gagal memuat session dan history chat dari Supabase.",
+        );
+        setMessages([]);
+      } finally {
+        if (isMounted) {
+          setIsLoadingHistory(false);
+        }
+      }
+    }
+
+    initializeChatSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [loadSessionMessages, selectedModel, user?.id]);
+
+  async function handleSubmit(event) {
     event.preventDefault();
 
     const cleanPrompt = prompt.trim();
-    if (!cleanPrompt) return;
+    if (!cleanPrompt || isSending || !activeSession?.id) return;
 
-    const timestamp = new Date().toISOString();
-    const userMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      model: selectedModel,
-      content: cleanPrompt,
-      createdAt: timestamp,
-    };
-    const assistantMessage = {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      model: selectedModel,
-      content: createLocalResponse(cleanPrompt, selectedModel),
-      createdAt: timestamp,
-    };
-
-    setMessages((currentMessages) => [
-      ...currentMessages,
-      userMessage,
-      assistantMessage,
-    ]);
     setPrompt("");
+    setError("");
+    setIsSending(true);
+
+    try {
+      await saveChatMessage({
+        sessionId: activeSession.id,
+        role: "user",
+        content: cleanPrompt,
+        model: selectedModel,
+      });
+      await loadSessionMessages(activeSession.id);
+
+      const data = await api.sendAiChat({
+        message: cleanPrompt,
+        model: selectedModel,
+      });
+
+      await saveChatMessage({
+        sessionId: activeSession.id,
+        role: "assistant",
+        content: data.response,
+        model: selectedModel,
+      });
+      await loadSessionMessages(activeSession.id);
+    } catch (chatError) {
+      const message =
+        chatError.message || "Gagal mengambil jawaban AI dari OpenRouter.";
+
+      setError(message);
+
+      if (activeSession?.id) {
+        await loadSessionMessages(activeSession.id).catch(() => undefined);
+      }
+    } finally {
+      setIsSending(false);
+    }
   }
 
   function useLibraryPrompt(libraryPrompt) {
@@ -109,18 +179,22 @@ export function AIWorkspace() {
         </h2>
         <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base sm:leading-7">
           Modul MVP untuk menyusun prompt, memilih model AI, dan menyimpan
-          riwayat percakapan lokal sebelum integrasi API produksi.
+          riwayat percakapan permanen berbasis Supabase dan OpenRouter API.
         </p>
       </section>
 
       <section className="mt-6 grid gap-4 md:grid-cols-3">
-        <MetricCard label="Model Aktif" value={selectedModel} icon={Sparkles} />
+        <MetricCard
+          label="Model Aktif"
+          value={selectedModelLabel}
+          icon={Sparkles}
+        />
         <MetricCard
           label="Conversation"
           value={`${conversationCount} prompt`}
           icon={MessageSquare}
         />
-        <MetricCard label="Mode" value="Local MVP" icon={Clock3} />
+        <MetricCard label="Mode" value="OpenRouter API" icon={Clock3} />
       </section>
 
       <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -143,8 +217,8 @@ export function AIWorkspace() {
                 value={selectedModel}
               >
                 {modelOptions.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
+                  <option key={model.value} value={model.value}>
+                    {model.label}
                   </option>
                 ))}
               </select>
@@ -152,6 +226,27 @@ export function AIWorkspace() {
           </div>
 
           <div className="mt-5 grid max-h-[520px] gap-4 overflow-y-auto pr-1">
+            {isLoadingHistory && (
+              <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/5 px-4 py-3 text-xs font-bold text-cyan-200">
+                Memuat history chat dari Supabase...
+              </div>
+            )}
+            {!isLoadingHistory && messages.length === 0 && (
+              <article className="mr-auto max-w-2xl rounded-2xl border border-white/10 bg-black/20 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">
+                    AI Workspace
+                  </p>
+                  <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold text-slate-500">
+                    System
+                  </span>
+                </div>
+                <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">
+                  Selamat datang di AI Workspace. Pilih model, tulis prompt,
+                  lalu submit untuk menyimpan percakapan ke Supabase.
+                </p>
+              </article>
+            )}
             {messages.map((message) => (
               <article
                 className={`rounded-2xl border p-4 ${
@@ -177,6 +272,16 @@ export function AIWorkspace() {
           </div>
 
           <form className="mt-5 grid gap-3" onSubmit={handleSubmit}>
+            {isSending && (
+              <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/5 px-4 py-3 text-xs font-bold text-cyan-200">
+                Menghubungi OpenRouter API...
+              </div>
+            )}
+            {error && (
+              <div className="rounded-2xl border border-rose-300/20 bg-rose-300/5 px-4 py-3 text-xs font-bold text-rose-200">
+                {error}
+              </div>
+            )}
             <textarea
               className="min-h-36 resize-y rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300/40"
               onChange={(event) => setPrompt(event.target.value)}
@@ -185,15 +290,20 @@ export function AIWorkspace() {
             />
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-slate-500">
-                History disimpan sementara di local state. API AI belum
-                dihubungkan.
+                History tersimpan di Supabase sesuai user login. Jawaban AI
+                diproses real-time lewat OpenRouter API.
               </p>
               <button
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/15 px-4 py-3 text-sm font-black text-cyan-100 transition hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!prompt.trim()}
+                disabled={
+                  !prompt.trim() ||
+                  isSending ||
+                  isLoadingHistory ||
+                  !activeSession?.id
+                }
                 type="submit"
               >
-                Submit Prompt
+                {isSending ? "Mengirim..." : "Submit Prompt"}
                 <Send size={16} />
               </button>
             </div>
@@ -244,7 +354,8 @@ export function AIWorkspace() {
                         Prompt #{index + 1}
                       </span>
                       <span className="text-[10px] font-bold text-cyan-300">
-                        {message.model}
+                        {modelOptions.find((model) => model.value === message.model)
+                          ?.label || message.model}
                       </span>
                     </div>
                     <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">
