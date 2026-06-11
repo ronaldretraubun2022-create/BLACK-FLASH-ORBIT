@@ -3,6 +3,9 @@ import { normalizePromptCategory } from "../data/promptCategories";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_WINDOW_MS = 60000;
+const API_BASE_URL =
+  String(import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/+$/, "") ||
+  "/api";
 
 const AUTH_FAILURE_CODES = new Set([
   "missing_authorization",
@@ -113,7 +116,7 @@ async function request(path, options = {}) {
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
   try {
-    const response = await fetch(path, {
+    const response = await fetch(resolveApiUrl(path), {
       ...options,
       headers: {
         Accept: "application/json",
@@ -143,6 +146,21 @@ async function request(path, options = {}) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function resolveApiUrl(path) {
+  if (/^https?:\/\//i.test(path)) return path;
+
+  const cleanPath = String(path || "").startsWith("/")
+    ? String(path || "")
+    : `/${path || ""}`;
+
+  if (cleanPath === "/api") return API_BASE_URL;
+  if (cleanPath.startsWith("/api/")) {
+    return `${API_BASE_URL}${cleanPath.slice(4)}`;
+  }
+
+  return `${API_BASE_URL}${cleanPath}`;
 }
 
 class ApiRequestError extends Error {
