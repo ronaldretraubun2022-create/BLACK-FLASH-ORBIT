@@ -267,8 +267,12 @@ export const api = {
     return request("/api/health");
   },
 
-  getV1Health() {
-    return request("/api/v1/health");
+  async getV1Health() {
+    try {
+      return await request("/api/v1/health");
+    } catch {
+      return request("/api/health");
+    }
   },
 
   getSystem() {
