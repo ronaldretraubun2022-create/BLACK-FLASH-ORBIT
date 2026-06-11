@@ -1,20 +1,20 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { DashboardLayout } from "./components/layout/DashboardLayout";
+import { Activity } from "lucide-react";
 import {
-  ProtectedRoute,
   PublicOnlyRoute,
+  ProtectedRoute,
 } from "./components/auth/ProtectedRoute";
+import { DashboardLayout } from "./components/layout/DashboardLayout";
 import { ModulePlaceholder } from "./components/pages/ModulePlaceholder";
-import {
-  Activity,
-  Bot,
-  FileText,
-  ShieldCheck,
-} from "lucide-react";
-import { Dashboard } from "./pages/Dashboard";
 import { AIWorkspace } from "./pages/AIWorkspace";
+import { AutomationHub } from "./pages/AutomationHub";
+import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
+import { ModelControl } from "./pages/ModelControl";
+import { OSINTWorkspace } from "./pages/OSINTWorkspace";
 import { Register } from "./pages/Register";
+import { ReportsArchive } from "./pages/ReportsArchive";
+import { SecurityCenter } from "./pages/SecurityCenter";
 import { Settings } from "./pages/Settings";
 
 function App() {
@@ -22,53 +22,34 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<PublicOnlyRoute />}>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+          <Route element={<Login />} path="/login" />
+          <Route element={<Register />} path="/register" />
         </Route>
+
         <Route element={<ProtectedRoute />}>
           <Route element={<DashboardLayout />}>
-            <Route index element={<Dashboard />} />
+            <Route element={<Dashboard />} index />
+            <Route element={<AIWorkspace />} path="ai-workspace" />
+
             <Route
-              path="ai-workspace"
-              element={<AIWorkspace />}
-            />
-            <Route
-              path="security"
               element={
                 <ModulePlaceholder
-                  description="Pusat kontrol perlindungan aplikasi, validasi akses admin, dan audit keamanan."
-                  eyebrow="DEFENSIVE CONTROL"
-                  icon={ShieldCheck}
-                  title="Security Center"
-                />
-              }
-            />
-            <Route
-              path="monitoring"
-              element={
-                <ModulePlaceholder
-                  description="Pantau kesehatan layanan, aktivitas operasional, dan kesiapan sistem secara real-time."
+                  description="Pantau kesehatan layanan, aktivitas operasional, dan kesiapan backend secara real-time."
                   eyebrow="LIVE TELEMETRY"
                   icon={Activity}
                   title="System Monitoring"
                 />
               }
+              path="monitoring"
             />
-            <Route
-              path="reports"
-              element={
-                <ModulePlaceholder
-                  description="Kelola arsip berita, laporan operasional, dan persiapan ekspor dokumen."
-                  eyebrow="NEWSROOM ARCHIVE"
-                  icon={FileText}
-                  title="Reports Archive"
-                />
-              }
-            />
-            <Route
-              path="settings"
-              element={<Settings />}
-            />
+
+            <Route element={<SecurityCenter />} path="security" />
+            <Route element={<OSINTWorkspace />} path="osint" />
+            <Route element={<AutomationHub />} path="automation" />
+            <Route element={<ReportsArchive />} path="reports" />
+            <Route element={<ModelControl />} path="models" />
+
+            <Route element={<Settings />} path="settings" />
           </Route>
         </Route>
       </Routes>
