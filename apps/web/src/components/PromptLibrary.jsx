@@ -1,41 +1,109 @@
-import { useMemo, useState } from "react";
-import { Library, Search } from "lucide-react";
-import { promptTemplates } from "../data/promptTemplates";
+import { useEffect, useMemo, useState } from "react";
+import { AlertCircle, Library, Loader2, Search } from "lucide-react";
+import {
+  ALL_PROMPT_CATEGORIES_LABEL,
+  buildPromptCategoryOptions,
+  normalizePromptCategory,
+} from "../data/promptCategories";
+import { getAuthenticatedHeaders } from "../services/api";
 
-const ALL_CATEGORIES = "Semua";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 export function PromptLibrary({ onSelectTemplate }) {
+  const [prompts, setPrompts] = useState([]);
+  const [serverCategories, setServerCategories] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState(ALL_CATEGORIES);
+  const [selectedCategory, setSelectedCategory] = useState(
+    ALL_PROMPT_CATEGORIES_LABEL,
+  );
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function loadPrompts() {
+      try {
+        setIsLoading(true);
+        setError("");
+
+        const headers = {
+          Accept: "application/json",
+          ...(await getAuthenticatedHeaders()),
+        };
+        const [promptsResponse, categoriesResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/v1/prompts`, { headers }),
+          fetch(`${API_BASE_URL}/api/v1/prompts/categories`, { headers }),
+        ]);
+
+        if (!promptsResponse.ok) {
+          throw new Error(`Gagal memuat prompts: ${promptsResponse.status}`);
+        }
+
+        const [promptsData, categoriesData] = await Promise.all([
+          promptsResponse.json(),
+          categoriesResponse.ok ? categoriesResponse.json() : null,
+        ]);
+
+        setServerCategories(
+          Array.isArray(categoriesData?.data)
+            ? categoriesData.data.map((category) =>
+                normalizePromptCategory(category),
+              )
+            : [],
+        );
+        setPrompts(
+          Array.isArray(promptsData)
+            ? promptsData.map((prompt) => ({
+                ...prompt,
+                category: normalizePromptCategory(prompt.category),
+              }))
+            : [],
+        );
+      } catch (loadError) {
+        setError(loadError.message || "Gagal memuat prompt library.");
+        setPrompts([]);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadPrompts();
+  }, []);
 
   const categories = useMemo(() => {
-    const categorySet = new Set(
-      promptTemplates.map((template) => template.category).filter(Boolean),
+    return buildPromptCategoryOptions(
+      [
+        ...serverCategories,
+        ...prompts.map((prompt) => prompt.category).filter(Boolean),
+      ],
     );
-
-    return [ALL_CATEGORIES, ...Array.from(categorySet).sort()];
-  }, []);
+  }, [prompts, serverCategories]);
 
   const filteredTemplates = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
-    return promptTemplates.filter((template) => {
+    return prompts.filter((template) => {
+      const content = template.content || template.prompt || "";
       const matchesCategory =
-        selectedCategory === ALL_CATEGORIES ||
-        template.category === selectedCategory;
+        selectedCategory === ALL_PROMPT_CATEGORIES_LABEL ||
+        normalizePromptCategory(template.category) === selectedCategory;
       const matchesSearch =
         !query ||
-        [template.title, template.category, template.prompt]
+        [template.title, template.category, content]
           .filter(Boolean)
           .some((value) => value.toLowerCase().includes(query));
 
       return matchesCategory && matchesSearch;
     });
-  }, [searchQuery, selectedCategory]);
+  }, [prompts, searchQuery, selectedCategory]);
 
   function handleSelectTemplate(template) {
     if (typeof onSelectTemplate === "function") {
-      onSelectTemplate(template.prompt);
+      onSelectTemplate({
+        id: template.id,
+        title: template.title || "Prompt Template",
+        category: normalizePromptCategory(template.category),
+        content: template.content || template.prompt || "",
+      });
     }
   }
 
@@ -62,8 +130,7 @@ export function PromptLibrary({ onSelectTemplate }) {
         <select
           className="rounded-xl border border-white/10 bg-[#0c1320] px-3 py-2 text-xs font-bold text-slate-100 outline-none transition focus:border-cyan-300/40"
           onChange={(event) => setSelectedCategory(event.target.value)}
-          value={selectedCategory}
-        >
+          value={selectedCategory}>
           {categories.map((category) => (
             <option key={category} value={category}>
               {category}
@@ -73,26 +140,45 @@ export function PromptLibrary({ onSelectTemplate }) {
       </div>
 
       <div className="mt-4 grid max-h-[520px] gap-3 overflow-y-auto pr-1">
-        {filteredTemplates.map((template) => (
-          <button
-            className="rounded-2xl border border-white/10 bg-black/15 p-4 text-left transition hover:border-cyan-300/30 hover:bg-cyan-300/5"
-            key={template.id}
-            onClick={() => handleSelectTemplate(template)}
-            type="button"
-          >
-            <h4 className="line-clamp-1 text-sm font-black text-white">
-              {template.title}
-            </h4>
-            <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">
-              {template.category}
-            </p>
-            <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-500">
-              {template.prompt}
-            </p>
-          </button>
-        ))}
+        {isLoading && (
+          <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-black/15 p-4 text-xs font-bold text-slate-400">
+            <Loader2 className="animate-spin text-cyan-300" size={16} />
+            Memuat prompt dari Supabase...
+          </div>
+        )}
 
-        {filteredTemplates.length === 0 && (
+        {!isLoading && error && (
+          <div className="flex items-start gap-2 rounded-2xl border border-rose-300/20 bg-rose-300/10 p-4 text-xs leading-5 text-rose-200">
+            <AlertCircle size={16} />
+            {error}
+          </div>
+        )}
+
+        {!isLoading &&
+          !error &&
+          filteredTemplates.map((template) => {
+            const content = template.content || template.prompt || "";
+
+            return (
+              <button
+                className="rounded-2xl border border-white/10 bg-black/15 p-4 text-left transition hover:border-cyan-300/30 hover:bg-cyan-300/5"
+                key={template.id}
+                onClick={() => handleSelectTemplate(template)}
+                type="button">
+                <h4 className="line-clamp-1 text-sm font-black text-white">
+                  {template.title}
+                </h4>
+                <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">
+                  {template.category}
+                </p>
+                <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-500">
+                  {content}
+                </p>
+              </button>
+            );
+          })}
+
+        {!isLoading && !error && filteredTemplates.length === 0 && (
           <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
             Template tidak ditemukan.
           </p>
