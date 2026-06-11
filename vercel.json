@@ -1,12 +1,17 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist/web",
+  "installCommand": "npm install",
   "functions": {
     "api/[[...path]].js": {
       "maxDuration": 30
     }
   },
   "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"
