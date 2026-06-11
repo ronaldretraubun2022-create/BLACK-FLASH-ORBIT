@@ -3,5 +3,7 @@ module.exports = function handler(req, res) {
     success: true,
     status: "online",
     service: "BLACK FLASH ORBIT API",
+    runtime: "vercel",
+    timestamp: new Date().toISOString(),
   });
 };
