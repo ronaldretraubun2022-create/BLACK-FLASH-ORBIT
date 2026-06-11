@@ -3,7 +3,7 @@
   "outputDirectory": "dist/web",
   "installCommand": "npm install",
   "functions": {
-    "api/[[...path]].js": {
+    "api/[...path].js": {
       "maxDuration": 30
     }
   },
