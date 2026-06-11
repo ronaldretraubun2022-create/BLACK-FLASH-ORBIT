@@ -3,6 +3,7 @@ import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import { insertRegisteredUserProfile } from "../services/profile";
 
 const AuthContext = createContext(null);
+const TOKEN_REFRESH_WINDOW_MS = 60000;
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
@@ -16,11 +17,10 @@ export function AuthProvider({ children }) {
 
     let isMounted = true;
 
-    supabase.auth
-      .getSession()
-      .then(({ data }) => {
+    getFreshAuthSession()
+      .then((nextSession) => {
         if (isMounted) {
-          setSession(data.session);
+          setSession(nextSession);
         }
       })
       .catch(() => {
@@ -56,12 +56,16 @@ export function AuthProvider({ children }) {
       async signIn({ email, password }) {
         if (!supabase) throw new Error("Supabase environment is not configured.");
 
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
 
         if (error) throw error;
+
+        setSession(data.session ?? null);
+
+        return data;
       },
       async signUp({ email, password }) {
         if (!supabase) throw new Error("Supabase environment is not configured.");
@@ -97,6 +101,38 @@ export function AuthProvider({ children }) {
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+async function getFreshAuthSession() {
+  const { data, error } = await supabase.auth.getSession();
+
+  if (error) throw error;
+
+  const session = data.session;
+
+  if (!session?.access_token) return null;
+
+  if (shouldRefreshSession(session)) {
+    return refreshAuthSession();
+  }
+
+  return session;
+}
+
+function shouldRefreshSession(session) {
+  const expiresAtMs = Number(session?.expires_at || 0) * 1000;
+
+  if (!expiresAtMs) return true;
+
+  return expiresAtMs - Date.now() <= TOKEN_REFRESH_WINDOW_MS;
+}
+
+async function refreshAuthSession() {
+  const { data, error } = await supabase.auth.refreshSession();
+
+  if (error) throw error;
+
+  return data.session ?? null;
 }
 
 export function useAuth() {

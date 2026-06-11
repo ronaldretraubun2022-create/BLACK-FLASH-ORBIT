@@ -1,48 +1,45 @@
-import { supabase } from "../lib/supabase";
+import { getAuthenticatedHeaders } from "./api";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 export function createProfilePayload(user) {
   return {
-    id: user.id,
-    email: user.email,
+    id: user?.id,
+    email: user?.email,
     role: "user",
   };
 }
 
 export async function ensureUserProfile(user) {
-  if (!supabase || !user) return null;
+  if (!user) return null;
 
-  const { data: existingProfile, error: selectError } = await supabase
-    .from("profiles")
-    .select("id, email, role")
-    .eq("id", user.id)
-    .maybeSingle();
+  const response = await fetch(`${API_BASE_URL}/api/v1/profile`, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      ...(await getAuthenticatedHeaders()),
+    },
+    credentials: "include",
+  });
 
-  if (selectError) throw selectError;
-  if (existingProfile) return existingProfile;
+  if (!response.ok) {
+    throw new Error(`Gagal mengambil profile: ${response.status}`);
+  }
 
-  const profile = createProfilePayload(user);
-  const { data, error } = await supabase
-    .from("profiles")
-    .insert(profile)
-    .select("id, email, role")
-    .single();
+  const profile = await response.json();
 
-  if (error) throw error;
-
-  return data;
+  return {
+    id: profile.id || user.id,
+    email: profile.email || user.email,
+    fullName: profile.fullName || "Authenticated User",
+    role: profile.role || "user",
+    avatarInitials: profile.avatarInitials || "RO",
+    workspace: profile.workspace || "BLACK FLASH ORBIT",
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  };
 }
 
 export async function insertRegisteredUserProfile(user) {
-  if (!supabase || !user) return null;
-
-  const profile = createProfilePayload(user);
-  const { data, error } = await supabase
-    .from("profiles")
-    .upsert(profile, { onConflict: "id" })
-    .select("id, email, role")
-    .single();
-
-  if (error) throw error;
-
-  return data;
+  return createProfilePayload(user);
 }

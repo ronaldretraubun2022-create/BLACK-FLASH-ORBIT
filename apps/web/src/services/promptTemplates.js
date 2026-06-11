@@ -1,6 +1,7 @@
 import { supabase } from "../lib/supabase";
+import { normalizePromptCategory } from "../data/promptCategories";
 
-const DEFAULT_CATEGORY = "Umum";
+const DEFAULT_CATEGORY = "newsroom";
 
 function requireSupabase() {
   if (!supabase) {
@@ -23,7 +24,7 @@ function normalizePromptTemplate(template) {
     userId: template.user_id,
     title: template.title || "Prompt Tanpa Judul",
     prompt: template.prompt || "",
-    category: template.category || DEFAULT_CATEGORY,
+    category: normalizePromptCategory(template.category, DEFAULT_CATEGORY),
     isFavorite: Boolean(template.is_favorite),
     createdAt: template.created_at,
     updatedAt: template.updated_at || template.created_at,
@@ -99,7 +100,7 @@ export async function createPromptTemplate({
         user_id: userId,
         title: cleanTitle,
         prompt: cleanPrompt,
-        category: normalizeText(category, DEFAULT_CATEGORY),
+        category: normalizePromptCategory(category, DEFAULT_CATEGORY),
         is_favorite: Boolean(isFavorite),
       },
     ])
@@ -134,7 +135,7 @@ export async function updatePromptTemplate({
     .update({
       title: cleanTitle,
       prompt: cleanPrompt,
-      category: normalizeText(category, DEFAULT_CATEGORY),
+      category: normalizePromptCategory(category, DEFAULT_CATEGORY),
       is_favorite: Boolean(isFavorite),
     })
     .eq("id", id)
@@ -198,5 +199,11 @@ export async function deletePromptTemplate({ id, userId }) {
 }
 
 export function getPromptTemplateErrorMessage(error) {
-  return error?.message || "Gagal memproses prompt template.";
+  if (typeof error?.message === "string") return error.message;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Gagal memproses prompt template.";
+  }
 }
