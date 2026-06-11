@@ -141,7 +141,7 @@ async function request(path, options = {}) {
     });
     const data = await parseJsonResponse(response);
 
-    if (!response.ok) {
+    if (!response.ok && response.status !== 304) {
       const message = getApiErrorMessage(data, response.status);
 
       throw new ApiRequestError(message, {
@@ -163,12 +163,24 @@ async function request(path, options = {}) {
 }
 
 async function parseJsonResponse(response) {
-  if (response.status === 204) return null;
+  if (response.status === 204 || response.status === 304) {
+    return {
+      data: [],
+      success: true,
+    };
+  }
 
   const contentType = response.headers.get("content-type") || "";
 
   if (!contentType.toLowerCase().includes("application/json")) {
     const text = await response.text().catch(() => "");
+    if (response.ok) {
+      return {
+        data: [],
+        success: true,
+      };
+    }
+
     const preview = text.replace(/\s+/g, " ").trim().slice(0, 120);
     const message = preview
       ? `Endpoint API mengembalikan non-JSON (${response.status}): ${preview}`
@@ -183,6 +195,13 @@ async function parseJsonResponse(response) {
   try {
     return await response.json();
   } catch {
+    if (response.ok) {
+      return {
+        data: [],
+        success: true,
+      };
+    }
+
     const message = `Endpoint API mengembalikan JSON tidak valid (${response.status}).`;
 
     throw new ApiRequestError(message, {

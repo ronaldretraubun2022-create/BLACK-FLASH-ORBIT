@@ -101,9 +101,12 @@ function isAliveTelemetryFailure(result, index) {
   if (result.status !== "rejected") return false;
 
   const status = Number(result.reason?.status || result.reason?.body?.status);
-  const optionalIndexes = new Set([2, 3, 4, 5]);
+  const optionalIndexes = new Set([1, 2, 3, 4, 5]);
 
-  return status === 401 || status === 403 || optionalIndexes.has(index);
+  if (optionalIndexes.has(index)) return true;
+  if ([200, 204, 304, 401, 403].includes(status)) return true;
+
+  return false;
 }
 
 export function Dashboard() {
