@@ -172,7 +172,7 @@ export function Dashboard() {
     ? telemetry.activity
     : fallbackActivity;
   const healthStatus = telemetry.health?.status || "checking";
-  const backendOnline = healthStatus === "healthy";
+  const backendOnline = ["healthy", "online", "ready"].includes(healthStatus);
   const uptime = formatUptime(
     telemetry.health?.uptime || telemetry.metrics?.uptime,
   );
