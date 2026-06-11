@@ -84,6 +84,28 @@ function getResolvedData(result, fallback) {
   return result.status === "fulfilled" ? result.value : fallback;
 }
 
+function toDisplayString(value, fallback = "-") {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function isAliveTelemetryFailure(result, index) {
+  if (result.status !== "rejected") return false;
+
+  const status = Number(result.reason?.status || result.reason?.body?.status);
+  const optionalIndexes = new Set([2, 3, 4, 5]);
+
+  return status === 401 || status === 403 || optionalIndexes.has(index);
+}
+
 export function Dashboard() {
   const { user } = useAuth();
   const [telemetry, setTelemetry] = useState({
@@ -101,6 +123,24 @@ export function Dashboard() {
 
   const loadTelemetry = useCallback(async () => {
     setIsLoading(true);
+
+    const dashboardStatus = await api.getDashboardStatus().catch(() => null);
+
+    if (dashboardStatus?.data) {
+      setTelemetry((current) => ({
+        activity: dashboardStatus.data.activity || current.activity,
+        automation: dashboardStatus.data.automation || current.automation,
+        health: dashboardStatus.data.health || current.health,
+        metrics: dashboardStatus.data.metrics || current.metrics,
+        projects: dashboardStatus.data.projects || current.projects,
+        security: dashboardStatus.data.security || current.security,
+        system: dashboardStatus.data.system || current.system,
+      }));
+      setError("");
+      setLastUpdated(formatTime(new Date().toISOString()));
+      setIsLoading(false);
+      return;
+    }
 
     const requests = await Promise.allSettled([
       api.getV1Health(),
@@ -122,7 +162,10 @@ export function Dashboard() {
       system: getResolvedData(requests[6], current.system),
     }));
 
-    const failures = requests.filter((request) => request.status === "rejected");
+    const failures = requests.filter(
+      (request, index) =>
+        request.status === "rejected" && !isAliveTelemetryFailure(request, index),
+    );
 
     setError(
       failures.length > 0
@@ -283,8 +326,8 @@ export function Dashboard() {
                   <h4 className="truncate text-sm font-black text-white">
                     {project.name}
                   </h4>
-                  <p className="mt-1 text-xs uppercase text-stone-500">
-                    {project.type} - {project.lastScan}
+                <p className="mt-1 text-xs uppercase text-stone-500">
+                    {toDisplayString(project.type)} - {toDisplayString(project.lastScan)}
                   </p>
                 </div>
                 <div className="text-right">
@@ -343,9 +386,11 @@ export function Dashboard() {
               <article className="flex gap-3 rounded-lg border border-white/10 bg-black/20 p-3" key={`${item.message}-${index}`}>
                 <span className="mt-1.5 size-2 shrink-0 rounded-full bg-amber-300 shadow-[0_0_18px_rgba(252,211,77,0.75)]" />
                 <div>
-                  <h4 className="text-sm font-bold text-white">{item.message}</h4>
+                  <h4 className="text-sm font-bold text-white">
+                    {toDisplayString(item.message, "Activity")}
+                  </h4>
                   <p className="mt-1 text-xs uppercase text-stone-500">
-                    {item.type || "system"} - {item.time || "Live"}
+                    {toDisplayString(item.type, "system")} - {toDisplayString(item.time, "Live")}
                   </p>
                 </div>
               </article>
@@ -399,9 +444,11 @@ function SignalCard({ icon: Icon, label, meta, tone, value }) {
       </div>
       <p className="mt-5 text-xs font-bold uppercase text-stone-500">{label}</p>
       <strong className="mt-2 block text-2xl font-black capitalize text-white">
-        {value}
+        {toDisplayString(value)}
       </strong>
-      <span className="mt-2 block text-sm text-stone-500">{meta}</span>
+      <span className="mt-2 block text-sm text-stone-500">
+        {toDisplayString(meta)}
+      </span>
     </article>
   );
 }
@@ -411,7 +458,7 @@ function MetricBox({ label, value }) {
     <div className="rounded-lg border border-white/10 bg-black/20 p-4">
       <span className="text-xs font-bold uppercase text-stone-500">{label}</span>
       <strong className="mt-2 block text-lg font-black capitalize text-stone-100">
-        {value}
+        {toDisplayString(value)}
       </strong>
     </div>
   );
@@ -421,7 +468,9 @@ function StatusLine({ label, value }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2">
       <span className="text-xs uppercase text-stone-500">{label}</span>
-      <strong className="truncate text-right text-sm text-stone-100">{value}</strong>
+      <strong className="truncate text-right text-sm text-stone-100">
+        {toDisplayString(value)}
+      </strong>
     </div>
   );
 }

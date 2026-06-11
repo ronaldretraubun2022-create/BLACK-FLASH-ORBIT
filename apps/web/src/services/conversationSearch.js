@@ -20,7 +20,7 @@ function normalizeText(value) {
 function normalizeSession(session) {
   return {
     id: session?.id,
-    userId: session?.user_id,
+    userEmail: session?.user_email,
     title: session?.title || DEFAULT_SESSION_TITLE,
     model: session?.model || DEFAULT_MODEL,
     pinned: Boolean(session?.pinned),
@@ -37,6 +37,7 @@ function normalizeMessage(message) {
   return {
     id: message?.id,
     sessionId: message?.session_id,
+    userEmail: message?.user_email,
     role,
     model: message?.model || DEFAULT_MODEL,
     content: message?.content || "",
@@ -64,8 +65,9 @@ function scoreResult(result, query) {
 export async function searchConversations({ query, userId }) {
   const client = requireSupabase();
   const cleanQuery = normalizeText(query);
+  const userEmail = normalizeText(userId).toLowerCase();
 
-  if (!userId || !cleanQuery) {
+  if (!userEmail || !cleanQuery) {
     return [];
   }
 
@@ -77,15 +79,15 @@ export async function searchConversations({ query, userId }) {
 
   const [sessionsResponse, messagesResponse] = await Promise.all([
     client
-      .from("chat_sessions")
+      .from("orbit_chat_sessions")
       .select("*")
-      .eq("user_id", userId)
+      .eq("user_email", userEmail)
       .or(`title.ilike.${likePattern},model.ilike.${likePattern}`)
       .limit(SEARCH_LIMIT),
     client
-      .from("chat_messages")
-      .select("id, session_id, user_id, role, model, content, created_at")
-      .eq("user_id", userId)
+      .from("orbit_chat_messages")
+      .select("id, session_id, user_email, role, model, content, created_at")
+      .eq("user_email", userEmail)
       .in("role", SEARCHABLE_MESSAGE_ROLES)
       .or(`content.ilike.${likePattern},model.ilike.${likePattern}`)
       .order("created_at", { ascending: false })
@@ -106,9 +108,9 @@ export async function searchConversations({ query, userId }) {
 
   if (messageSessionIds.length > 0) {
     const { data: messageSessions, error: messageSessionsError } = await client
-      .from("chat_sessions")
+      .from("orbit_chat_sessions")
       .select("*")
-      .eq("user_id", userId)
+      .eq("user_email", userEmail)
       .in("id", messageSessionIds);
 
     if (messageSessionsError) throw messageSessionsError;
@@ -171,5 +173,11 @@ export async function searchConversations({ query, userId }) {
 }
 
 export function getConversationSearchErrorMessage(error) {
-  return error?.message || "Gagal mencari conversation.";
+  if (typeof error?.message === "string") return error.message;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Gagal mencari conversation.";
+  }
 }

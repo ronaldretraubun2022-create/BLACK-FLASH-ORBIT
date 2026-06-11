@@ -97,12 +97,26 @@ function getApiErrorMessage(errorBody, status) {
     errorBody?.providerError?.metadata?.raw,
   ]
     .filter(Boolean)
-    .map((value) => String(value).trim())
+    .map((value) => formatErrorValue(value))
     .filter(Boolean);
 
   const uniqueMessages = [...new Set(candidates)];
 
   return uniqueMessages[0] || `API request failed with status ${status}.`;
+}
+
+function formatErrorValue(value) {
+  if (typeof value === "string") return value.trim();
+  if (value instanceof Error) return value.message || value.name;
+  if (value && typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "Terjadi error pada API.";
+    }
+  }
+
+  return String(value || "").trim();
 }
 
 function isAuthFailureResponse(errorBody, status) {
@@ -125,18 +139,18 @@ async function request(path, options = {}) {
       },
       signal: controller.signal,
     });
+    const data = await parseJsonResponse(response);
 
     if (!response.ok) {
-      const errorBody = await response.json().catch(() => null);
-      const message = getApiErrorMessage(errorBody, response.status);
+      const message = getApiErrorMessage(data, response.status);
 
       throw new ApiRequestError(message, {
-        body: errorBody,
+        body: data,
         status: response.status,
       });
     }
 
-    return await response.json();
+    return data;
   } catch (error) {
     if (error.name === "AbortError") {
       throw new Error("API request timed out.");
@@ -145,6 +159,36 @@ async function request(path, options = {}) {
     throw error;
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+async function parseJsonResponse(response) {
+  if (response.status === 204) return null;
+
+  const contentType = response.headers.get("content-type") || "";
+
+  if (!contentType.toLowerCase().includes("application/json")) {
+    const text = await response.text().catch(() => "");
+    const preview = text.replace(/\s+/g, " ").trim().slice(0, 120);
+    const message = preview
+      ? `Endpoint API mengembalikan non-JSON (${response.status}): ${preview}`
+      : `Endpoint API mengembalikan non-JSON (${response.status}).`;
+
+    throw new ApiRequestError(message, {
+      body: { message },
+      status: response.status,
+    });
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    const message = `Endpoint API mengembalikan JSON tidak valid (${response.status}).`;
+
+    throw new ApiRequestError(message, {
+      body: { message },
+      status: response.status,
+    });
   }
 }
 
@@ -201,8 +245,18 @@ export const api = {
     return request("/api/v1/security");
   },
 
+  getDashboardStatus() {
+    return request("/api/v1/dashboard/status");
+  },
+
   async getPromptCategories() {
     return request("/api/v1/prompts/categories", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async getPrompts() {
+    return request("/api/v1/prompts", {
       headers: await getAuthenticatedHeaders(),
     });
   },

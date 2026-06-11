@@ -5,9 +5,49 @@ import {
   buildPromptCategoryOptions,
   normalizePromptCategory,
 } from "../data/promptCategories";
-import { getAuthenticatedHeaders } from "../services/api";
+import * as localPromptTemplates from "../data/promptTemplates";
+import { api } from "../services/api";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+function toPromptText(value, fallback = "") {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return fallback;
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizePromptItem(prompt, fallbackId) {
+  return {
+    ...(prompt && typeof prompt === "object" ? prompt : {}),
+    id: prompt?.id || fallbackId,
+    title: toPromptText(prompt?.title || prompt?.name, "Prompt Template"),
+    category: normalizePromptCategory(prompt?.category),
+    content: toPromptText(prompt?.content || prompt?.prompt),
+  };
+}
+
+function getLocalPromptTemplates() {
+  const source = localPromptTemplates.promptTemplates || [];
+
+  return Array.isArray(source)
+    ? source.map((template, index) =>
+        normalizePromptItem(template, `local-prompt-${index}`),
+      )
+    : [];
+}
+
+function getPromptLibraryErrorMessage(error) {
+  if (typeof error?.message === "string") return error.message;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Gagal memuat prompt library.";
+  }
+}
 
 export function PromptLibrary({ onSelectTemplate }) {
   const [prompts, setPrompts] = useState([]);
@@ -25,23 +65,17 @@ export function PromptLibrary({ onSelectTemplate }) {
         setIsLoading(true);
         setError("");
 
-        const headers = {
-          Accept: "application/json",
-          ...(await getAuthenticatedHeaders()),
-        };
-        const [promptsResponse, categoriesResponse] = await Promise.all([
-          fetch(`${API_BASE_URL}/api/v1/prompts`, { headers }),
-          fetch(`${API_BASE_URL}/api/v1/prompts/categories`, { headers }),
+        const [promptsResult, categoriesResult] = await Promise.allSettled([
+          api.getPrompts(),
+          api.getPromptCategories(),
         ]);
-
-        if (!promptsResponse.ok) {
-          throw new Error(`Gagal memuat prompts: ${promptsResponse.status}`);
-        }
-
-        const [promptsData, categoriesData] = await Promise.all([
-          promptsResponse.json(),
-          categoriesResponse.ok ? categoriesResponse.json() : null,
-        ]);
+        const localPrompts = getLocalPromptTemplates();
+        const promptsData =
+          promptsResult.status === "fulfilled"
+            ? promptsResult.value
+            : localPrompts;
+        const categoriesData =
+          categoriesResult.status === "fulfilled" ? categoriesResult.value : null;
 
         setServerCategories(
           Array.isArray(categoriesData?.data)
@@ -52,15 +86,16 @@ export function PromptLibrary({ onSelectTemplate }) {
         );
         setPrompts(
           Array.isArray(promptsData)
-            ? promptsData.map((prompt) => ({
-                ...prompt,
-                category: normalizePromptCategory(prompt.category),
-              }))
+            ? promptsData.map((prompt, index) =>
+                normalizePromptItem(prompt, `remote-prompt-${index}`),
+              )
             : [],
         );
       } catch (loadError) {
-        setError(loadError.message || "Gagal memuat prompt library.");
-        setPrompts([]);
+        const localPrompts = getLocalPromptTemplates();
+
+        setError(localPrompts.length ? "" : getPromptLibraryErrorMessage(loadError));
+        setPrompts(localPrompts);
       } finally {
         setIsLoading(false);
       }
@@ -82,7 +117,7 @@ export function PromptLibrary({ onSelectTemplate }) {
     const query = searchQuery.trim().toLowerCase();
 
     return prompts.filter((template) => {
-      const content = template.content || template.prompt || "";
+      const content = toPromptText(template.content || template.prompt);
       const matchesCategory =
         selectedCategory === ALL_PROMPT_CATEGORIES_LABEL ||
         normalizePromptCategory(template.category) === selectedCategory;
@@ -90,7 +125,7 @@ export function PromptLibrary({ onSelectTemplate }) {
         !query ||
         [template.title, template.category, content]
           .filter(Boolean)
-          .some((value) => value.toLowerCase().includes(query));
+          .some((value) => toPromptText(value).toLowerCase().includes(query));
 
       return matchesCategory && matchesSearch;
     });
@@ -157,7 +192,7 @@ export function PromptLibrary({ onSelectTemplate }) {
         {!isLoading &&
           !error &&
           filteredTemplates.map((template) => {
-            const content = template.content || template.prompt || "";
+            const content = toPromptText(template.content || template.prompt);
 
             return (
               <button

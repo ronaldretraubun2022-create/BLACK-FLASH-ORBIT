@@ -199,5 +199,11 @@ export async function deletePromptTemplate({ id, userId }) {
 }
 
 export function getPromptTemplateErrorMessage(error) {
-  return error?.message || "Gagal memproses prompt template.";
+  if (typeof error?.message === "string") return error.message;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Gagal memproses prompt template.";
+  }
 }

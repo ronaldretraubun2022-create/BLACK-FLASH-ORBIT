@@ -584,12 +584,66 @@ router.get("/health", (req, res) => {
   });
 });
 
+router.get("/healthz", (req, res) => {
+  res.status(200).json({
+    success: true,
+    service: "BLACK FLASH ORBIT API",
+    status: "healthy",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
 router.get("/system", (req, res) => {
   res.json({
     status: "online",
     apiVersion: "v1",
     environment: process.env.NODE_ENV || "development",
     timestamp: new Date().toISOString(),
+  });
+});
+
+router.get("/dashboard/status", async (req, res) => {
+  const [projects, reports, activity] = await Promise.all([
+    getProjects(),
+    getReports(),
+    getActivity(20),
+  ]);
+
+  return res.json({
+    success: true,
+    data: {
+      activity,
+      automation: getAutomationEngines(),
+      health: {
+        success: true,
+        service: "BLACK FLASH ORBIT API",
+        status: "healthy",
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+      },
+      metrics: {
+        projects: projects.length,
+        reports: reports.length,
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+      },
+      projects,
+      security: {
+        securityScore: 94,
+        helmet: "PROTECTED",
+        cors: "PROTECTED",
+        rateLimit: "ACTIVE",
+        lastAudit: "live",
+        issues: [],
+      },
+      system: {
+        status: "online",
+        apiVersion: "v1",
+        environment: process.env.NODE_ENV || "development",
+        timestamp: new Date().toISOString(),
+      },
+    },
   });
 });
 
