@@ -110,6 +110,10 @@ app.get("/health", (req, res) => {
 app.use(notFound);
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  console.log(`BLACK FLASH ORBIT server berjalan di http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`BLACK FLASH ORBIT server berjalan di http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
