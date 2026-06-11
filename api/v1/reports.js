@@ -7,7 +7,7 @@
     module: "reports",
     data: [],
     metrics: {},
-    message: "Module reports ready for staging.",
+    message: "Tidak ada issue aktif dari endpoint reports.",
     timestamp: new Date().toISOString()
   }));
 };

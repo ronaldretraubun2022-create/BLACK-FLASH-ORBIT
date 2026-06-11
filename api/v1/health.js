@@ -7,7 +7,7 @@
     module: "health",
     data: [],
     metrics: {},
-    message: "Module health ready for staging.",
+    message: "Tidak ada issue aktif dari endpoint health.",
     timestamp: new Date().toISOString()
   }));
 };

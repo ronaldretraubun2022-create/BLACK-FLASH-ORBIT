@@ -7,7 +7,7 @@
     module: "dashboard",
     data: [],
     metrics: {},
-    message: "Module dashboard ready for staging.",
+    message: "Tidak ada issue aktif dari endpoint dashboard.",
     timestamp: new Date().toISOString()
   }));
 };

@@ -7,7 +7,7 @@
     module: "automation",
     data: [],
     metrics: {},
-    message: "Module automation ready for staging.",
+    message: "Tidak ada issue aktif dari endpoint automation.",
     timestamp: new Date().toISOString()
   }));
 };

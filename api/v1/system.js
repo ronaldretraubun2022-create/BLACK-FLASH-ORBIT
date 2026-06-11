@@ -7,7 +7,7 @@
     module: "system",
     data: [],
     metrics: {},
-    message: "Module system ready for staging.",
+    message: "Tidak ada issue aktif dari endpoint system.",
     timestamp: new Date().toISOString()
   }));
 };
