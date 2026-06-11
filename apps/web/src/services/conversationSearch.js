@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase";
 const DEFAULT_MODEL = "openrouter/auto";
 const DEFAULT_SESSION_TITLE = "Percakapan AI Workspace";
 const SEARCH_LIMIT = 20;
+const SEARCHABLE_MESSAGE_ROLES = ["user", "assistant"];
 
 function requireSupabase() {
   if (!supabase) {
@@ -29,10 +30,14 @@ function normalizeSession(session) {
 }
 
 function normalizeMessage(message) {
+  const role = normalizeText(message?.role);
+
+  if (!SEARCHABLE_MESSAGE_ROLES.includes(role)) return null;
+
   return {
     id: message?.id,
     sessionId: message?.session_id,
-    role: message?.role || "assistant",
+    role,
     model: message?.model || DEFAULT_MODEL,
     content: message?.content || "",
     createdAt: message?.created_at,
@@ -81,9 +86,8 @@ export async function searchConversations({ query, userId }) {
       .from("chat_messages")
       .select("id, session_id, user_id, role, model, content, created_at")
       .eq("user_id", userId)
-      .or(
-        `content.ilike.${likePattern},model.ilike.${likePattern},role.ilike.${likePattern}`,
-      )
+      .in("role", SEARCHABLE_MESSAGE_ROLES)
+      .or(`content.ilike.${likePattern},model.ilike.${likePattern}`)
       .order("created_at", { ascending: false })
       .limit(SEARCH_LIMIT),
   ]);
@@ -92,7 +96,9 @@ export async function searchConversations({ query, userId }) {
   if (messagesResponse.error) throw messagesResponse.error;
 
   const resultMap = new Map();
-  const messages = (messagesResponse.data || []).map(normalizeMessage);
+  const messages = (messagesResponse.data || [])
+    .map(normalizeMessage)
+    .filter(Boolean);
   const messageSessionIds = Array.from(
     new Set(messages.map((message) => message.sessionId).filter(Boolean)),
   );
