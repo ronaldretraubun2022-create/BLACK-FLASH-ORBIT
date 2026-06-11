@@ -1,3 +1,5 @@
-const app = require("../server/index");
+const app = require("../server/index.js");
 
-module.exports = app;
+module.exports = function handler(req, res) {
+  return app(req, res);
+};
