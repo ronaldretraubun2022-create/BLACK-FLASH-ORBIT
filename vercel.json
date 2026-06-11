@@ -3,24 +3,16 @@
   "outputDirectory": "dist/web",
   "installCommand": "npm install",
   "functions": {
-    "api/health.js": {
-      "maxDuration": 10
-    },
     "api/[...path].js": {
       "maxDuration": 30
+    },
+    "api/health.js": {
+      "maxDuration": 10
     }
   },
   "rewrites": [
     {
-      "source": "/api",
-      "destination": "/api/health"
-    },
-    {
-      "source": "/api/:path*",
-      "destination": "/api/:path*"
-    },
-    {
-      "source": "/:path((?!api$|api/).*)",
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ]

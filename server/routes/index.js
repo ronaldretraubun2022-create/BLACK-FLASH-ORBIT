@@ -596,7 +596,7 @@ router.get("/health", (req, res) => {
   res.status(200).json({
     success: true,
     service: "BLACK FLASH ORBIT API",
-    status: "online",
+    status: "ready",
     module: "health",
     data: [],
     metrics: {
@@ -612,7 +612,7 @@ router.get("/healthz", (req, res) => {
   res.status(200).json({
     success: true,
     service: "BLACK FLASH ORBIT API",
-    status: "online",
+    status: "ready",
     module: "health",
     data: [],
     metrics: {
@@ -627,7 +627,7 @@ router.get("/healthz", (req, res) => {
 router.get("/system", (req, res) => {
   res.json({
     success: true,
-    status: "online",
+    status: "ready",
     module: "system",
     data: [],
     metrics: {
