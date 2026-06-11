@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   Clock3,
@@ -44,6 +44,7 @@ const modelOptions = [
 
 export function AIWorkspace() {
   const { user } = useAuth();
+  const userEmail = typeof user?.email === "string" ? user.email.trim() : "";
   const [selectedModel, setSelectedModel] = useState("openrouter/auto");
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState("");
@@ -52,8 +53,10 @@ export function AIWorkspace() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sessionSearchQuery, setSessionSearchQuery] = useState("");
   const [conversationSearchQuery, setConversationSearchQuery] = useState("");
-  const [debouncedConversationSearchQuery, setDebouncedConversationSearchQuery] =
-    useState("");
+  const [
+    debouncedConversationSearchQuery,
+    setDebouncedConversationSearchQuery,
+  ] = useState("");
   const [conversationSearchResults, setConversationSearchResults] = useState(
     [],
   );
@@ -67,10 +70,11 @@ export function AIWorkspace() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [messages, setMessages] = useState([]);
+  const [messagesSessionId, setMessagesSessionId] = useState("");
+  const messageLoadRequestIdRef = useRef(0);
 
   const conversationCount = useMemo(
-    () =>
-      (messages || []).filter((message) => message?.role === "user").length,
+    () => (messages || []).filter((message) => message?.role === "user").length,
     [messages],
   );
   const selectedModelLabel =
@@ -96,16 +100,35 @@ export function AIWorkspace() {
     if (!query) return safeSessions;
 
     return safeSessions.filter((session) =>
-      String(session?.title || "").toLowerCase().includes(query),
+      String(session?.title || "")
+        .toLowerCase()
+        .includes(query),
     );
   }, [sessionSearchQuery, sessions]);
   const loadSessionMessages = useCallback(async (sessionId) => {
-    const databaseMessages = await getChatMessages(sessionId);
-    setMessages(databaseMessages);
+    const targetSessionId = String(sessionId || "").trim();
+    const requestId = messageLoadRequestIdRef.current + 1;
+    messageLoadRequestIdRef.current = requestId;
+
+    setMessages([]);
+    setMessagesSessionId(targetSessionId);
+
+    if (!targetSessionId) {
+      return [];
+    }
+
+    const databaseMessages = await getChatMessages(targetSessionId);
+
+    if (messageLoadRequestIdRef.current === requestId) {
+      setMessages(databaseMessages);
+      setMessagesSessionId(targetSessionId);
+    }
+
+    return databaseMessages;
   }, []);
 
-  const refreshSessions = useCallback(async (userId) => {
-    const databaseSessions = await getChatSessions(userId);
+  const refreshSessions = useCallback(async (targetUserEmail) => {
+    const databaseSessions = await getChatSessions(targetUserEmail);
     setSessions(databaseSessions);
     return databaseSessions;
   }, []);
@@ -114,9 +137,11 @@ export function AIWorkspace() {
     let isMounted = true;
 
     async function initializeChatSession() {
-      if (!user?.id) {
+      if (!userEmail) {
+        messageLoadRequestIdRef.current += 1;
         setActiveSession(null);
         setMessages([]);
+        setMessagesSessionId("");
         setIsLoadingHistory(false);
         return;
       }
@@ -127,9 +152,9 @@ export function AIWorkspace() {
       try {
         const session = await getOrCreateActiveChatSession({
           model: selectedModel,
-          userId: user.id,
+          userEmail,
         });
-        const databaseSessions = await refreshSessions(user.id);
+        const databaseSessions = await refreshSessions(userEmail);
 
         if (!isMounted) return;
 
@@ -146,7 +171,9 @@ export function AIWorkspace() {
           getChatPersistenceErrorMessage(sessionError) ||
             "Gagal memuat session dan history chat dari Supabase.",
         );
+        messageLoadRequestIdRef.current += 1;
         setMessages([]);
+        setMessagesSessionId("");
       } finally {
         if (isMounted) {
           setIsLoadingHistory(false);
@@ -159,7 +186,7 @@ export function AIWorkspace() {
     return () => {
       isMounted = false;
     };
-  }, [loadSessionMessages, refreshSessions, user?.id]);
+  }, [loadSessionMessages, refreshSessions, userEmail]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -175,7 +202,7 @@ export function AIWorkspace() {
     let isMounted = true;
 
     async function loadConversationSearchResults() {
-      if (!user?.id || !debouncedConversationSearchQuery) {
+      if (!userEmail || !debouncedConversationSearchQuery) {
         setConversationSearchResults([]);
         setConversationSearchError("");
         setIsConversationSearchLoading(false);
@@ -188,7 +215,7 @@ export function AIWorkspace() {
       try {
         const results = await searchConversations({
           query: debouncedConversationSearchQuery,
-          userId: user.id,
+          userId: userEmail,
         });
 
         if (!isMounted) return;
@@ -213,7 +240,7 @@ export function AIWorkspace() {
     return () => {
       isMounted = false;
     };
-  }, [debouncedConversationSearchQuery, user?.id]);
+  }, [debouncedConversationSearchQuery, userEmail]);
 
   async function selectSession(session) {
     if (
@@ -238,6 +265,7 @@ export function AIWorkspace() {
           "Gagal memuat chat session.",
       );
       setMessages([]);
+      setMessagesSessionId(session.id);
     } finally {
       setIsLoadingHistory(false);
     }
@@ -254,7 +282,7 @@ export function AIWorkspace() {
   }
 
   async function handleNewChat() {
-    if (!user?.id || isSessionActionLoading) return;
+    if (!userEmail || isSessionActionLoading) return;
 
     setError("");
     setIsSessionActionLoading(true);
@@ -264,15 +292,17 @@ export function AIWorkspace() {
       const session = await createChatSession({
         model: selectedModel,
         title: "Percakapan Baru",
-        userId: user.id,
+        userEmail,
       });
 
-      const databaseSessions = await refreshSessions(user.id);
+      const databaseSessions = await refreshSessions(userEmail);
       const sessionFromList =
         databaseSessions.find((item) => item.id === session.id) || session;
 
       setActiveSession(sessionFromList);
+      messageLoadRequestIdRef.current += 1;
       setMessages([]);
+      setMessagesSessionId(sessionFromList.id);
       setSearchQuery("");
     } catch (sessionError) {
       setError(
@@ -362,7 +392,7 @@ export function AIWorkspace() {
 
     try {
       await deleteChatSession(deleteDialogSession.id);
-      const remainingSessions = await refreshSessions(user.id);
+      const remainingSessions = await refreshSessions(userEmail);
       const currentSessionStillExists = remainingSessions.find(
         (item) => item.id === activeSession?.id,
       );
@@ -379,11 +409,13 @@ export function AIWorkspace() {
         const newSession = await createChatSession({
           model: selectedModel,
           title: "Percakapan Baru",
-          userId: user.id,
+          userEmail,
         });
-        await refreshSessions(user.id);
+        await refreshSessions(userEmail);
         setActiveSession(newSession);
+        messageLoadRequestIdRef.current += 1;
         setMessages([]);
+        setMessagesSessionId(newSession.id);
       }
 
       setSearchQuery("");
@@ -452,7 +484,7 @@ export function AIWorkspace() {
 
     setSelectedModel(nextModel);
 
-    if (!activeSession?.id || !user?.id) return;
+    if (!activeSession?.id || !userEmail) return;
 
     const optimisticSession = {
       ...activeSession,
@@ -495,46 +527,93 @@ export function AIWorkspace() {
     event.preventDefault();
 
     const cleanPrompt = prompt.trim();
-    if (!cleanPrompt || isSending || !activeSession?.id) return;
+    const targetSession = activeSession;
+    const targetSessionId = targetSession?.id;
+    const targetUserEmail = userEmail;
+    const targetModel = targetSession?.model || selectedModel;
+
+    if (!cleanPrompt || isSending || !targetSessionId || !targetUserEmail) {
+      return;
+    }
 
     setPrompt("");
     setError("");
     setIsSending(true);
 
     try {
-      await saveChatMessage({
-        sessionId: activeSession.id,
-        userId: user.id,
+      const targetMessages = await getChatMessages(targetSessionId);
+
+      const optimisticUserMessage = {
+        id: `local-user-${Date.now()}`,
+        session_id: targetSessionId,
+        user_email: targetUserEmail,
         role: "user",
         content: cleanPrompt,
-        model: selectedModel,
+        model: targetModel,
+        created_at: new Date().toISOString(),
+      };
+
+      messageLoadRequestIdRef.current += 1;
+      setMessagesSessionId(targetSessionId);
+      setMessages([
+        ...targetMessages,
+        optimisticUserMessage,
+      ]);
+
+      await saveChatMessage({
+        sessionId: targetSessionId,
+        userEmail: targetUserEmail,
+        role: "user",
+        content: cleanPrompt,
+        model: targetModel,
       });
-      await loadSessionMessages(activeSession.id);
+
+      const conversationHistory = targetMessages
+        .filter((message) => message?.role && message?.content)
+        .map((message) => ({
+          role: message.role,
+          content: message.content,
+        }));
 
       const data = await api.sendAiChat({
         message: cleanPrompt,
-        model: selectedModel,
+        model: targetModel,
+        sessionId: targetSessionId,
+        userEmail: targetUserEmail,
+        history: conversationHistory,
       });
 
+      const aiResponse =
+        data?.response ||
+        data?.message ||
+        data?.content ||
+        "Maaf, AI tidak mengembalikan jawaban.";
+
       await saveChatMessage({
-        sessionId: activeSession.id,
-        userId: user.id,
+        sessionId: targetSessionId,
+        userEmail: targetUserEmail,
         role: "assistant",
-        content: data.response,
-        model: selectedModel,
+        content: aiResponse,
+        model: targetModel,
       });
-      await loadSessionMessages(activeSession.id);
-      await refreshSessions(user.id);
+
+      await loadSessionMessages(targetSessionId);
+
+      const updatedSessions = await refreshSessions(targetUserEmail);
+      const updatedActiveSession =
+        updatedSessions.find((session) => session.id === targetSessionId) ||
+        targetSession;
+
+      setActiveSession(updatedActiveSession);
     } catch (chatError) {
       const message =
         getChatPersistenceErrorMessage(chatError) ||
+        chatError?.message ||
         "Gagal mengambil jawaban AI dari OpenRouter.";
 
       setError(message);
 
-      if (activeSession?.id) {
-        await loadSessionMessages(activeSession.id).catch(() => undefined);
-      }
+      await loadSessionMessages(targetSessionId).catch(() => undefined);
     } finally {
       setIsSending(false);
     }
@@ -621,8 +700,7 @@ export function AIWorkspace() {
                 disabled={isSessionActionLoading}
                 onClick={handleNewChat}
                 title="New Chat"
-                type="button"
-              >
+                type="button">
                 <Plus size={17} />
               </button>
             </div>
@@ -650,18 +728,19 @@ export function AIWorkspace() {
                         ? "border-cyan-300/30 bg-cyan-300/10"
                         : "border-white/10 bg-black/15 hover:border-cyan-300/20"
                     }`}
-                    key={session.id}
-                  >
+                    key={session.id}>
                     <div className="flex items-start gap-2">
                       <button
                         className="block min-w-0 flex-1 text-left"
                         disabled={isSessionActionLoading || isSending}
                         onClick={() => selectSession(session)}
-                        type="button"
-                      >
+                        type="button">
                         <span className="flex items-center gap-2">
                           {session.pinned && (
-                            <Pin className="shrink-0 text-amber-300" size={13} />
+                            <Pin
+                              className="shrink-0 text-amber-300"
+                              size={13}
+                            />
                           )}
                           <span className="line-clamp-1 text-sm font-black text-white">
                             {session.title}
@@ -677,24 +756,25 @@ export function AIWorkspace() {
                         className="inline-flex size-8 items-center justify-center rounded-lg border border-white/10 bg-black/20 text-slate-300 transition hover:border-amber-300/30 hover:text-amber-200"
                         onClick={() => handleTogglePinSession(session)}
                         title={session.pinned ? "Unpin chat" : "Pin chat"}
-                        type="button"
-                      >
-                        {session.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                        type="button">
+                        {session.pinned ? (
+                          <PinOff size={14} />
+                        ) : (
+                          <Pin size={14} />
+                        )}
                       </button>
                       <button
                         className="inline-flex size-8 items-center justify-center rounded-lg border border-white/10 bg-black/20 text-slate-300 transition hover:border-cyan-300/30 hover:text-cyan-200"
                         onClick={() => openRenameDialog(session)}
                         title="Rename chat"
-                        type="button"
-                      >
+                        type="button">
                         <Pencil size={14} />
                       </button>
                       <button
                         className="inline-flex size-8 items-center justify-center rounded-lg border border-rose-300/20 bg-rose-300/5 text-rose-200 transition hover:bg-rose-300/10"
                         onClick={() => setDeleteDialogSession(session)}
                         title="Delete chat"
-                        type="button"
-                      >
+                        type="button">
                         <Trash2 size={14} />
                       </button>
                     </div>
@@ -732,8 +812,7 @@ export function AIWorkspace() {
                 <select
                   className="rounded-xl border border-white/10 bg-[#0c1320] px-3 py-2 text-sm font-bold normal-case tracking-normal text-slate-100 outline-none transition focus:border-cyan-300/40"
                   onChange={(event) => handleModelChange(event.target.value)}
-                  value={selectedModel}
-                >
+                  value={selectedModel}>
                   {modelOptions.map((model) => (
                     <option key={model.value} value={model.value}>
                       {model.label}
@@ -767,8 +846,7 @@ export function AIWorkspace() {
                       key={format}
                       onClick={() => handleExportConversation(format)}
                       title={`Export ${format.toUpperCase()}`}
-                      type="button"
-                    >
+                      type="button">
                       <Download size={13} />
                       {format}
                     </button>
@@ -800,11 +878,13 @@ export function AIWorkspace() {
                 </p>
               </article>
             )}
-            {!isLoadingHistory && messages.length > 0 && filteredMessages.length === 0 && (
-              <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-xs font-bold text-slate-400">
-                Tidak ada message yang cocok dengan pencarian.
-              </div>
-            )}
+            {!isLoadingHistory &&
+              messages.length > 0 &&
+              filteredMessages.length === 0 && (
+                <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-xs font-bold text-slate-400">
+                  Tidak ada message yang cocok dengan pencarian.
+                </div>
+              )}
             {filteredMessages.map((message) => (
               <article
                 className={`rounded-2xl border p-4 ${
@@ -812,8 +892,7 @@ export function AIWorkspace() {
                     ? "ml-auto max-w-2xl border-cyan-300/20 bg-cyan-300/10"
                     : "mr-auto max-w-2xl border-white/10 bg-black/20"
                 }`}
-                key={message.id}
-              >
+                key={message.id}>
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">
                     {message.role === "user" ? "Operator" : "AI Workspace"}
@@ -860,8 +939,7 @@ export function AIWorkspace() {
                   isLoadingHistory ||
                   !activeSession?.id
                 }
-                type="submit"
-              >
+                type="submit">
                 {isSending ? "Mengirim..." : "Submit Prompt"}
                 <Send size={16} />
               </button>
@@ -925,8 +1003,7 @@ export function AIWorkspace() {
                       className="rounded-2xl border border-white/10 bg-black/15 p-4 text-left transition hover:border-cyan-300/30 hover:bg-cyan-300/5"
                       key={result.id}
                       onClick={() => openConversationSearchResult(result)}
-                      type="button"
-                    >
+                      type="button">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <h4 className="line-clamp-1 text-sm font-black text-white">
@@ -971,15 +1048,15 @@ export function AIWorkspace() {
                 .map((message, index) => (
                   <article
                     className="rounded-2xl border border-white/10 bg-black/15 p-3"
-                    key={message.id}
-                  >
+                    key={message.id}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-black text-slate-300">
                         Prompt #{index + 1}
                       </span>
                       <span className="text-[10px] font-bold text-cyan-300">
-                        {modelOptions.find((model) => model.value === message.model)
-                          ?.label || message.model}
+                        {modelOptions.find(
+                          (model) => model.value === message.model,
+                        )?.label || message.model}
                       </span>
                     </div>
                     <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">
@@ -1003,8 +1080,7 @@ export function AIWorkspace() {
           isLoading={isSessionActionLoading}
           onClose={closeRenameDialog}
           onSubmit={submitRenameSession}
-          title="Rename Session"
-        >
+          title="Rename Session">
           <label className="grid gap-2 text-xs font-bold text-slate-400">
             Nama session
             <input
@@ -1026,15 +1102,13 @@ export function AIWorkspace() {
             event.preventDefault();
             confirmDeleteSession();
           }}
-          title="Delete Session"
-        >
+          title="Delete Session">
           <p className="text-sm leading-6 text-slate-300">
             Hapus chat "{deleteDialogSession.title}" dan semua message di
             dalamnya?
           </p>
         </SessionModal>
       )}
-
     </div>
   );
 }
@@ -1068,9 +1142,7 @@ function highlightMatch(value, query) {
   return (
     <>
       {before}
-      <mark className="rounded bg-cyan-300/20 px-1 text-cyan-100">
-        {match}
-      </mark>
+      <mark className="rounded bg-cyan-300/20 px-1 text-cyan-100">{match}</mark>
       {after}
     </>
   );
@@ -1174,7 +1246,9 @@ function createPdfExport(exportData) {
     const pageObjectNumber = objects.length + 2;
     const stream = createPdfPageStream(pageLines);
 
-    objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+    objects.push(
+      `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    );
     objects.push(
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectNumber} 0 R >>`,
     );
@@ -1312,7 +1386,10 @@ function createZip(files) {
     offset += localHeader.length + contentBytes.length;
   });
 
-  const centralSize = centralParts.reduce((total, part) => total + part.length, 0);
+  const centralSize = centralParts.reduce(
+    (total, part) => total + part.length,
+    0,
+  );
   const endRecord = createZipEndRecord({
     centralOffset: offset,
     centralSize,
@@ -1418,7 +1495,9 @@ function paginateLines(lines, pageSize) {
     pages.push(lines.slice(index, index + pageSize));
   }
 
-  return pages.length > 0 ? pages : [["BLACK FLASH ORBIT", "AI Workspace Export"]];
+  return pages.length > 0
+    ? pages
+    : [["BLACK FLASH ORBIT", "AI Workspace Export"]];
 }
 
 function splitLongLines(text) {
@@ -1508,15 +1587,13 @@ function SessionModal({
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 py-6 backdrop-blur-sm">
       <form
         className="w-full max-w-md rounded-3xl border border-white/10 bg-[#080d16] p-5 shadow-2xl shadow-black/50"
-        onSubmit={onSubmit}
-      >
+        onSubmit={onSubmit}>
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-lg font-black text-white">{title}</h3>
           <button
             className="inline-flex size-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-slate-300"
             onClick={onClose}
-            type="button"
-          >
+            type="button">
             <X size={16} />
           </button>
         </div>
@@ -1525,8 +1602,7 @@ function SessionModal({
           <button
             className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-black text-slate-300"
             onClick={onClose}
-            type="button"
-          >
+            type="button">
             Batal
           </button>
           <button
@@ -1536,8 +1612,7 @@ function SessionModal({
                 : "border-cyan-300/30 bg-cyan-300/15 text-cyan-100 hover:bg-cyan-300/20"
             }`}
             disabled={isLoading}
-            type="submit"
-          >
+            type="submit">
             {isLoading ? "Memproses..." : actionLabel}
           </button>
         </div>
