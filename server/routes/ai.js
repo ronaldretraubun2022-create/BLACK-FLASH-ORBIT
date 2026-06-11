@@ -1,4 +1,5 @@
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const { createClient } = require("@supabase/supabase-js");
 const supabaseDatabase = require("../lib/supabase");
 
@@ -10,6 +11,9 @@ const OPENROUTER_CHAT_COMPLETIONS_URL =
 const DEFAULT_OPENROUTER_MODEL = "openrouter/auto";
 const OPENROUTER_TIMEOUT_MS = 30000;
 const CHAT_MEMORY_LIMIT = 20;
+const MAX_AI_MESSAGE_LENGTH = 12000;
+const MAX_AI_HISTORY_ITEMS = 20;
+const MAX_AI_MODEL_LENGTH = 120;
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const INVALID_SUPABASE_TOKEN_MESSAGE =
   "Supabase auth token tidak valid atau sudah expired. Silakan login ulang.";
@@ -18,6 +22,20 @@ const ORBIT_SYSTEM_PROMPT =
 
 let supabaseAuthClient = null;
 let supabaseAuthClientKey = "";
+
+const aiChatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: IS_PRODUCTION ? 20 : 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.id || "unknown-ai-user",
+  message: {
+    success: false,
+    status: 429,
+    code: "ai_rate_limited",
+    message: "Terlalu banyak request AI. Coba lagi sebentar.",
+  },
+});
 
 function getSafeOpenRouterApiKey() {
   return String(process.env.OPENROUTER_API_KEY || "").trim();
@@ -34,6 +52,18 @@ function createHttpError(
   error.code = code;
   Object.assign(error, details);
   return error;
+}
+
+function sendSafeError(res, error, fallbackMessage = "Request AI gagal.") {
+  const status = Number(error?.statusCode || error?.status || 500);
+  const safeStatus = status >= 400 && status < 600 ? status : 500;
+
+  return res.status(safeStatus).json({
+    success: false,
+    status: safeStatus,
+    code: error?.code || "ai_request_failed",
+    message: error?.safeMessage || error?.message || fallbackMessage,
+  });
 }
 
 function getSupabaseAuthConfig() {
@@ -199,6 +229,15 @@ function logAuthDebug(req, reason, details = {}) {
   });
 }
 
+async function requireAiAuth(req, res, next) {
+  try {
+    req.user = await requireAuthenticatedUser(req);
+    return next();
+  } catch (error) {
+    return sendSafeError(res, error, "Autentikasi AI gagal.");
+  }
+}
+
 async function requireAuthenticatedUser(req) {
   const token = getBearerToken(req);
   const supabase = getSupabaseAuthClient();
@@ -208,20 +247,6 @@ async function requireAuthenticatedUser(req) {
   try {
     authResult = await supabase.auth.getUser(token);
   } catch (error) {
-    if (!IS_PRODUCTION) {
-      const developmentUser = createDevelopmentUserFromToken(token);
-
-      logAuthDebug(req, "development_supabase_auth_bypass", {
-        supabaseAuthError: {
-          message: error.message || null,
-          status: error.status || null,
-        },
-        userId: developmentUser.id,
-      });
-
-      return developmentUser;
-    }
-
     logAuthDebug(req, "supabase_auth_unavailable", {
       supabaseAuthError: {
         message: error.message || null,
@@ -260,17 +285,6 @@ async function requireAuthenticatedUser(req) {
   );
 
   if (error || !user?.id) {
-    if (!IS_PRODUCTION) {
-      const developmentUser = createDevelopmentUserFromToken(token);
-
-      logAuthDebug(req, "development_supabase_auth_bypass", {
-        supabaseAuthError,
-        userId: developmentUser.id,
-      });
-
-      return developmentUser;
-    }
-
     throw createHttpError(
       error?.message || INVALID_SUPABASE_TOKEN_MESSAGE,
       401,
@@ -303,6 +317,22 @@ function getOpenRouterErrorMessage(data) {
   );
 }
 
+function getSafeOpenRouterStatusMessage(status) {
+  if (status === 401 || status === 403) {
+    return "Konfigurasi akses provider AI tidak valid.";
+  }
+
+  if (status === 429) {
+    return "Provider AI sedang membatasi request. Coba lagi nanti.";
+  }
+
+  if (status >= 500) {
+    return "OpenRouter gagal memproses request.";
+  }
+
+  return "OpenRouter menolak request AI.";
+}
+
 function normalizeSessionId(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -317,6 +347,55 @@ function normalizeSystemPrompt(value) {
   return value.trim().slice(0, 12000);
 }
 
+function normalizeModel(value) {
+  if (typeof value !== "string") return DEFAULT_OPENROUTER_MODEL;
+
+  const model = value.trim();
+  return model ? model.slice(0, MAX_AI_MODEL_LENGTH) : DEFAULT_OPENROUTER_MODEL;
+}
+
+function normalizeClientHistory(history) {
+  if (!Array.isArray(history)) return [];
+
+  return history
+    .slice(-MAX_AI_HISTORY_ITEMS)
+    .map((message) => normalizeChatHistoryRow(message))
+    .filter(Boolean);
+}
+
+function validateAiChatBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw createHttpError("Body request tidak valid.", 400, "invalid_body");
+  }
+
+  const message = typeof body.message === "string" ? body.message.trim() : "";
+  const sessionId = normalizeSessionId(body.sessionId || body.session_id);
+
+  if (!message) {
+    throw createHttpError("Message tidak boleh kosong.", 400, "empty_message");
+  }
+
+  if (message.length > MAX_AI_MESSAGE_LENGTH) {
+    throw createHttpError(
+      "Message terlalu panjang.",
+      413,
+      "message_too_large",
+    );
+  }
+
+  if (!sessionId) {
+    throw createHttpError("sessionId wajib diisi.", 400, "session_required");
+  }
+
+  return {
+    history: normalizeClientHistory(body.history),
+    message,
+    model: normalizeModel(body.model),
+    sessionId,
+    systemPrompt: normalizeSystemPrompt(body.systemPrompt || body.system_prompt),
+  };
+}
+
 function normalizeChatHistoryRow(row) {
   const role = String(row?.role || "").trim();
   const content = String(row?.content || "").trim();
@@ -325,7 +404,7 @@ function normalizeChatHistoryRow(row) {
     return null;
   }
 
-  return { role, content };
+  return { role, content: content.slice(0, MAX_AI_MESSAGE_LENGTH) };
 }
 
 function removeCurrentMessageFromHistory(history, currentMessage) {
@@ -348,11 +427,16 @@ function removeCurrentMessageFromHistory(history, currentMessage) {
   return nextHistory;
 }
 
-async function getConversationHistory({ currentMessage, sessionId, userEmail }) {
+async function getConversationHistory({
+  currentMessage,
+  fallbackHistory = [],
+  sessionId,
+  userEmail,
+}) {
   const ownerEmail = normalizeEmail(userEmail);
 
   if (!sessionId || !ownerEmail || !supabaseDatabase) {
-    return [];
+    return fallbackHistory;
   }
 
   const { data, error } = await supabaseDatabase
@@ -370,7 +454,7 @@ async function getConversationHistory({ currentMessage, sessionId, userEmail }) 
       message: error.message || null,
       sessionId,
     });
-    return [];
+    return fallbackHistory;
   }
 
   const history = (data || [])
@@ -382,14 +466,62 @@ async function getConversationHistory({ currentMessage, sessionId, userEmail }) 
   return removeCurrentMessageFromHistory(history, currentMessage);
 }
 
+async function logAiAuditEvent({
+  code = null,
+  durationMs,
+  model,
+  sessionId,
+  status,
+  user,
+}) {
+  try {
+    const userEmail = normalizeEmail(user?.email);
+    const userId = user?.id || null;
+    const message = `AI chat ${status}: user=${userEmail || userId || "unknown"} session=${sessionId} model=${model} duration=${durationMs}ms`;
+
+    console.info("[AI Audit]", {
+      code,
+      durationMs,
+      model,
+      sessionId,
+      status,
+      userEmail: userEmail || null,
+      userId,
+    });
+
+    if (!supabaseDatabase) return;
+
+    const { error } = await supabaseDatabase.from("orbit_activity").insert([
+      {
+        type: "ai_chat",
+        message,
+        time: new Date().toISOString(),
+      },
+    ]);
+
+    if (error) {
+      console.warn("[AI Audit] gagal menyimpan audit log", {
+        code: error.code || null,
+        message: error.message || null,
+      });
+    }
+  } catch (auditError) {
+    console.warn("[AI Audit] gagal menulis audit log", {
+      message: auditError.message || null,
+    });
+  }
+}
+
 async function buildOpenRouterMessages({
   currentMessage,
+  fallbackHistory,
   sessionId,
   systemPrompt,
   userEmail,
 }) {
   const history = await getConversationHistory({
     currentMessage,
+    fallbackHistory,
     sessionId,
     userEmail,
   });
@@ -418,60 +550,45 @@ async function buildOpenRouterMessages({
   ];
 }
 
-router.post("/chat", async (req, res) => {
-  const message =
-    typeof req.body?.message === "string" ? req.body.message.trim() : "";
-
-  const model =
-    typeof req.body?.model === "string" && req.body.model.trim()
-      ? req.body.model.trim()
-      : DEFAULT_OPENROUTER_MODEL;
-  const sessionId = normalizeSessionId(
-    req.body?.sessionId || req.body?.session_id,
-  );
-  const systemPrompt = normalizeSystemPrompt(
-    req.body?.systemPrompt || req.body?.system_prompt,
-  );
-
+router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
+  const startedAt = Date.now();
+  let requestContext = {
+    message: "",
+    model: DEFAULT_OPENROUTER_MODEL,
+    sessionId: "",
+    systemPrompt: "",
+    history: [],
+  };
   let timeout = null;
 
   try {
-    const authenticatedUser = await requireAuthenticatedUser(req);
+    const authenticatedUser = req.user;
+    requestContext = validateAiChatBody(req.body);
+    const { history, message, model, sessionId, systemPrompt } = requestContext;
 
     const apiKey = getSafeOpenRouterApiKey();
 
     if (!apiKey) {
-      return res.status(500).json({
-        success: false,
-        status: 500,
-        code: "openrouter_config_missing",
-        message: "OPENROUTER_API_KEY belum dikonfigurasi di file .env.",
-      });
+      throw createHttpError(
+        "Konfigurasi OpenRouter belum siap.",
+        500,
+        "openrouter_config_missing",
+      );
     }
 
     if (hasInvalidHeaderCharacters(apiKey)) {
-      return res.status(500).json({
-        success: false,
-        status: 500,
-        code: "openrouter_config_invalid",
-        message:
-          "OPENROUTER_API_KEY tidak valid. Pastikan tidak ada spasi, newline, emoji, huruf non-ASCII, atau karakter hasil copy-paste yang rusak.",
-      });
-    }
-
-    if (!message) {
-      return res.status(400).json({
-        success: false,
-        status: 400,
-        code: "empty_message",
-        message: "Message tidak boleh kosong.",
-      });
+      throw createHttpError(
+        "Konfigurasi OpenRouter tidak valid.",
+        500,
+        "openrouter_config_invalid",
+      );
     }
 
     const controller = new AbortController();
     timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
     const openRouterMessages = await buildOpenRouterMessages({
       currentMessage: message,
+      fallbackHistory: history,
       sessionId,
       systemPrompt,
       userEmail: authenticatedUser.email,
@@ -497,6 +614,9 @@ router.post("/chat", async (req, res) => {
     if (!response.ok) {
       const providerError = getOpenRouterError(data);
       const errorMessage = getOpenRouterErrorMessage(data);
+      const safeProviderMessage = getSafeOpenRouterStatusMessage(
+        response.status,
+      );
 
       console.error("[OpenRouter API Error]", {
         status: response.status,
@@ -505,26 +625,30 @@ router.post("/chat", async (req, res) => {
         providerError,
       });
 
-      return res.status(response.status).json({
-        success: false,
-        status: response.status,
-        code: "openrouter_error",
-        message: errorMessage,
-        providerError,
-      });
+      throw createHttpError(
+        safeProviderMessage,
+        response.status,
+        "openrouter_error",
+      );
     }
 
     const aiResponse = data?.choices?.[0]?.message?.content;
 
     if (!aiResponse) {
-      return res.status(502).json({
-        success: false,
-        status: 502,
-        code: "openrouter_empty_response",
-        message: "OpenRouter tidak mengembalikan jawaban AI.",
-        providerError: getOpenRouterError(data),
-      });
+      throw createHttpError(
+        "OpenRouter tidak mengembalikan jawaban AI.",
+        502,
+        "openrouter_empty_response",
+      );
     }
+
+    await logAiAuditEvent({
+      durationMs: Date.now() - startedAt,
+      model,
+      sessionId,
+      status: "success",
+      user: authenticatedUser,
+    });
 
     return res.status(200).json({
       success: true,
@@ -532,35 +656,40 @@ router.post("/chat", async (req, res) => {
       model,
     });
   } catch (error) {
-    if (error.statusCode || error.status) {
-      return res.status(error.statusCode || error.status).json({
-        success: false,
-        status: error.statusCode || error.status,
-        message: error.message || "Request tidak valid.",
-        code: error.code || null,
-        supabaseAuthError: error.supabaseAuthError || null,
-      });
-    }
-
     const isAbort = error.name === "AbortError";
 
-    console.error("[OpenRouter Fetch Error]", {
-      model,
+    const status = error.statusCode || error.status || (isAbort ? 504 : 502);
+    const code =
+      error.code || (isAbort ? "openrouter_timeout" : "ai_fetch_failed");
+    const message = isAbort
+      ? "Request ke OpenRouter timeout."
+      : error.statusCode || error.status
+        ? error.message
+        : "Gagal terhubung ke OpenRouter.";
+
+    console.error("[AI Route Error]", {
+      code,
+      status,
+      model: requestContext.model,
       name: error.name,
       message: error.message,
-      cause: error.cause?.message || null,
-      code: error.cause?.code || null,
+      sessionId: requestContext.sessionId,
     });
 
-    return res.status(isAbort ? 504 : 502).json({
-      success: false,
-      status: isAbort ? 504 : 502,
-      message: isAbort
-        ? "Request ke OpenRouter timeout."
-        : `Gagal terhubung ke OpenRouter: ${error.message}`,
-      cause: error.cause?.message || null,
-      code: error.cause?.code || null,
+    await logAiAuditEvent({
+      code,
+      durationMs: Date.now() - startedAt,
+      model: requestContext.model,
+      sessionId: requestContext.sessionId,
+      status: "failed",
+      user: req.user,
     });
+
+    return sendSafeError(
+      res,
+      createHttpError(message, status, code),
+      "Request AI gagal.",
+    );
   } finally {
     if (timeout) {
       clearTimeout(timeout);

@@ -248,8 +248,15 @@ export const api = {
     };
   },
 
-  async sendAiChat({ message, model, sessionId, systemPrompt }) {
+  async sendAiChat({ history, message, model, sessionId, systemPrompt }) {
     let accessToken = await getSupabaseAccessToken();
+    const body = JSON.stringify({
+      history: Array.isArray(history) ? history : [],
+      message,
+      model,
+      sessionId,
+      systemPrompt,
+    });
 
     try {
       return await request("/api/ai/chat", {
@@ -257,7 +264,7 @@ export const api = {
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({ message, model, sessionId, systemPrompt }),
+        body,
       });
     } catch (error) {
       if (!isAuthFailureResponse(error.body, error.status)) {
@@ -275,7 +282,7 @@ export const api = {
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({ message, model, sessionId, systemPrompt }),
+        body,
       });
     }
   },
