@@ -2,18 +2,13 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist/web",
   "installCommand": "npm install",
-  "functions": {
-    "api/[...path].js": {
-      "maxDuration": 30
-    },
-    "api/health.js": {
-      "maxDuration": 10
-    }
-  },
-  "rewrites": [
+  "routes": [
     {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
+      "handle": "filesystem"
+    },
+    {
+      "src": "/.*",
+      "dest": "/index.html"
     }
   ]
 }

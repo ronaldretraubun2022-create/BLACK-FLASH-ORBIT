@@ -23,6 +23,11 @@ function normalizeRequestUrl(req) {
 }
 
 module.exports = function handler(req, res) {
-  normalizeRequestUrl(req);
+  if (!String(req.url || "").startsWith("/api")) {
+    req.url = `/api${String(req.url || "").startsWith("/") ? "" : "/"}${
+      req.url || ""
+    }`;
+  }
+
   return app(req, res);
 };

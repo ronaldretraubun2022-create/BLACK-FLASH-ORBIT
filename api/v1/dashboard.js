@@ -3,9 +3,11 @@
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify({
     success: true,
-    status: "online",
-    service: "BLACK FLASH ORBIT API",
-    runtime: "vercel",
+    status: "ready",
+    module: "dashboard",
+    data: [],
+    metrics: {},
+    message: "Tidak ada issue aktif dari endpoint dashboard.",
     timestamp: new Date().toISOString()
   }));
 };
