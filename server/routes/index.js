@@ -543,6 +543,24 @@ function getAutomationJobs(user) {
   }));
 }
 
+function createModuleResponse({
+  data = [],
+  metrics = {},
+  module,
+  status = "ready",
+  extra = {},
+}) {
+  return {
+    success: true,
+    status,
+    module,
+    data,
+    metrics,
+    message: "Module ready for staging.",
+    ...extra,
+  };
+}
+
 function mapAutomationHistory(row) {
   return {
     id: row.id,
@@ -578,7 +596,13 @@ router.get("/health", (req, res) => {
   res.status(200).json({
     success: true,
     service: "BLACK FLASH ORBIT API",
-    status: "healthy",
+    status: "online",
+    module: "health",
+    data: [],
+    metrics: {
+      uptime: process.uptime(),
+    },
+    message: "Module ready for staging.",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
   });
@@ -588,7 +612,13 @@ router.get("/healthz", (req, res) => {
   res.status(200).json({
     success: true,
     service: "BLACK FLASH ORBIT API",
-    status: "healthy",
+    status: "online",
+    module: "health",
+    data: [],
+    metrics: {
+      uptime: process.uptime(),
+    },
+    message: "Module ready for staging.",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
   });
@@ -596,7 +626,14 @@ router.get("/healthz", (req, res) => {
 
 router.get("/system", (req, res) => {
   res.json({
+    success: true,
     status: "online",
+    module: "system",
+    data: [],
+    metrics: {
+      uptime: process.uptime(),
+    },
+    message: "Module ready for staging.",
     apiVersion: "v1",
     environment: process.env.NODE_ENV || "development",
     timestamp: new Date().toISOString(),
@@ -612,6 +649,9 @@ router.get("/dashboard/status", async (req, res) => {
 
   return res.json({
     success: true,
+    status: "ready",
+    module: "dashboard",
+    message: "Module ready for staging.",
     data: {
       activity,
       automation: getAutomationEngines(),
@@ -644,7 +684,49 @@ router.get("/dashboard/status", async (req, res) => {
         timestamp: new Date().toISOString(),
       },
     },
+    metrics: {
+      projects: projects.length,
+      reports: reports.length,
+      uptime: process.uptime(),
+    },
   });
+});
+
+router.get("/dashboard", async (req, res) => {
+  const [projects, reports, activity] = await Promise.all([
+    getProjects(),
+    getReports(),
+    getActivity(20),
+  ]);
+
+  return res.json(
+    createModuleResponse({
+      module: "dashboard",
+      data: {
+        activity,
+        automation: getAutomationEngines(),
+        health: {
+          success: true,
+          service: "BLACK FLASH ORBIT API",
+          status: "healthy",
+          uptime: process.uptime(),
+          timestamp: new Date().toISOString(),
+        },
+        projects,
+        system: {
+          status: "online",
+          apiVersion: "v1",
+          environment: process.env.NODE_ENV || "development",
+          timestamp: new Date().toISOString(),
+        },
+      },
+      metrics: {
+        projects: projects.length,
+        reports: reports.length,
+        uptime: process.uptime(),
+      },
+    }),
+  );
 });
 
 router.get("/metrics", async (req, res) => {
@@ -775,7 +857,15 @@ router.get("/projects", async (req, res) => {
 
 router.get("/reports", async (req, res) => {
   const reports = await getReports();
-  res.json(reports);
+  res.json(
+    createModuleResponse({
+      module: "reports",
+      data: reports,
+      metrics: {
+        total: reports.length,
+      },
+    }),
+  );
 });
 
 router.get("/prompts/categories", requireAuth, async (req, res) => {
@@ -896,7 +986,7 @@ router.get("/profile", requireAuth, async (req, res) => {
 });
 
 router.get("/security", (req, res) => {
-  res.json({
+  const security = {
     securityScore: 94,
     helmet: "PROTECTED",
     cors: "PROTECTED",
@@ -914,6 +1004,18 @@ router.get("/security", (req, res) => {
         message: "Rotate audit snapshots after the next release cycle.",
       },
     ],
+  };
+
+  res.json({
+    ...createModuleResponse({
+      module: "security",
+      data: security.issues,
+      metrics: {
+        securityScore: security.securityScore,
+        issues: security.issues.length,
+      },
+    }),
+    ...security,
   });
 });
 
@@ -993,8 +1095,21 @@ router.get("/osint", (req, res) => {
   });
 });
 
-router.get("/automation", requireAuth, (req, res) => {
-  res.json(getAutomationEngines());
+router.get("/automation", (req, res) => {
+  const engines = getAutomationEngines();
+
+  res.json(
+    createModuleResponse({
+      module: "automation",
+      data: engines,
+      metrics: {
+        totalEngines: Object.keys(engines).length,
+      },
+      extra: {
+        engines,
+      },
+    }),
+  );
 });
 
 router.get("/automation/status", requireAuth, (req, res) => {

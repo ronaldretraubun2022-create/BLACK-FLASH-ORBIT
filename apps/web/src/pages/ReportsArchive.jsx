@@ -13,11 +13,11 @@ export function ReportsArchive() {
     setError("");
 
     try {
-      const data = await fetch("/api/v1/reports").then((res) => res.json());
-      setReports(Array.isArray(data) ? data : []);
+      const data = await api.getReports();
+      setReports(data);
       setLastSync(new Date().toLocaleTimeString("id-ID"));
     } catch (loadError) {
-      setError(loadError.message);
+      setError(getErrorMessage(loadError));
     } finally {
       setIsLoading(false);
     }
@@ -194,4 +194,15 @@ function formatDate(value) {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function getErrorMessage(error) {
+  if (typeof error === "string") return error;
+  if (typeof error?.message === "string") return error.message;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Gagal memuat reports.";
+  }
 }

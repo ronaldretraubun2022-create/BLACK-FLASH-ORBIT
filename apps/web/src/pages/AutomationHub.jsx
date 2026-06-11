@@ -27,7 +27,7 @@ export function AutomationHub() {
       setAutomation(data || {});
       setLastSync(new Date().toLocaleTimeString("id-ID"));
     } catch (loadError) {
-      setError(loadError.message);
+      setError(getErrorMessage(loadError));
     } finally {
       setIsLoading(false);
     }
@@ -147,6 +147,17 @@ export function AutomationHub() {
       </section>
     </div>
   );
+}
+
+function getErrorMessage(error) {
+  if (typeof error === "string") return error;
+  if (typeof error?.message === "string") return error.message;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Gagal memuat automation.";
+  }
 }
 
 function getIcon(key) {

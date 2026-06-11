@@ -216,6 +216,33 @@ class ApiRequestError extends Error {
   }
 }
 
+function normalizeModuleData(response, fallback) {
+  if (!response) return fallback;
+  if (Array.isArray(response)) return response;
+  if (response.data !== undefined) return response.data;
+  return response;
+}
+
+function normalizeReports(response) {
+  const data = normalizeModuleData(response, []);
+  return Array.isArray(data) ? data : [];
+}
+
+function normalizeAutomation(response) {
+  if (!response) return {};
+  if (response.engines && typeof response.engines === "object") {
+    return response.engines;
+  }
+
+  const data = normalizeModuleData(response, {});
+  return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+}
+
+function normalizeSecurity(response) {
+  if (!response || Array.isArray(response)) return {};
+  return response;
+}
+
 export const api = {
   getHealth() {
     return request("/api/health");
@@ -241,12 +268,16 @@ export const api = {
     return request("/api/v1/projects");
   },
 
-  getSecurity() {
-    return request("/api/v1/security");
+  async getSecurity() {
+    return normalizeSecurity(await request("/api/v1/security"));
   },
 
   getDashboardStatus() {
     return request("/api/v1/dashboard/status");
+  },
+
+  async getReports() {
+    return normalizeReports(await request("/api/v1/reports"));
   },
 
   async getPromptCategories() {
@@ -274,9 +305,7 @@ export const api = {
   },
 
   async getAutomation() {
-    return request("/api/v1/automation", {
-      headers: await getAuthenticatedHeaders(),
-    });
+    return normalizeAutomation(await request("/api/v1/automation"));
   },
 
   async getAutomationStatus() {

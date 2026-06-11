@@ -104,7 +104,7 @@ export function SecurityCenter() {
       );
     } catch (requestError) {
       setError(
-        requestError.message ||
+        getErrorMessage(requestError) ||
           "Gagal mengambil data Security Center dari /api/v1/security.",
       );
     } finally {
@@ -337,6 +337,17 @@ function IssueRow({ issue }) {
       </div>
     </article>
   );
+}
+
+function getErrorMessage(error) {
+  if (typeof error === "string") return error;
+  if (typeof error?.message === "string") return error.message;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Gagal mengambil data Security Center dari /api/v1/security.";
+  }
 }
 
 function SeverityBadge({ className, severity }) {
