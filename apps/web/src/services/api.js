@@ -3,9 +3,8 @@ import { normalizePromptCategory } from "../data/promptCategories";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_WINDOW_MS = 60000;
-const API_BASE_URL =
-  String(import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/+$/, "") ||
-  "/api";
+const LOCAL_DEV_API_BASE_URL = "http://localhost:5000/api";
+const API_BASE_URL = normalizeApiBaseUrl(getConfiguredApiBaseUrl());
 
 const AUTH_FAILURE_CODES = new Set([
   "missing_authorization",
@@ -128,9 +127,12 @@ function isAuthFailureResponse(errorBody, status) {
 async function request(path, options = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const requestUrl = resolveApiUrl(path);
+
+  logApiRequestUrl(path, requestUrl);
 
   try {
-    const response = await fetch(resolveApiUrl(path), {
+    const response = await fetch(requestUrl, {
       ...options,
       headers: {
         Accept: "application/json",
@@ -218,12 +220,83 @@ function resolveApiUrl(path) {
     ? String(path || "")
     : `/${path || ""}`;
 
-  if (cleanPath === "/api") return API_BASE_URL;
-  if (cleanPath.startsWith("/api/")) {
-    return `${API_BASE_URL}${cleanPath.slice(4)}`;
+  return joinApiUrl(getRuntimeApiBaseUrl(), getApiPathSuffix(cleanPath));
+}
+
+function getConfiguredApiBaseUrl() {
+  const configuredBaseUrl = String(
+    import.meta.env.VITE_API_BASE_URL || "",
+  ).trim();
+
+  return configuredBaseUrl || "/api";
+}
+
+function normalizeApiBaseUrl(value) {
+  const cleanValue = String(value || "/api")
+    .trim()
+    .replace(/\/+$/, "");
+
+  if (!cleanValue) return "/api";
+
+  if (/^https?:\/\//i.test(cleanValue)) {
+    const url = new URL(cleanValue);
+    const pathname = url.pathname.replace(/\/+$/, "");
+
+    url.pathname = pathname && pathname !== "/" ? pathname : "/api";
+
+    return url.toString().replace(/\/+$/, "");
   }
 
-  return `${API_BASE_URL}${cleanPath}`;
+  return cleanValue;
+}
+
+function getRuntimeApiBaseUrl() {
+  if (API_BASE_URL === "/api" && isLocalFrontendOrigin()) {
+    return LOCAL_DEV_API_BASE_URL;
+  }
+
+  return API_BASE_URL;
+}
+
+function isLocalFrontendOrigin() {
+  if (typeof window === "undefined") return false;
+
+  return ["localhost", "127.0.0.1"].includes(window.location.hostname);
+}
+
+function getApiPathSuffix(cleanPath) {
+  if (cleanPath === "/api") return "";
+  if (cleanPath.startsWith("/api/")) return cleanPath.slice(4);
+
+  return cleanPath;
+}
+
+function joinApiUrl(baseUrl, pathSuffix) {
+  const cleanBaseUrl = String(baseUrl || "/api").replace(/\/+$/, "") || "/api";
+  const cleanPathSuffix = String(pathSuffix || "");
+
+  if (!cleanPathSuffix) return cleanBaseUrl;
+
+  return `${cleanBaseUrl}${
+    cleanPathSuffix.startsWith("/") ? cleanPathSuffix : `/${cleanPathSuffix}`
+  }`;
+}
+
+function getPrintableRequestUrl(requestUrl) {
+  if (/^https?:\/\//i.test(requestUrl)) return requestUrl;
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return new URL(requestUrl, window.location.origin).href;
+  }
+
+  return requestUrl;
+}
+
+function logApiRequestUrl(path, requestUrl) {
+  console.info("[ORBIT API Request]", {
+    path,
+    url: getPrintableRequestUrl(requestUrl),
+  });
 }
 
 class ApiRequestError extends Error {
