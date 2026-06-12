@@ -11,6 +11,8 @@ const OPENROUTER_CHAT_COMPLETIONS_URL =
   "https://openrouter.ai/api/v1/chat/completions";
 
 const DEFAULT_OPENROUTER_MODEL = "openrouter/auto";
+const MIN_OPENROUTER_API_KEY_LENGTH = 32;
+const OPENROUTER_API_KEY_PREFIX = "sk-or-v1-";
 const OPENROUTER_TIMEOUT_MS = 30000;
 const CHAT_MEMORY_LIMIT = 20;
 const MAX_AI_MESSAGE_LENGTH = 12000;
@@ -39,8 +41,129 @@ const aiChatLimiter = rateLimit({
   },
 });
 
-function getSafeOpenRouterApiKey() {
-  return String(process.env.OPENROUTER_API_KEY || "").trim();
+function getRawOpenRouterApiKey() {
+  return String(process.env.OPENROUTER_API_KEY || "");
+}
+
+function stripWrappingQuotes(value) {
+  const trimmedValue = String(value || "").trim();
+  const firstCharacter = trimmedValue[0];
+  const lastCharacter = trimmedValue[trimmedValue.length - 1];
+
+  if (
+    trimmedValue.length >= 2 &&
+    ((firstCharacter === '"' && lastCharacter === '"') ||
+      (firstCharacter === "'" && lastCharacter === "'"))
+  ) {
+    return trimmedValue.slice(1, -1).trim();
+  }
+
+  return trimmedValue;
+}
+
+function normalizeOpenRouterApiKey(rawApiKey) {
+  const trimmedKey = String(rawApiKey || "").trim();
+  const withoutBearerPrefix = trimmedKey.replace(/^Bearer\s+/i, "").trim();
+
+  return stripWrappingQuotes(withoutBearerPrefix);
+}
+
+function getOpenRouterApiKeyDiagnostics(rawApiKey) {
+  const rawKey = String(rawApiKey || "");
+  const trimmedKey = rawKey.trim();
+  const normalizedKey = normalizeOpenRouterApiKey(rawKey);
+
+  return {
+    keyExists: Boolean(trimmedKey),
+    keyLength: normalizedKey.length,
+    startsWithSkOrV1: normalizedKey.startsWith(OPENROUTER_API_KEY_PREFIX),
+    hasInvalidHeaderChars: hasInvalidHeaderCharacters(normalizedKey),
+    containsBearerPrefix: /^Bearer\s+/i.test(trimmedKey),
+    containsQuotes: /['"]/.test(rawKey),
+    containsWhitespaceOrNewline: /\s/.test(rawKey),
+  };
+}
+
+function getOpenRouterApiKeyValidationIssues(diagnostics) {
+  const issues = [];
+
+  if (!diagnostics.keyExists) {
+    issues.push("OPENROUTER_API_KEY belum diisi");
+  }
+
+  if (diagnostics.containsBearerPrefix) {
+    issues.push("hapus prefix Bearer dari OPENROUTER_API_KEY");
+  }
+
+  if (diagnostics.containsQuotes) {
+    issues.push("hapus tanda kutip dari OPENROUTER_API_KEY");
+  }
+
+  if (diagnostics.containsWhitespaceOrNewline) {
+    issues.push("hapus spasi atau newline dari OPENROUTER_API_KEY");
+  }
+
+  if (
+    diagnostics.keyLength > 0 &&
+    diagnostics.keyLength < MIN_OPENROUTER_API_KEY_LENGTH
+  ) {
+    issues.push("OPENROUTER_API_KEY terlalu pendek");
+  }
+
+  if (diagnostics.keyExists && !diagnostics.startsWithSkOrV1) {
+    issues.push("OPENROUTER_API_KEY harus diawali sk-or-v1-");
+  }
+
+  if (diagnostics.hasInvalidHeaderChars) {
+    issues.push("OPENROUTER_API_KEY mengandung karakter header tidak valid");
+  }
+
+  return issues;
+}
+
+function logOpenRouterApiKeyDiagnostics(diagnostics) {
+  console.warn("[OpenRouter Env Diagnostics]", diagnostics);
+}
+
+function validateOpenRouterApiKey() {
+  const rawApiKey = getRawOpenRouterApiKey();
+  const diagnostics = getOpenRouterApiKeyDiagnostics(rawApiKey);
+  const apiKey = normalizeOpenRouterApiKey(rawApiKey);
+  const validationIssues = getOpenRouterApiKeyValidationIssues(diagnostics);
+
+  logOpenRouterApiKeyDiagnostics(diagnostics);
+
+  if (!diagnostics.keyExists) {
+    throw createHttpError(
+      "Konfigurasi OpenRouter belum siap. OPENROUTER_API_KEY belum diisi.",
+      500,
+      "openrouter_config_missing",
+    );
+  }
+
+  if (
+    diagnostics.hasInvalidHeaderChars ||
+    diagnostics.keyLength < MIN_OPENROUTER_API_KEY_LENGTH ||
+    !diagnostics.startsWithSkOrV1
+  ) {
+    throw createHttpError(
+      `Konfigurasi OpenRouter tidak valid. ${validationIssues.join("; ")}.`,
+      500,
+      "openrouter_config_invalid",
+    );
+  }
+
+  return apiKey;
+}
+
+function getOpenRouterSiteUrl() {
+  return String(process.env.OPENROUTER_SITE_URL || "http://localhost:5173")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+function getOpenRouterAppName() {
+  return String(process.env.OPENROUTER_APP_NAME || "BLACK FLASH ORBIT").trim();
 }
 
 function createHttpError(
@@ -578,23 +701,7 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       });
     }
 
-    const apiKey = getSafeOpenRouterApiKey();
-
-    if (!apiKey) {
-      throw createHttpError(
-        "Konfigurasi OpenRouter belum siap.",
-        500,
-        "openrouter_config_missing",
-      );
-    }
-
-    if (hasInvalidHeaderCharacters(apiKey)) {
-      throw createHttpError(
-        "Konfigurasi OpenRouter tidak valid.",
-        500,
-        "openrouter_config_invalid",
-      );
-    }
+    const apiKey = validateOpenRouterApiKey();
 
     const controller = new AbortController();
     timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
@@ -612,9 +719,8 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer":
-          process.env.OPENROUTER_SITE_URL || "http://localhost:5173",
-        "X-Title": process.env.OPENROUTER_APP_NAME || "BLACK FLASH ORBIT",
+        "HTTP-Referer": getOpenRouterSiteUrl(),
+        "X-Title": getOpenRouterAppName(),
       },
       body: JSON.stringify({
         model,
