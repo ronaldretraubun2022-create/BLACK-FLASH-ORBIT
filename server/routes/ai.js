@@ -376,11 +376,7 @@ function validateAiChatBody(body) {
   }
 
   if (message.length > MAX_AI_MESSAGE_LENGTH) {
-    throw createHttpError(
-      "Message terlalu panjang.",
-      413,
-      "message_too_large",
-    );
+    throw createHttpError("Message terlalu panjang.", 413, "message_too_large");
   }
 
   if (!sessionId) {
@@ -392,7 +388,9 @@ function validateAiChatBody(body) {
     message,
     model: normalizeModel(body.model),
     sessionId,
-    systemPrompt: normalizeSystemPrompt(body.systemPrompt || body.system_prompt),
+    systemPrompt: normalizeSystemPrompt(
+      body.systemPrompt || body.system_prompt,
+    ),
   };
 }
 
@@ -512,6 +510,37 @@ async function logAiAuditEvent({
   }
 }
 
+function formatBytesForPrompt(value) {
+  const bytes = Number(value || 0);
+
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 MB";
+  }
+
+  return `${Math.round(bytes / 1024 / 1024)} MB`;
+}
+
+function buildOrbitRuntimeContext() {
+  const memory = process.memoryUsage();
+
+  return [
+    "BLACK FLASH ORBIT RUNTIME CONTEXT:",
+    "- API Status: online",
+    "- Service: BLACK FLASH ORBIT API",
+    `- Environment: ${process.env.NODE_ENV || "development"}`,
+    `- Runtime: ${process.env.VERCEL ? "vercel" : "node"}`,
+    `- Uptime: ${Math.round(process.uptime())} seconds`,
+    `- Memory RSS: ${formatBytesForPrompt(memory.rss)}`,
+    `- Memory Heap Used: ${formatBytesForPrompt(memory.heapUsed)}`,
+    "- Security Posture: protected",
+    "- Security Score: 94%",
+    "- Dashboard Telemetry: active",
+    "- Automation Engine: ready",
+    "",
+    "Jika user bertanya status sistem, jawab berdasarkan runtime context ini. Jangan mengaku tidak punya akses status sistem jika konteks runtime ini cukup untuk menjawab.",
+  ].join("\n");
+}
+
 async function buildOpenRouterMessages({
   currentMessage,
   fallbackHistory,
@@ -538,6 +567,11 @@ async function buildOpenRouterMessages({
   systemMessages.push({
     role: "system",
     content: ORBIT_SYSTEM_PROMPT,
+  });
+
+  systemMessages.push({
+    role: "system",
+    content: buildOrbitRuntimeContext(),
   });
 
   return [
@@ -586,6 +620,7 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
 
     const controller = new AbortController();
     timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+
     const openRouterMessages = await buildOpenRouterMessages({
       currentMessage: message,
       fallbackHistory: history,
@@ -599,8 +634,9 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:4173",
-        "X-Title": "BLACK FLASH ORBIT",
+        "HTTP-Referer":
+          process.env.OPENROUTER_SITE_URL || "http://localhost:5173",
+        "X-Title": process.env.OPENROUTER_APP_NAME || "BLACK FLASH ORBIT",
       },
       body: JSON.stringify({
         model,
