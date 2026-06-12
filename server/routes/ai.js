@@ -2,6 +2,7 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const { createClient } = require("@supabase/supabase-js");
 const supabaseDatabase = require("../lib/supabase");
+const { buildOrbitRuntimeContext } = require("../lib/orbitRuntimeContext");
 
 const router = express.Router();
 
@@ -139,17 +140,6 @@ function getJwtPayload(token) {
   } catch {
     return null;
   }
-}
-
-function createDevelopmentUserFromToken(token) {
-  const payload = getJwtPayload(token);
-
-  return {
-    id: payload?.sub || "development-auth-bypass-user",
-    aud: payload?.aud || "authenticated",
-    email: payload?.email || null,
-    role: payload?.role || "authenticated",
-  };
 }
 
 function getSupabaseAuthClient() {
@@ -508,37 +498,6 @@ async function logAiAuditEvent({
       message: auditError.message || null,
     });
   }
-}
-
-function formatBytesForPrompt(value) {
-  const bytes = Number(value || 0);
-
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "0 MB";
-  }
-
-  return `${Math.round(bytes / 1024 / 1024)} MB`;
-}
-
-function buildOrbitRuntimeContext() {
-  const memory = process.memoryUsage();
-
-  return [
-    "BLACK FLASH ORBIT RUNTIME CONTEXT:",
-    "- API Status: online",
-    "- Service: BLACK FLASH ORBIT API",
-    `- Environment: ${process.env.NODE_ENV || "development"}`,
-    `- Runtime: ${process.env.VERCEL ? "vercel" : "node"}`,
-    `- Uptime: ${Math.round(process.uptime())} seconds`,
-    `- Memory RSS: ${formatBytesForPrompt(memory.rss)}`,
-    `- Memory Heap Used: ${formatBytesForPrompt(memory.heapUsed)}`,
-    "- Security Posture: protected",
-    "- Security Score: 94%",
-    "- Dashboard Telemetry: active",
-    "- Automation Engine: ready",
-    "",
-    "Jika user bertanya status sistem, jawab berdasarkan runtime context ini. Jangan mengaku tidak punya akses status sistem jika konteks runtime ini cukup untuk menjawab.",
-  ].join("\n");
 }
 
 async function buildOpenRouterMessages({
