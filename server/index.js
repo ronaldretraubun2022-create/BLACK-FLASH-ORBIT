@@ -55,6 +55,46 @@ function healthPayload() {
   };
 }
 
+function hasEnvValue(key) {
+  return Boolean(String(process.env[key] || "").trim());
+}
+
+function getStartupEnvironmentDiagnostics() {
+  const hasSupabaseUrl = hasEnvValue("SUPABASE_URL");
+  const hasSupabaseAnonKey = hasEnvValue("SUPABASE_ANON_KEY");
+  const hasViteSupabaseUrl = hasEnvValue("VITE_SUPABASE_URL");
+  const hasViteSupabaseAnonKey = hasEnvValue("VITE_SUPABASE_ANON_KEY");
+
+  return {
+    SUPABASE_URL: hasSupabaseUrl,
+    SUPABASE_ANON_KEY: hasSupabaseAnonKey,
+    VITE_SUPABASE_URL: hasViteSupabaseUrl,
+    VITE_SUPABASE_ANON_KEY: hasViteSupabaseAnonKey,
+    OPENROUTER_API_KEY: hasEnvValue("OPENROUTER_API_KEY"),
+    aiAuthAnonKeyAvailable: hasSupabaseAnonKey || hasViteSupabaseAnonKey,
+    aiAuthConfigured:
+      (hasSupabaseUrl || hasViteSupabaseUrl) &&
+      (hasSupabaseAnonKey || hasViteSupabaseAnonKey),
+    aiAuthUrlAvailable: hasSupabaseUrl || hasViteSupabaseUrl,
+  };
+}
+
+function logStartupEnvironmentDiagnostics() {
+  const diagnostics = getStartupEnvironmentDiagnostics();
+
+  console.info("[ORBIT Env Diagnostics]", diagnostics);
+
+  if (!diagnostics.aiAuthConfigured) {
+    console.warn(
+      "[ORBIT Env Diagnostics] AI auth env missing. Set SUPABASE_URL or VITE_SUPABASE_URL, plus SUPABASE_ANON_KEY or VITE_SUPABASE_ANON_KEY.",
+    );
+  }
+}
+
+if (NODE_ENV !== "test") {
+  logStartupEnvironmentDiagnostics();
+}
+
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
