@@ -157,6 +157,12 @@ function getTelemetryWarning(failedEndpoints) {
   return `${failedEndpoints.length} endpoint belum merespons. Data lain tetap ditampilkan.`;
 }
 
+function logTelemetryDebug(endpoints, results, failedEndpoints) {
+  console.log("Telemetry Endpoints", endpoints);
+  console.log("Telemetry Results", results);
+  console.log("Failed Endpoints", failedEndpoints);
+}
+
 function toDisplayString(value, fallback = "-") {
   if (value === null || value === undefined || value === "") return fallback;
   if (typeof value === "string" || typeof value === "number") {
@@ -188,11 +194,10 @@ export function Dashboard() {
   const loadTelemetry = useCallback(async () => {
     setIsLoading(true);
 
-    const endpoints = [dashboardStatusEndpoint, ...telemetryEndpoints];
-    const results = await Promise.allSettled(
-      endpoints.map((endpoint) => endpoint.load()),
-    );
-    const [dashboardStatusResult, ...telemetryResults] = results;
+    const dashboardResults = await Promise.allSettled([
+      dashboardStatusEndpoint.load(),
+    ]);
+    const [dashboardStatusResult] = dashboardResults;
     const dashboardStatus =
       dashboardStatusResult.status === "fulfilled" &&
       isObjectData(dashboardStatusResult.value?.data)
@@ -209,7 +214,20 @@ export function Dashboard() {
         security: dashboardStatus.data.security || current.security,
         system: dashboardStatus.data.system || current.system,
       }));
+      const failedEndpoints = getFailedTelemetryEndpoints(dashboardResults, [
+        dashboardStatusEndpoint,
+      ]);
+
+      logTelemetryDebug([dashboardStatusEndpoint], dashboardResults, failedEndpoints);
+      setFailedTelemetryEndpoints(failedEndpoints);
     } else {
+      const telemetryResults = await Promise.allSettled(
+        telemetryEndpoints.map((endpoint) => endpoint.load()),
+      );
+      const results = [...dashboardResults, ...telemetryResults];
+      const endpoints = [dashboardStatusEndpoint, ...telemetryEndpoints];
+      const failedEndpoints = getFailedTelemetryEndpoints(results, endpoints);
+
       setTelemetry((current) => ({
         activity: getResolvedData(telemetryResults[5], current.activity),
         automation: getResolvedData(telemetryResults[4], current.automation),
@@ -219,9 +237,10 @@ export function Dashboard() {
         security: getResolvedData(telemetryResults[3], current.security),
         system: getResolvedData(telemetryResults[6], current.system),
       }));
+      logTelemetryDebug(endpoints, results, failedEndpoints);
+      setFailedTelemetryEndpoints(failedEndpoints);
     }
 
-    setFailedTelemetryEndpoints(getFailedTelemetryEndpoints(results, endpoints));
     setLastUpdated(formatTime(new Date().toISOString()));
     setIsLoading(false);
   }, []);
