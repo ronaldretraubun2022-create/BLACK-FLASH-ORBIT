@@ -10,6 +10,7 @@ import { AIWorkspace } from "./pages/AIWorkspace";
 import { AutomationHub } from "./pages/AutomationHub";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
+import { KnowledgeBase } from "./pages/KnowledgeBase";
 import { ModelControl } from "./pages/ModelControl";
 import { OSINTWorkspace } from "./pages/OSINTWorkspace";
 import { Register } from "./pages/Register";
@@ -30,6 +31,7 @@ function App() {
           <Route element={<DashboardLayout />}>
             <Route element={<Dashboard />} index />
             <Route element={<AIWorkspace />} path="ai-workspace" />
+            <Route element={<KnowledgeBase />} path="knowledge" />
 
             <Route
               element={

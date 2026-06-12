@@ -1,6 +1,7 @@
 import {
   Activity,
   Bot,
+  BrainCircuit,
   FileText,
   Globe2,
   LayoutDashboard,
@@ -16,6 +17,7 @@ import { NavLink } from "react-router-dom";
 const navigation = [
   { label: "Dashboard", to: "/", icon: LayoutDashboard },
   { label: "AI Workspace", to: "/ai-workspace", icon: Bot },
+  { label: "Knowledge", to: "/knowledge", icon: BrainCircuit },
   { label: "Monitoring", to: "/monitoring", icon: Activity },
   { label: "Security", to: "/security", icon: ShieldCheck },
   { label: "OSINT", to: "/osint", icon: Globe2 },

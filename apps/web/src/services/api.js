@@ -128,6 +128,8 @@ async function request(path, options = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
   const requestUrl = resolveApiUrl(path);
+  const hasFormDataBody =
+    typeof FormData !== "undefined" && options.body instanceof FormData;
 
   logApiRequestUrl(path, requestUrl);
 
@@ -136,7 +138,9 @@ async function request(path, options = {}) {
       ...options,
       headers: {
         Accept: "application/json",
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.body && !hasFormDataBody
+          ? { "Content-Type": "application/json" }
+          : {}),
         ...options.headers,
       },
       signal: controller.signal,
@@ -213,7 +217,7 @@ async function parseJsonResponse(response) {
   }
 }
 
-function resolveApiUrl(path) {
+export function resolveApiUrl(path) {
   if (/^https?:\/\//i.test(path)) return path;
 
   const cleanPath = String(path || "").startsWith("/")
@@ -443,6 +447,53 @@ export const api = {
       security,
       system,
     };
+  },
+
+  async getKnowledgeDocuments() {
+    const response = await request("/api/knowledge/documents", {
+      headers: await getAuthenticatedHeaders(),
+    });
+
+    return Array.isArray(response?.data) ? response.data : [];
+  },
+
+  async createKnowledgeDocument(payload) {
+    return request("/api/knowledge/documents", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateKnowledgeDocument(documentId, payload) {
+    return request(`/api/knowledge/documents/${documentId}`, {
+      method: "PUT",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async patchKnowledgeDocument(documentId, payload) {
+    return request(`/api/knowledge/documents/${documentId}`, {
+      method: "PATCH",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteKnowledgeDocument(documentId) {
+    return request(`/api/knowledge/documents/${documentId}`, {
+      method: "DELETE",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async uploadKnowledgeDocument(formData) {
+    return request("/api/knowledge/documents/upload", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: formData,
+    });
   },
 
   async sendAiChat({ history, message, model, sessionId, systemPrompt }) {
