@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
   Bot,
   Cpu,
   Database,
@@ -18,6 +19,51 @@ import { useAuth } from "../context/AuthContext";
 import { api } from "../services/api";
 
 const POLL_INTERVAL_MS = 15000;
+
+const dashboardStatusEndpoint = {
+  key: "dashboardStatus",
+  load: () => api.getDashboardStatus(),
+  path: "/api/v1/dashboard/status",
+  requiresDataObject: true,
+};
+
+const telemetryEndpoints = [
+  {
+    key: "health",
+    load: () => api.getV1Health(),
+    path: "/api/v1/health",
+  },
+  {
+    key: "metrics",
+    load: () => api.getMetrics(),
+    path: "/api/v1/metrics",
+  },
+  {
+    key: "projects",
+    load: () => api.getProjects(),
+    path: "/api/v1/projects",
+  },
+  {
+    key: "security",
+    load: () => api.getSecurity(),
+    path: "/api/v1/security",
+  },
+  {
+    key: "automation",
+    load: () => api.getAutomation(),
+    path: "/api/v1/automation",
+  },
+  {
+    key: "activity",
+    load: () => api.getActivity(),
+    path: "/api/v1/activity",
+  },
+  {
+    key: "system",
+    load: () => api.getSystem(),
+    path: "/api/v1/system",
+  },
+];
 
 const fallbackActivity = [
   {
@@ -84,6 +130,33 @@ function getResolvedData(result, fallback) {
   return result.status === "fulfilled" ? result.value : fallback;
 }
 
+function isObjectData(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isTelemetryEndpointFailure(result, endpoint) {
+  if (result.status === "rejected") return true;
+  if (endpoint.requiresDataObject) return !isObjectData(result.value?.data);
+
+  return false;
+}
+
+function getFailedTelemetryEndpoints(results, endpoints) {
+  return results
+    .map((result, index) =>
+      isTelemetryEndpointFailure(result, endpoints[index])
+        ? endpoints[index].path
+        : null,
+    )
+    .filter(Boolean);
+}
+
+function getTelemetryWarning(failedEndpoints) {
+  if (failedEndpoints.length === 0) return "";
+
+  return `${failedEndpoints.length} endpoint belum merespons. Data lain tetap ditampilkan.`;
+}
+
 function toDisplayString(value, fallback = "-") {
   if (value === null || value === undefined || value === "") return fallback;
   if (typeof value === "string" || typeof value === "number") {
@@ -110,13 +183,23 @@ export function Dashboard() {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState("");
+  const [failedTelemetryEndpoints, setFailedTelemetryEndpoints] = useState([]);
 
   const loadTelemetry = useCallback(async () => {
     setIsLoading(true);
 
-    const dashboardStatus = await api.getDashboardStatus().catch(() => null);
+    const endpoints = [dashboardStatusEndpoint, ...telemetryEndpoints];
+    const results = await Promise.allSettled(
+      endpoints.map((endpoint) => endpoint.load()),
+    );
+    const [dashboardStatusResult, ...telemetryResults] = results;
+    const dashboardStatus =
+      dashboardStatusResult.status === "fulfilled" &&
+      isObjectData(dashboardStatusResult.value?.data)
+        ? dashboardStatusResult.value
+        : null;
 
-    if (dashboardStatus?.data) {
+    if (dashboardStatus) {
       setTelemetry((current) => ({
         activity: dashboardStatus.data.activity || current.activity,
         automation: dashboardStatus.data.automation || current.automation,
@@ -126,31 +209,19 @@ export function Dashboard() {
         security: dashboardStatus.data.security || current.security,
         system: dashboardStatus.data.system || current.system,
       }));
-      setLastUpdated(formatTime(new Date().toISOString()));
-      setIsLoading(false);
-      return;
+    } else {
+      setTelemetry((current) => ({
+        activity: getResolvedData(telemetryResults[5], current.activity),
+        automation: getResolvedData(telemetryResults[4], current.automation),
+        health: getResolvedData(telemetryResults[0], current.health),
+        metrics: getResolvedData(telemetryResults[1], current.metrics),
+        projects: getResolvedData(telemetryResults[2], current.projects),
+        security: getResolvedData(telemetryResults[3], current.security),
+        system: getResolvedData(telemetryResults[6], current.system),
+      }));
     }
 
-    const requests = await Promise.allSettled([
-      api.getV1Health(),
-      api.getMetrics(),
-      api.getProjects(),
-      api.getSecurity(),
-      api.getAutomation(),
-      api.getActivity(),
-      api.getSystem(),
-    ]);
-
-    setTelemetry((current) => ({
-      activity: getResolvedData(requests[5], current.activity),
-      automation: getResolvedData(requests[4], current.automation),
-      health: getResolvedData(requests[0], current.health),
-      metrics: getResolvedData(requests[1], current.metrics),
-      projects: getResolvedData(requests[2], current.projects),
-      security: getResolvedData(requests[3], current.security),
-      system: getResolvedData(requests[6], current.system),
-    }));
-
+    setFailedTelemetryEndpoints(getFailedTelemetryEndpoints(results, endpoints));
     setLastUpdated(formatTime(new Date().toISOString()));
     setIsLoading(false);
   }, []);
@@ -179,6 +250,7 @@ export function Dashboard() {
   const memoryUsed = formatBytes(telemetry.metrics?.memory?.heapUsed);
   const memoryRss = formatBytes(telemetry.metrics?.memory?.rss);
   const securityScore = telemetry.security?.securityScore || 0;
+  const telemetryWarning = getTelemetryWarning(failedTelemetryEndpoints);
 
   return (
     <div className="orbit-command mx-auto grid max-w-7xl gap-5">
@@ -216,6 +288,12 @@ export function Dashboard() {
                 Refresh Telemetry{" "}
               </button>{" "}
             </div>{" "}
+            {telemetryWarning && (
+              <div className="mt-4 flex gap-2 rounded-lg border border-amber-400/25 bg-amber-400/10 p-3 text-xs leading-5 text-amber-100">
+                <AlertTriangle className="mt-0.5 shrink-0" size={15} />
+                <span>{telemetryWarning}</span>
+              </div>
+            )}
           </div>
           <div className="orbit-live-core">
             <span
