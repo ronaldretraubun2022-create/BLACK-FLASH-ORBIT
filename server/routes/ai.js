@@ -3,6 +3,7 @@ const rateLimit = require("express-rate-limit");
 const { createClient } = require("@supabase/supabase-js");
 const supabaseDatabase = require("../lib/supabase");
 const { buildOrbitRuntimeContext } = require("../lib/orbitRuntimeContext");
+const { handleOrbitCommand } = require("../lib/orbitCommands");
 
 const router = express.Router();
 
@@ -558,6 +559,24 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
     const authenticatedUser = req.user;
     requestContext = validateAiChatBody(req.body);
     const { history, message, model, sessionId, systemPrompt } = requestContext;
+
+    const orbitCommandResponse = handleOrbitCommand(message);
+
+    if (orbitCommandResponse) {
+      await logAiAuditEvent({
+        durationMs: Date.now() - startedAt,
+        model: "orbit-command",
+        sessionId,
+        status: "success",
+        user: authenticatedUser,
+      });
+
+      return res.status(200).json({
+        success: true,
+        response: orbitCommandResponse,
+        model: "orbit-command",
+      });
+    }
 
     const apiKey = getSafeOpenRouterApiKey();
 
