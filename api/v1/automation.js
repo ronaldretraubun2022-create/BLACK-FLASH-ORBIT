@@ -1,4 +1,4 @@
-const { getOrbitAutomation, sendJson } = require("./dashboard.js");
+const { getOrbitAutomation, sendJson } = require("../../server/lib/orbitDashboardTelemetry");
 
 module.exports = function handler(req, res) {
   const engines = getOrbitAutomation();
