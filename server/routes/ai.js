@@ -4,6 +4,7 @@ const { createClient } = require("@supabase/supabase-js");
 const supabaseDatabase = require("../lib/supabase");
 const { buildOrbitRuntimeContext } = require("../lib/orbitRuntimeContext");
 const { handleOrbitCommand } = require("../lib/orbitCommands");
+const { buildOrbitMemoryContext } = require("../lib/orbitMemory");
 
 const router = express.Router();
 
@@ -637,6 +638,12 @@ async function buildOpenRouterMessages({
     sessionId,
     userEmail,
   });
+  const memoryContext = await buildOrbitMemoryContext({
+    currentMessage,
+    db: supabaseDatabase,
+    history,
+    userEmail,
+  });
   const activeSystemPrompt = normalizeSystemPrompt(systemPrompt);
   const systemMessages = [];
 
@@ -651,6 +658,13 @@ async function buildOpenRouterMessages({
     role: "system",
     content: ORBIT_SYSTEM_PROMPT,
   });
+
+  if (memoryContext) {
+    systemMessages.push({
+      role: "system",
+      content: memoryContext,
+    });
+  }
 
   systemMessages.push({
     role: "system",
