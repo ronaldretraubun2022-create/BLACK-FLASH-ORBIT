@@ -22,19 +22,31 @@ const PORT = Number(process.env.PORT) || 5000;
 const NODE_ENV = process.env.NODE_ENV || "development";
 const isProduction = NODE_ENV === "production";
 
-const vercelUrl = process.env.VERCEL_URL
-  ? `https://${process.env.VERCEL_URL}`
-  : "";
-
-const allowedOrigins = [
+const localDevelopmentOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
-  process.env.CORS_ORIGIN,
-  process.env.OPENROUTER_SITE_URL,
-  vercelUrl,
-]
-  .filter(Boolean)
-  .map((origin) => origin.replace(/\/$/, ""));
+];
+
+function normalizeCorsOrigin(origin) {
+  return String(origin || "").trim().replace(/\/+$/, "");
+}
+
+function parseCorsOrigins(value) {
+  return String(value || "")
+    .split(",")
+    .map(normalizeCorsOrigin)
+    .filter((origin) => origin && origin !== "*");
+}
+
+const configuredCorsOrigins = [
+  ...parseCorsOrigins(process.env.CORS_ALLOWED_ORIGINS),
+  ...parseCorsOrigins(process.env.CORS_ORIGIN),
+];
+
+const allowedOrigins = [
+  ...(isProduction ? [] : localDevelopmentOrigins),
+  ...configuredCorsOrigins,
+].filter((origin, index, origins) => origins.indexOf(origin) === index);
 
 function requireRouteHandler(routeName, handler) {
   if (typeof handler !== "function") {
@@ -116,11 +128,7 @@ app.use(
     origin(origin, callback) {
       if (!origin) return callback(null, true);
 
-      const cleanOrigin = origin.replace(/\/$/, "");
-
-      if (!isProduction) {
-        return callback(null, true);
-      }
+      const cleanOrigin = normalizeCorsOrigin(origin);
 
       if (allowedOrigins.includes(cleanOrigin)) {
         return callback(null, true);
