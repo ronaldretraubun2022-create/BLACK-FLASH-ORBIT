@@ -14,6 +14,22 @@ const AUTH_FAILURE_CODES = new Set([
   "invalid_supabase_user",
 ]);
 
+function createQueryString(params = {}) {
+  const searchParams = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    const cleanValue = String(value || "").trim();
+
+    if (cleanValue) {
+      searchParams.set(key, cleanValue);
+    }
+  });
+
+  const queryString = searchParams.toString();
+
+  return queryString ? `?${queryString}` : "";
+}
+
 function requireAccessToken(accessToken) {
   if (typeof accessToken !== "string" || !accessToken.trim()) {
     throw new Error("Session login tidak aktif. Silakan login ulang.");
@@ -429,21 +445,55 @@ export const api = {
     });
   },
 
-  async getPrompts() {
+  async getPrompts({ category, search } = {}) {
+    return request(
+      `/api/v1/prompts${createQueryString({ category, search })}`,
+      {
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
+  async createPrompt({ category, content, isFavorite = false, title }) {
     return request("/api/v1/prompts", {
       headers: await getAuthenticatedHeaders(),
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        content,
+        category: normalizePromptCategory(category),
+        isFavorite,
+      }),
     });
   },
 
-  async createPrompt({ category, content, title }) {
-    return request("/api/v1/prompts", {
-      method: "POST",
+  async updatePrompt({ category, content, id, isFavorite = false, title }) {
+    return request(`/api/v1/prompts/${id}`, {
+      method: "PUT",
       headers: await getAuthenticatedHeaders(),
       body: JSON.stringify({
         title,
         content,
         category: normalizePromptCategory(category),
+        isFavorite,
       }),
+    });
+  },
+
+  async togglePromptFavorite({ id, isFavorite }) {
+    return request(`/api/v1/prompts/${id}/favorite`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify({
+        isFavorite,
+      }),
+    });
+  },
+
+  async deletePrompt(id) {
+    return request(`/api/v1/prompts/${id}`, {
+      method: "DELETE",
+      headers: await getAuthenticatedHeaders(),
     });
   },
 

@@ -620,7 +620,12 @@ export function AIWorkspace() {
   }
 
   function useLibraryPrompt(libraryPrompt) {
-    setPrompt(libraryPrompt);
+    const promptContent =
+      typeof libraryPrompt === "string"
+        ? libraryPrompt
+        : libraryPrompt?.content || libraryPrompt?.prompt || "";
+
+    setPrompt(promptContent);
   }
 
   function handleExportConversation(format) {

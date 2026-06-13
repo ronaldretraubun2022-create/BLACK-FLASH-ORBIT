@@ -3,6 +3,9 @@ const supabase = require("../lib/supabase");
 const { requireAuth } = require("../middleware/requireAuth");
 
 const router = express.Router();
+const MAX_PROMPT_TITLE_LENGTH = 140;
+const MAX_PROMPT_CATEGORY_LENGTH = 64;
+const MAX_PROMPT_CONTENT_LENGTH = 12000;
 
 const fallbackProjects = [
   {
@@ -67,22 +70,42 @@ const fallbackReports = [
 ];
 
 const promptCategories = [
-  "newsroom",
-  "osint",
-  "engineering",
-  "security",
-  "product",
-  "audit",
-  "codex",
-  "backend",
-  "frontend",
-  "database",
-  "supabase",
-  "automation",
-  "monitoring",
-  "reports",
-  "ai",
-  "devops",
+  {
+    slug: "newsroom",
+    label: "Newsroom",
+    color: "#d6a93a",
+    icon: "newspaper",
+  },
+  { slug: "osint", label: "OSINT", color: "#7dd3fc", icon: "radar" },
+  {
+    slug: "engineering",
+    label: "Engineering",
+    color: "#94a3b8",
+    icon: "code",
+  },
+  { slug: "security", label: "Security", color: "#991b1b", icon: "shield" },
+  { slug: "product", label: "Product", color: "#a78bfa", icon: "box" },
+  { slug: "audit", label: "Audit", color: "#fb7185", icon: "scan" },
+  { slug: "codex", label: "Codex", color: "#22d3ee", icon: "terminal" },
+  { slug: "backend", label: "Backend", color: "#38bdf8", icon: "server" },
+  { slug: "frontend", label: "Frontend", color: "#f472b6", icon: "layout" },
+  { slug: "database", label: "Database", color: "#2dd4bf", icon: "database" },
+  { slug: "supabase", label: "Supabase", color: "#34d399", icon: "bolt" },
+  {
+    slug: "automation",
+    label: "Automation",
+    color: "#f59e0b",
+    icon: "workflow",
+  },
+  {
+    slug: "monitoring",
+    label: "Monitoring",
+    color: "#60a5fa",
+    icon: "activity",
+  },
+  { slug: "reports", label: "Reports", color: "#c084fc", icon: "file" },
+  { slug: "ai", label: "AI", color: "#06b6d4", icon: "sparkles" },
+  { slug: "devops", label: "DevOps", color: "#f97316", icon: "rocket" },
 ];
 
 const automationEngines = {
@@ -168,13 +191,27 @@ function mapReport(row) {
 function mapPrompt(row) {
   return {
     id: row.id,
-    title: row.title,
+    title: normalizeText(row.title, "Prompt Template"),
     category: normalizePromptCategory(row.category),
-    content: row.content,
+    content: normalizePromptContent(row.content),
+    isFavorite: Boolean(row.is_favorite),
     userId: row.user_id,
+    userEmail: row.user_email || null,
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapPromptCategory(row) {
+  const slug = normalizePromptCategory(row?.slug || row);
+  const fallback = getPromptCategoryMeta(slug);
+
+  return {
+    slug,
+    label: normalizeText(row?.label, fallback.label),
+    color: normalizeColor(row?.color, fallback.color),
+    icon: normalizePromptIcon(row?.icon, fallback.icon),
   };
 }
 
@@ -204,27 +241,257 @@ function mapProfile(row, authUser) {
 
 function normalizeText(value, fallback = "") {
   if (typeof value !== "string") return fallback;
-  const trimmed = value.trim();
+  const trimmed = value
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, " ")
+    .trim();
   return trimmed || fallback;
 }
 
 function normalizePromptCategory(value, fallback = "newsroom") {
-  const normalized = normalizeText(value).toLowerCase();
+  const normalized = normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, MAX_PROMPT_CATEGORY_LENGTH);
 
   return normalized || fallback;
 }
 
 function getPromptCategories(extraCategories = []) {
-  const defaultCategorySet = new Set(promptCategories);
-  const extraCategorySet = new Set();
+  const categoriesBySlug = new Map(
+    promptCategories.map((category) => [category.slug, category]),
+  );
 
   extraCategories
-    .map((category) => normalizePromptCategory(category, ""))
-    .filter(Boolean)
-    .filter((category) => !defaultCategorySet.has(category))
-    .forEach((category) => extraCategorySet.add(category));
+    .map(mapPromptCategory)
+    .filter((category) => category.slug)
+    .filter((category) => !categoriesBySlug.has(category.slug))
+    .forEach((category) => categoriesBySlug.set(category.slug, category));
 
-  return [...promptCategories, ...Array.from(extraCategorySet).sort()];
+  return Array.from(categoriesBySlug.values()).sort((first, second) => {
+    const firstIndex = promptCategories.findIndex(
+      (category) => category.slug === first.slug,
+    );
+    const secondIndex = promptCategories.findIndex(
+      (category) => category.slug === second.slug,
+    );
+
+    if (firstIndex >= 0 && secondIndex >= 0) return firstIndex - secondIndex;
+    if (firstIndex >= 0) return -1;
+    if (secondIndex >= 0) return 1;
+
+    return first.slug.localeCompare(second.slug);
+  });
+}
+
+function getPromptCategoryMeta(slug) {
+  return (
+    promptCategories.find((category) => category.slug === slug) || {
+      slug,
+      label: slug,
+      color: "#64748b",
+      icon: "tag",
+    }
+  );
+}
+
+function normalizeColor(value, fallback = "#64748b") {
+  const color = normalizeText(value, fallback);
+
+  return /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
+}
+
+function normalizePromptIcon(value, fallback = "tag") {
+  const icon = normalizeText(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32);
+
+  return icon || fallback;
+}
+
+function normalizePromptContent(value) {
+  return normalizeText(value).slice(0, MAX_PROMPT_CONTENT_LENGTH);
+}
+
+function getPromptCategorySlugs(extraCategories = []) {
+  return getPromptCategories(extraCategories).map((category) => category.slug);
+}
+
+function getPromptSelectColumns() {
+  return [
+    "id",
+    "title",
+    "category",
+    "content",
+    "is_favorite",
+    "user_id",
+    "user_email",
+    "created_by",
+    "created_at",
+    "updated_at",
+  ].join(", ");
+}
+
+function normalizePromptPayload(body, { partial = false } = {}) {
+  const payload = {};
+
+  if (!partial || Object.prototype.hasOwnProperty.call(body || {}, "title")) {
+    const title = normalizeText(body?.title).slice(0, MAX_PROMPT_TITLE_LENGTH);
+
+    if (!title) {
+      throw createHttpError("title wajib diisi.", 400, "prompt_title_required");
+    }
+
+    if (containsSecretLikePrompt(title)) {
+      throw createHttpError(
+        "Judul prompt mengandung pola secret/token dan tidak disimpan.",
+        400,
+        "prompt_sensitive_title_rejected",
+      );
+    }
+
+    payload.title = title;
+  }
+
+  if (!partial || Object.prototype.hasOwnProperty.call(body || {}, "content")) {
+    const content = normalizePromptContent(body?.content || body?.prompt);
+
+    if (!content) {
+      throw createHttpError(
+        "content wajib diisi.",
+        400,
+        "prompt_content_required",
+      );
+    }
+
+    if (containsSecretLikePrompt(content)) {
+      throw createHttpError(
+        "Prompt mengandung pola secret/token dan tidak disimpan.",
+        400,
+        "prompt_sensitive_content_rejected",
+      );
+    }
+
+    payload.content = content;
+  }
+
+  if (!partial || Object.prototype.hasOwnProperty.call(body || {}, "category")) {
+    payload.category = normalizePromptCategory(body?.category);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body || {}, "isFavorite")) {
+    payload.is_favorite = Boolean(body.isFavorite);
+  } else if (Object.prototype.hasOwnProperty.call(body || {}, "is_favorite")) {
+    payload.is_favorite = Boolean(body.is_favorite);
+  }
+
+  return payload;
+}
+
+function containsSecretLikePrompt(value) {
+  const text = String(value || "");
+
+  const hasCredentialLikeToken = text
+    .split(/\s+/)
+    .some((part) => part.length >= 48 && /^[a-z0-9._~+/=-]+$/i.test(part));
+
+  return (
+    hasCredentialLikeToken ||
+    [
+      /sk-or-v1-[a-z0-9_-]+/i,
+      /\bsk-[a-z0-9]{20,}\b/i,
+      /\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b/i,
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
+      /\bBearer\s+[a-z0-9._~+/-]+=*/i,
+      /\b(?:api[_ -]?key|password|passwd|pwd|token|secret|cookie|private[_ -]?key|seed[_ -]?phrase)\b\s*[:=]\s*\S+/i,
+    ].some((pattern) => pattern.test(text))
+  );
+}
+
+function createHttpError(message, statusCode = 500, code = "server_error") {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
+function sendPromptError(res, error, fallbackMessage) {
+  const statusCode = error.statusCode || error.status || 500;
+
+  return res.status(statusCode).json({
+    success: false,
+    code: error.code || "prompt_request_failed",
+    message: error.message || fallbackMessage,
+  });
+}
+
+function getPromptOwnerFilter(user) {
+  const ownerId = getAuthUserId(user);
+  const ownerEmail = getAuthUserEmail(user);
+  const filters = [];
+
+  if (ownerId) {
+    filters.push(`user_id.eq.${ownerId}`, `created_by.eq.${ownerId}`);
+  }
+
+  if (ownerEmail) {
+    filters.push(`user_email.eq.${ownerEmail.toLowerCase()}`);
+  }
+
+  return filters.join(",");
+}
+
+function applyPromptFilters(query, user, filters = {}) {
+  const ownerFilter = getPromptOwnerFilter(user);
+
+  if (ownerFilter) {
+    query = query.or(ownerFilter);
+  }
+
+  const category = normalizePromptCategory(filters.category, "");
+  const search = normalizeText(filters.search || filters.q).slice(0, 120);
+
+  if (category) {
+    query = query.eq("category", category);
+  }
+
+  if (search) {
+    const escapedSearch = search.replace(/[%,()]/g, " ").trim();
+
+    if (!escapedSearch) return query;
+
+    query = query.or(
+      [
+        `title.ilike.%${escapedSearch}%`,
+        `content.ilike.%${escapedSearch}%`,
+        `category.ilike.%${escapedSearch}%`,
+      ].join(","),
+    );
+  }
+
+  return query;
+}
+
+function createPromptAuditPayload(user) {
+  return {
+    user_id: getAuthUserId(user),
+    user_email: getAuthUserEmail(user).toLowerCase() || null,
+    created_by: getAuthUserId(user),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function normalizePromptId(value) {
+  return normalizeText(value).slice(0, 80);
+}
+
+function getPromptCategorySlugsFromPrompts(prompts = []) {
+  return prompts
+    .map((prompt) => normalizePromptCategory(prompt?.category, ""))
+    .filter(Boolean)
+    .filter((category, index, categories) => categories.indexOf(category) === index);
 }
 
 function getAuthUserId(user) {
@@ -355,21 +622,17 @@ function createFallbackPrompts(user) {
   };
 
   return promptCategories.map((category) => ({
-    id: `fallback-${category}`,
-    title: fallbackPromptMap[category].title,
-    category,
-    content: fallbackPromptMap[category].content,
+    id: `fallback-${category.slug}`,
+    title: fallbackPromptMap[category.slug].title,
+    category: category.slug,
+    content: fallbackPromptMap[category.slug].content,
+    isFavorite: false,
     userId: ownerId,
+    userEmail: getAuthUserEmail(user).toLowerCase() || null,
     createdBy: ownerId,
     createdAt: now,
     updatedAt: now,
   }));
-}
-
-function getPromptOwnerFilter(user) {
-  const ownerId = getAuthUserId(user);
-
-  return `user_id.eq.${ownerId},created_by.eq.${ownerId}`;
 }
 
 async function getProjects() {
@@ -404,16 +667,18 @@ async function getReports() {
   return data.map(mapReport);
 }
 
-async function getPrompts(user) {
+async function getPrompts(user, filters = {}) {
   if (!supabase) return createFallbackPrompts(user);
 
-  const { data, error } = await supabase
-    .from("orbit_prompts")
-    .select(
-      "id, title, category, content, user_id, created_by, created_at, updated_at",
-    )
-    .or(getPromptOwnerFilter(user))
+  const query = applyPromptFilters(
+    supabase.from("orbit_prompts").select(getPromptSelectColumns()),
+    user,
+    filters,
+  )
+    .order("is_favorite", { ascending: false })
     .order("updated_at", { ascending: false });
+
+  const { data, error } = await query;
 
   if (error) {
     console.error("Supabase prompts error:", error.message);
@@ -428,7 +693,7 @@ async function getPromptCategoriesFromDatabase() {
 
   const { data, error } = await supabase
     .from("orbit_prompt_categories")
-    .select("slug")
+    .select("slug, label, color, icon, sort_order")
     .order("sort_order", { ascending: true });
 
   if (error) {
@@ -436,7 +701,7 @@ async function getPromptCategoriesFromDatabase() {
     return getPromptCategories();
   }
 
-  return getPromptCategories((data || []).map((category) => category.slug));
+  return getPromptCategories(data || []);
 }
 
 async function getActivity(limit = 20) {
@@ -590,6 +855,76 @@ async function getAutomationHistory(user, limit = 25) {
   }
 
   return (data || []).map(mapAutomationHistory);
+}
+
+async function updatePrompt(req, res, options = {}) {
+  try {
+    if (!supabase) {
+      throw createHttpError(
+        "Supabase belum dikonfigurasi.",
+        503,
+        "supabase_not_configured",
+      );
+    }
+
+    const promptId = normalizePromptId(req.params?.id);
+
+    if (!promptId) {
+      throw createHttpError("Prompt id wajib diisi.", 400, "prompt_id_required");
+    }
+
+    const partial =
+      typeof options.partial === "boolean"
+        ? options.partial
+        : req.method !== "PUT";
+    const payload = normalizePromptPayload(options.body || req.body, {
+      partial,
+    });
+    const cleanPayload = {
+      ...payload,
+      updated_at: new Date().toISOString(),
+      user_email: getAuthUserEmail(req.user).toLowerCase() || null,
+    };
+
+    if (Object.keys(payload).length === 0) {
+      throw createHttpError(
+        "Tidak ada perubahan prompt.",
+        400,
+        "prompt_payload_empty",
+      );
+    }
+
+    const { data, error } = await applyPromptFilters(
+      supabase.from("orbit_prompts").update(cleanPayload).eq("id", promptId),
+      req.user,
+    )
+      .select(getPromptSelectColumns())
+      .maybeSingle();
+
+    if (error) {
+      console.error("Supabase prompt update error:", error.message);
+      throw createHttpError(
+        "Gagal memperbarui prompt.",
+        500,
+        "prompt_update_failed",
+      );
+    }
+
+    if (!data) {
+      throw createHttpError(
+        "Prompt tidak ditemukan atau bukan milik user login.",
+        404,
+        "prompt_not_found",
+      );
+    }
+
+    return res.json({
+      success: true,
+      data: mapPrompt(data),
+    });
+  } catch (error) {
+    return sendPromptError(res, error, "Gagal memperbarui prompt.");
+  }
 }
 
 router.get("/health", (req, res) => {
@@ -874,110 +1209,123 @@ router.get("/prompts/categories", requireAuth, async (req, res) => {
   res.json({
     success: true,
     data: categories,
+    slugs: categories.map((category) => category.slug),
   });
 });
 
 router.get("/prompts", requireAuth, async (req, res) => {
-  const prompts = await getPrompts(req.user);
+  const prompts = await getPrompts(req.user, {
+    category: req.query?.category,
+    search: req.query?.search || req.query?.q,
+  });
+
   res.json(prompts);
 });
 
 router.post("/prompts", requireAuth, async (req, res) => {
-  if (!supabase) {
-    return res.status(503).json({
-      success: false,
-      message: "Supabase belum dikonfigurasi.",
+  try {
+    if (!supabase) {
+      throw createHttpError(
+        "Supabase belum dikonfigurasi.",
+        503,
+        "supabase_not_configured",
+      );
+    }
+
+    const payload = {
+      ...normalizePromptPayload(req.body),
+      ...createPromptAuditPayload(req.user),
+    };
+
+    const { data, error } = await supabase
+      .from("orbit_prompts")
+      .insert([payload])
+      .select(getPromptSelectColumns())
+      .single();
+
+    if (error) {
+      console.error("Supabase prompt insert error:", error.message);
+      throw createHttpError(
+        "Gagal menyimpan prompt.",
+        500,
+        "prompt_insert_failed",
+      );
+    }
+
+    return res.status(201).json({
+      success: true,
+      data: mapPrompt(data),
     });
+  } catch (error) {
+    return sendPromptError(res, error, "Gagal menyimpan prompt.");
   }
+});
 
-  const title = normalizeText(req.body?.title);
-  const category = normalizePromptCategory(req.body?.category);
-  const content = normalizeText(req.body?.content);
+router.patch("/prompts/:id", requireAuth, async (req, res) => {
+  return updatePrompt(req, res);
+});
 
-  if (!title || !content) {
-    return res.status(400).json({
-      success: false,
-      message: "title dan content wajib diisi.",
-    });
-  }
+router.put("/prompts/:id", requireAuth, async (req, res) => {
+  return updatePrompt(req, res);
+});
 
-  const { data, error } = await supabase
-    .from("orbit_prompts")
-    .insert([
-      {
-        title,
-        category,
-        content,
-        user_id: req.user.id,
-        created_by: req.user.id,
-        updated_at: new Date().toISOString(),
-      },
-    ])
-    .select(
-      "id, title, category, content, user_id, created_by, created_at, updated_at",
-    )
-    .single();
-
-  if (error) {
-    console.error("Supabase prompt insert error:", error.message);
-
-    return res.status(500).json({
-      success: false,
-      message: "Gagal menyimpan prompt.",
-    });
-  }
-
-  return res.status(201).json({
-    success: true,
-    data: mapPrompt(data),
+router.post("/prompts/:id/favorite", requireAuth, async (req, res) => {
+  return updatePrompt(req, res, {
+    body: {
+      isFavorite:
+        req.body?.isFavorite ?? req.body?.is_favorite ?? req.body?.favorite,
+    },
+    partial: true,
   });
 });
 
 router.delete("/prompts/:id", requireAuth, async (req, res) => {
-  if (!supabase) {
-    return res.status(503).json({
-      success: false,
-      message: "Supabase belum dikonfigurasi.",
+  try {
+    if (!supabase) {
+      throw createHttpError(
+        "Supabase belum dikonfigurasi.",
+        503,
+        "supabase_not_configured",
+      );
+    }
+
+    const promptId = normalizePromptId(req.params?.id);
+
+    if (!promptId) {
+      throw createHttpError("Prompt id wajib diisi.", 400, "prompt_id_required");
+    }
+
+    const { data, error } = await applyPromptFilters(
+      supabase.from("orbit_prompts").delete().eq("id", promptId),
+      req.user,
+    )
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      console.error("Supabase prompt delete error:", error.message);
+      throw createHttpError(
+        "Gagal menghapus prompt.",
+        500,
+        "prompt_delete_failed",
+      );
+    }
+
+    if (!data) {
+      throw createHttpError(
+        "Prompt tidak ditemukan atau bukan milik user login.",
+        404,
+        "prompt_not_found",
+      );
+    }
+
+    return res.json({
+      success: true,
+      data: { id: promptId },
     });
+  } catch (error) {
+    return sendPromptError(res, error, "Gagal menghapus prompt.");
   }
-
-  const promptId = normalizeText(req.params?.id);
-
-  if (!promptId) {
-    return res.status(400).json({
-      success: false,
-      message: "Prompt id wajib diisi.",
-    });
-  }
-
-  const { data, error } = await supabase
-    .from("orbit_prompts")
-    .delete()
-    .eq("id", promptId)
-    .or(getPromptOwnerFilter(req.user))
-    .select("id")
-    .maybeSingle();
-
-  if (error) {
-    console.error("Supabase prompt delete error:", error.message);
-
-    return res.status(500).json({
-      success: false,
-      message: "Gagal menghapus prompt.",
-    });
-  }
-
-  if (!data) {
-    return res.status(404).json({
-      success: false,
-      message: "Prompt tidak ditemukan atau bukan milik user login.",
-    });
-  }
-
-  return res.json({
-    success: true,
-    data: { id: promptId },
-  });
 });
 
 router.get("/profile", requireAuth, async (req, res) => {

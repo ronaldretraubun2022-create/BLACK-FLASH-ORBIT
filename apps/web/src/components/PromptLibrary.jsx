@@ -1,12 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, Library, Loader2, Search } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  Edit3,
+  Library,
+  Loader2,
+  Plus,
+  Save,
+  Search,
+  Star,
+  StarOff,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   ALL_PROMPT_CATEGORIES_LABEL,
   buildPromptCategoryOptions,
+  getPromptCategoryMeta,
   normalizePromptCategory,
 } from "../data/promptCategories";
 import * as localPromptTemplates from "../data/promptTemplates";
 import { api } from "../services/api";
+
+const EMPTY_FORM = {
+  category: "newsroom",
+  content: "",
+  isFavorite: false,
+  title: "",
+};
 
 function toPromptText(value, fallback = "") {
   if (typeof value === "string") return value;
@@ -20,12 +41,18 @@ function toPromptText(value, fallback = "") {
 }
 
 function normalizePromptItem(prompt, fallbackId) {
+  const category = normalizePromptCategory(prompt?.category);
+
   return {
     ...(prompt && typeof prompt === "object" ? prompt : {}),
     id: prompt?.id || fallbackId,
     title: toPromptText(prompt?.title || prompt?.name, "Prompt Template"),
-    category: normalizePromptCategory(prompt?.category),
+    category,
     content: toPromptText(prompt?.content || prompt?.prompt),
+    isFavorite: Boolean(prompt?.isFavorite || prompt?.is_favorite),
+    categoryMeta: getPromptCategoryMeta(prompt?.category || category),
+    createdAt: prompt?.createdAt || prompt?.created_at || "",
+    updatedAt: prompt?.updatedAt || prompt?.updated_at || "",
   };
 }
 
@@ -45,8 +72,41 @@ function getPromptLibraryErrorMessage(error) {
   try {
     return JSON.stringify(error);
   } catch {
-    return "Gagal memuat prompt library.";
+    return "Gagal memproses prompt library.";
   }
+}
+
+function isReadOnlyPrompt(prompt) {
+  const id = String(prompt?.id || "");
+
+  return id.startsWith("local-") || id.startsWith("fallback-");
+}
+
+function sortPrompts(promptList) {
+  return [...promptList].sort((first, second) => {
+    if (first.isFavorite !== second.isFavorite) {
+      return first.isFavorite ? -1 : 1;
+    }
+
+    return (
+      new Date(second.updatedAt || second.createdAt || 0) -
+      new Date(first.updatedAt || first.createdAt || 0)
+    );
+  });
+}
+
+function getResponsePrompt(response) {
+  return response?.data || response;
+}
+
+function validatePromptForm(formState) {
+  const title = toPromptText(formState.title).trim();
+  const content = toPromptText(formState.content).trim();
+
+  if (!title) return "Judul prompt wajib diisi.";
+  if (!content) return "Isi prompt wajib diisi.";
+
+  return "";
 }
 
 export function PromptLibrary({ onSelectTemplate }) {
@@ -56,10 +116,18 @@ export function PromptLibrary({ onSelectTemplate }) {
   const [selectedCategory, setSelectedCategory] = useState(
     ALL_PROMPT_CATEGORIES_LABEL,
   );
+  const [formState, setFormState] = useState(EMPTY_FORM);
+  const [editingPrompt, setEditingPrompt] = useState(null);
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [actionPromptId, setActionPromptId] = useState("");
   const [error, setError] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
 
   useEffect(() => {
+    let isMounted = true;
+
     async function loadPrompts() {
       try {
         setIsLoading(true);
@@ -77,53 +145,65 @@ export function PromptLibrary({ onSelectTemplate }) {
         const categoriesData =
           categoriesResult.status === "fulfilled" ? categoriesResult.value : null;
 
+        if (!isMounted) return;
+
         setServerCategories(
           Array.isArray(categoriesData?.data)
-            ? categoriesData.data.map((category) =>
-                normalizePromptCategory(category),
-              )
+            ? categoriesData.data.map(getPromptCategoryMeta)
             : [],
         );
         setPrompts(
-          Array.isArray(promptsData)
-            ? promptsData.map((prompt, index) =>
-                normalizePromptItem(prompt, `remote-prompt-${index}`),
-              )
-            : [],
+          sortPrompts(
+            Array.isArray(promptsData)
+              ? promptsData.map((prompt, index) =>
+                  normalizePromptItem(prompt, `remote-prompt-${index}`),
+                )
+              : [],
+          ),
         );
       } catch (loadError) {
         const localPrompts = getLocalPromptTemplates();
 
+        if (!isMounted) return;
+
         setError(localPrompts.length ? "" : getPromptLibraryErrorMessage(loadError));
-        setPrompts(localPrompts);
+        setPrompts(sortPrompts(localPrompts));
       } finally {
-        setIsLoading(false);
+        if (isMounted) setIsLoading(false);
       }
     }
 
     loadPrompts();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  const categories = useMemo(() => {
-    return buildPromptCategoryOptions(
-      [
-        ...serverCategories,
-        ...prompts.map((prompt) => prompt.category).filter(Boolean),
-      ],
-    );
+  const categoryOptions = useMemo(() => {
+    return buildPromptCategoryOptions([
+      ...serverCategories,
+      ...prompts.map((prompt) => prompt.categoryMeta || prompt.category),
+    ]);
   }, [prompts, serverCategories]);
+
+  const selectableCategories = categoryOptions.filter(
+    (category) => category.slug !== ALL_PROMPT_CATEGORIES_LABEL,
+  );
 
   const filteredTemplates = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
     return prompts.filter((template) => {
-      const content = toPromptText(template.content || template.prompt);
+      const categoryMeta = getPromptCategoryMeta(
+        template.categoryMeta || template.category,
+      );
       const matchesCategory =
         selectedCategory === ALL_PROMPT_CATEGORIES_LABEL ||
         normalizePromptCategory(template.category) === selectedCategory;
       const matchesSearch =
         !query ||
-        [template.title, template.category, content]
+        [template.title, template.category, categoryMeta.label, template.content]
           .filter(Boolean)
           .some((value) => toPromptText(value).toLowerCase().includes(query));
 
@@ -131,91 +211,416 @@ export function PromptLibrary({ onSelectTemplate }) {
     });
   }, [prompts, searchQuery, selectedCategory]);
 
+  function resetForm() {
+    setFormState(EMPTY_FORM);
+    setEditingPrompt(null);
+    setIsFormOpen(false);
+  }
+
+  function openCreateForm() {
+    setError("");
+    setStatusMessage("");
+    setEditingPrompt(null);
+    setFormState({
+      ...EMPTY_FORM,
+      category:
+        selectedCategory === ALL_PROMPT_CATEGORIES_LABEL
+          ? "newsroom"
+          : selectedCategory,
+    });
+    setIsFormOpen(true);
+  }
+
+  function openEditForm(prompt) {
+    setError("");
+    setStatusMessage("");
+    setEditingPrompt(prompt);
+    setFormState({
+      category: normalizePromptCategory(prompt.category),
+      content: prompt.content,
+      isFavorite: Boolean(prompt.isFavorite),
+      title: prompt.title,
+    });
+    setIsFormOpen(true);
+  }
+
+  async function handleSubmitPrompt(event) {
+    event.preventDefault();
+
+    const validationMessage = validatePromptForm(formState);
+
+    if (validationMessage || isSaving) {
+      setError(validationMessage);
+      return;
+    }
+
+    if (editingPrompt && isReadOnlyPrompt(editingPrompt)) {
+      setError("Prompt bawaan tidak bisa diedit. Buat salinan baru.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError("");
+    setStatusMessage("");
+
+    try {
+      const payload = {
+        category: formState.category,
+        content: formState.content,
+        isFavorite: formState.isFavorite,
+        title: formState.title,
+      };
+      const response = editingPrompt
+        ? await api.updatePrompt({ ...payload, id: editingPrompt.id })
+        : await api.createPrompt(payload);
+      const savedPrompt = normalizePromptItem(
+        getResponsePrompt(response),
+        editingPrompt?.id || `prompt-${Date.now()}`,
+      );
+
+      setPrompts((currentPrompts) =>
+        sortPrompts(
+          editingPrompt
+            ? currentPrompts.map((prompt) =>
+                prompt.id === savedPrompt.id ? savedPrompt : prompt,
+              )
+            : [savedPrompt, ...currentPrompts],
+        ),
+      );
+      setStatusMessage(
+        editingPrompt ? "Prompt berhasil diperbarui." : "Prompt berhasil dibuat.",
+      );
+      resetForm();
+    } catch (saveError) {
+      setError(getPromptLibraryErrorMessage(saveError));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleToggleFavorite(prompt) {
+    if (isReadOnlyPrompt(prompt) || actionPromptId) return;
+
+    const nextFavorite = !prompt.isFavorite;
+    const previousPrompts = prompts;
+
+    setActionPromptId(prompt.id);
+    setError("");
+    setStatusMessage("");
+    setPrompts((currentPrompts) =>
+      sortPrompts(
+        currentPrompts.map((item) =>
+          item.id === prompt.id ? { ...item, isFavorite: nextFavorite } : item,
+        ),
+      ),
+    );
+
+    try {
+      const response = await api.togglePromptFavorite({
+        id: prompt.id,
+        isFavorite: nextFavorite,
+      });
+      const savedPrompt = normalizePromptItem(
+        getResponsePrompt(response),
+        prompt.id,
+      );
+
+      setPrompts((currentPrompts) =>
+        sortPrompts(
+          currentPrompts.map((item) =>
+            item.id === savedPrompt.id ? savedPrompt : item,
+          ),
+        ),
+      );
+    } catch (favoriteError) {
+      setPrompts(previousPrompts);
+      setError(getPromptLibraryErrorMessage(favoriteError));
+    } finally {
+      setActionPromptId("");
+    }
+  }
+
+  async function handleDeletePrompt(prompt) {
+    if (isReadOnlyPrompt(prompt) || actionPromptId) return;
+
+    const shouldDelete = window.confirm(`Hapus prompt "${prompt.title}"?`);
+
+    if (!shouldDelete) return;
+
+    const previousPrompts = prompts;
+
+    setActionPromptId(prompt.id);
+    setError("");
+    setStatusMessage("");
+    setPrompts((currentPrompts) =>
+      currentPrompts.filter((item) => item.id !== prompt.id),
+    );
+
+    try {
+      await api.deletePrompt(prompt.id);
+      if (editingPrompt?.id === prompt.id) resetForm();
+      setStatusMessage("Prompt berhasil dihapus.");
+    } catch (deleteError) {
+      setPrompts(previousPrompts);
+      setError(getPromptLibraryErrorMessage(deleteError));
+    } finally {
+      setActionPromptId("");
+    }
+  }
+
   function handleSelectTemplate(template) {
     if (typeof onSelectTemplate === "function") {
-      onSelectTemplate({
-        id: template.id,
-        title: template.title || "Prompt Template",
-        category: normalizePromptCategory(template.category),
-        content: template.content || template.prompt || "",
-      });
+      onSelectTemplate(template.content || "");
+      setStatusMessage("Prompt dimasukkan ke input AI Workspace.");
     }
   }
 
   return (
     <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
-      <div className="flex items-center gap-2">
-        <Library className="text-cyan-300" size={18} />
-        <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
-          PROMPT LIBRARY
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Library className="text-[#d6a93a]" size={18} />
+          <p className="text-[10px] font-black tracking-[0.24em] text-[#d6a93a]">
+            PROMPT LIBRARY
+          </p>
+        </div>
+        <button
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#d6a93a]/30 bg-[#d6a93a]/10 px-3 py-2 text-xs font-black text-[#f8e7b0] transition hover:bg-[#d6a93a]/15"
+          onClick={openCreateForm}
+          type="button">
+          <Plus size={14} />
+          Baru
+        </button>
       </div>
 
       <div className="mt-4 grid gap-2">
-        <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-slate-500 transition focus-within:border-cyan-300/40">
+        <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-slate-500 transition focus-within:border-[#d6a93a]/40">
           <Search size={15} />
           <input
             className="w-full bg-transparent text-xs font-bold text-slate-100 outline-none placeholder:text-slate-600"
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Cari template..."
+            placeholder="Cari title, isi, kategori..."
             value={searchQuery}
           />
         </label>
 
         <select
-          className="rounded-xl border border-white/10 bg-[#0c1320] px-3 py-2 text-xs font-bold text-slate-100 outline-none transition focus:border-cyan-300/40"
+          className="rounded-xl border border-white/10 bg-[#0c1320] px-3 py-2 text-xs font-bold text-slate-100 outline-none transition focus:border-[#d6a93a]/40"
           onChange={(event) => setSelectedCategory(event.target.value)}
           value={selectedCategory}>
-          {categories.map((category) => (
-            <option key={category} value={category}>
-              {category}
+          {categoryOptions.map((category) => (
+            <option key={category.slug} value={category.slug}>
+              {category.label}
             </option>
           ))}
         </select>
       </div>
 
-      <div className="mt-4 grid max-h-[520px] gap-3 overflow-y-auto pr-1">
+      {isFormOpen && (
+        <form
+          className="mt-4 grid gap-3 rounded-2xl border border-[#d6a93a]/20 bg-black/25 p-4"
+          onSubmit={handleSubmitPrompt}>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-black text-white">
+              {editingPrompt ? "Edit Prompt" : "Buat Prompt"}
+            </p>
+            <button
+              className="inline-flex size-8 items-center justify-center rounded-lg border border-white/10 text-slate-400 transition hover:text-white"
+              onClick={resetForm}
+              type="button">
+              <X size={15} />
+            </button>
+          </div>
+
+          <label className="grid gap-2 text-[11px] font-bold text-slate-400">
+            Judul
+            <input
+              className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs font-bold text-white outline-none focus:border-[#d6a93a]/40"
+              maxLength={140}
+              onChange={(event) =>
+                setFormState((current) => ({
+                  ...current,
+                  title: event.target.value,
+                }))
+              }
+              value={formState.title}
+            />
+          </label>
+
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+            <label className="grid gap-2 text-[11px] font-bold text-slate-400">
+              Kategori
+              <select
+                className="rounded-xl border border-white/10 bg-[#0c1320] px-3 py-2 text-xs font-bold text-white outline-none focus:border-[#d6a93a]/40"
+                onChange={(event) =>
+                  setFormState((current) => ({
+                    ...current,
+                    category: event.target.value,
+                  }))
+                }
+                value={formState.category}>
+                {selectableCategories.map((category) => (
+                  <option key={category.slug} value={category.slug}>
+                    {category.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex items-end gap-2 pb-2 text-[11px] font-bold text-slate-300">
+              <input
+                checked={formState.isFavorite}
+                className="size-4 accent-[#d6a93a]"
+                onChange={(event) =>
+                  setFormState((current) => ({
+                    ...current,
+                    isFavorite: event.target.checked,
+                  }))
+                }
+                type="checkbox"
+              />
+              Favorite
+            </label>
+          </div>
+
+          <label className="grid gap-2 text-[11px] font-bold text-slate-400">
+            Isi Prompt
+            <textarea
+              className="min-h-32 resize-y rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs leading-5 text-white outline-none focus:border-[#d6a93a]/40"
+              maxLength={12000}
+              onChange={(event) =>
+                setFormState((current) => ({
+                  ...current,
+                  content: event.target.value,
+                }))
+              }
+              value={formState.content}
+            />
+          </label>
+
+          <button
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#d6a93a]/30 bg-[#d6a93a]/15 px-4 py-3 text-xs font-black text-[#f8e7b0] transition hover:bg-[#d6a93a]/20 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={isSaving}
+            type="submit">
+            {isSaving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}
+            {editingPrompt ? "Simpan Perubahan" : "Simpan Prompt"}
+          </button>
+        </form>
+      )}
+
+      <div className="mt-4 grid gap-2">
+        {statusMessage && (
+          <div className="flex items-start gap-2 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-3 text-xs leading-5 text-emerald-100">
+            <Check size={15} />
+            {statusMessage}
+          </div>
+        )}
+
+        {error && (
+          <div className="flex items-start gap-2 rounded-2xl border border-rose-300/20 bg-rose-300/10 p-3 text-xs leading-5 text-rose-200">
+            <AlertCircle size={15} />
+            {error}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 grid max-h-[640px] gap-3 overflow-y-auto pr-1">
         {isLoading && (
           <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-black/15 p-4 text-xs font-bold text-slate-400">
-            <Loader2 className="animate-spin text-cyan-300" size={16} />
+            <Loader2 className="animate-spin text-[#d6a93a]" size={16} />
             Memuat prompt dari Supabase...
           </div>
         )}
 
-        {!isLoading && error && (
-          <div className="flex items-start gap-2 rounded-2xl border border-rose-300/20 bg-rose-300/10 p-4 text-xs leading-5 text-rose-200">
-            <AlertCircle size={16} />
-            {error}
-          </div>
-        )}
-
         {!isLoading &&
-          !error &&
           filteredTemplates.map((template) => {
-            const content = toPromptText(template.content || template.prompt);
+            const categoryMeta = getPromptCategoryMeta(
+              template.categoryMeta || template.category,
+            );
+            const readOnly = isReadOnlyPrompt(template);
+            const isActionLoading = actionPromptId === template.id;
 
             return (
-              <button
-                className="rounded-2xl border border-white/10 bg-black/15 p-4 text-left transition hover:border-cyan-300/30 hover:bg-cyan-300/5"
-                key={template.id}
-                onClick={() => handleSelectTemplate(template)}
-                type="button">
-                <h4 className="line-clamp-1 text-sm font-black text-white">
-                  {template.title}
-                </h4>
-                <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">
-                  {template.category}
+              <article
+                className="rounded-2xl border border-white/10 bg-black/15 p-4 transition hover:border-[#d6a93a]/30"
+                key={template.id}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h4 className="line-clamp-1 text-sm font-black text-white">
+                      {template.title}
+                    </h4>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-300">
+                        <span
+                          className="size-2 rounded-full"
+                          style={{ backgroundColor: categoryMeta.color }}
+                        />
+                        {categoryMeta.label}
+                      </span>
+                      {template.isFavorite && (
+                        <span className="rounded-full border border-[#d6a93a]/30 bg-[#d6a93a]/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[#f8e7b0]">
+                          Favorite
+                        </span>
+                      )}
+                      {readOnly && (
+                        <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold text-slate-500">
+                          Template
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <button
+                    className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl border border-white/10 text-slate-400 transition hover:border-[#d6a93a]/30 hover:text-[#f8e7b0] disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={readOnly || Boolean(actionPromptId)}
+                    onClick={() => handleToggleFavorite(template)}
+                    title={template.isFavorite ? "Unfavorite" : "Favorite"}
+                    type="button">
+                    {isActionLoading ? (
+                      <Loader2 className="animate-spin" size={15} />
+                    ) : template.isFavorite ? (
+                      <Star size={15} />
+                    ) : (
+                      <StarOff size={15} />
+                    )}
+                  </button>
+                </div>
+
+                <p className="mt-3 line-clamp-4 whitespace-pre-wrap text-xs leading-5 text-slate-400">
+                  {template.content}
                 </p>
-                <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-500">
-                  {content}
-                </p>
-              </button>
+
+                <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                  <button
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-2 text-xs font-black text-cyan-100 transition hover:bg-cyan-300/15"
+                    onClick={() => handleSelectTemplate(template)}
+                    type="button">
+                    Use Prompt
+                  </button>
+                  <button
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-black text-slate-200 transition hover:border-[#d6a93a]/30 hover:text-[#f8e7b0] disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={readOnly}
+                    onClick={() => openEditForm(template)}
+                    type="button">
+                    <Edit3 size={14} />
+                    Edit
+                  </button>
+                  <button
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300/20 bg-rose-300/10 px-3 py-2 text-xs font-black text-rose-100 transition hover:bg-rose-300/15 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={readOnly || Boolean(actionPromptId)}
+                    onClick={() => handleDeletePrompt(template)}
+                    type="button">
+                    <Trash2 size={14} />
+                    Hapus
+                  </button>
+                </div>
+              </article>
             );
           })}
 
-        {!isLoading && !error && filteredTemplates.length === 0 && (
+        {!isLoading && filteredTemplates.length === 0 && (
           <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs leading-5 text-slate-500">
-            Template tidak ditemukan.
+            Prompt tidak ditemukan.
           </p>
         )}
       </div>
