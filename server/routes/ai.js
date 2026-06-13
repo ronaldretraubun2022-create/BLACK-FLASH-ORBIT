@@ -5,7 +5,10 @@ const supabaseDatabase = require("../lib/supabase");
 const { buildOrbitRuntimeContext } = require("../lib/orbitRuntimeContext");
 const { handleOrbitCommand } = require("../lib/orbitCommands");
 const { buildOrbitKnowledgeContext } = require("../lib/orbitKnowledge");
-const { buildOrbitMemoryContext } = require("../lib/orbitMemory");
+const {
+  buildOrbitMemoryContext,
+  containsSensitiveData,
+} = require("../lib/orbitMemory");
 
 const router = express.Router();
 
@@ -510,6 +513,16 @@ function validateAiChatBody(body) {
   };
 }
 
+function hasSensitiveAiInput({ history, message, systemPrompt }) {
+  const historyContent = (Array.isArray(history) ? history : []).map(
+    (item) => item?.content,
+  );
+
+  return [message, systemPrompt, ...historyContent].some((value) =>
+    containsSensitiveData(value),
+  );
+}
+
 function normalizeChatHistoryRow(row) {
   const role = String(row?.role || "").trim();
   const content = String(row?.content || "").trim();
@@ -709,6 +722,14 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
     const authenticatedUser = req.user;
     requestContext = validateAiChatBody(req.body);
     const { history, message, model, sessionId, systemPrompt } = requestContext;
+
+    if (hasSensitiveAiInput(requestContext)) {
+      throw createHttpError(
+        "Prompt mengandung data sensitif dan tidak dikirim ke AI.",
+        400,
+        "ai_sensitive_input_rejected",
+      );
+    }
 
     const orbitCommandResponse = handleOrbitCommand(message);
 
