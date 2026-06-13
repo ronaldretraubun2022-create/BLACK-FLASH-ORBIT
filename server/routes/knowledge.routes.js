@@ -117,6 +117,21 @@ function getUploadExtension(file) {
   return path.extname(file?.originalname || "").toLowerCase();
 }
 
+function logUploadExtractionWarning(file) {
+  console.warn("[ORBIT Knowledge Upload] extraction failed", {
+    extension: getUploadExtension(file) || "unknown",
+    size: file?.size || 0,
+  });
+}
+
+function createUploadExtractionError() {
+  return createHttpError(
+    "Gagal memproses dokumen upload.",
+    400,
+    "knowledge_upload_parse_failed",
+  );
+}
+
 function createUploadTitle(file, fallbackTitle) {
   const cleanTitle = normalizeText(fallbackTitle);
 
@@ -147,18 +162,33 @@ async function extractUploadedText(file) {
   }
 
   if (extension === ".txt" || extension === ".md") {
-    return file.buffer.toString("utf8");
+    try {
+      return file.buffer.toString("utf8");
+    } catch {
+      logUploadExtractionWarning(file);
+      throw createUploadExtractionError();
+    }
   }
 
   if (extension === ".pdf") {
-    const parsedPdf = await pdfParse(file.buffer);
+    try {
+      const parsedPdf = await pdfParse(file.buffer);
 
-    return parsedPdf.text || "";
+      return parsedPdf.text || "";
+    } catch {
+      logUploadExtractionWarning(file);
+      throw createUploadExtractionError();
+    }
   }
 
-  const parsedDocx = await mammoth.extractRawText({ buffer: file.buffer });
+  try {
+    const parsedDocx = await mammoth.extractRawText({ buffer: file.buffer });
 
-  return parsedDocx.value || "";
+    return parsedDocx.value || "";
+  } catch {
+    logUploadExtractionWarning(file);
+    throw createUploadExtractionError();
+  }
 }
 
 function createUploadMetadata(file) {
