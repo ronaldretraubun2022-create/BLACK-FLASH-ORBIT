@@ -25,6 +25,8 @@ const isProduction = NODE_ENV === "production";
 const localDevelopmentOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:3000",
 ];
 
 function normalizeCorsOrigin(origin) {
@@ -60,9 +62,45 @@ function uniqueValues(values) {
   );
 }
 
+function isDevelopmentHostname(hostname) {
+  const cleanHostname = String(hostname || "").toLowerCase();
+  const parts = cleanHostname.split(".").map((part) => Number(part));
+
+  if (cleanHostname === "localhost" || cleanHostname === "127.0.0.1") {
+    return true;
+  }
+
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    return false;
+  }
+
+  const [first, second] = parts;
+
+  return (
+    first === 10 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isDevelopmentCorsOrigin(origin) {
+  if (isProduction) return false;
+
+  try {
+    const url = new URL(origin);
+
+    return (
+      ["http:", "https:"].includes(url.protocol) &&
+      isDevelopmentHostname(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 const configuredCorsOrigins = [
   ...parseCorsOrigins(process.env.CORS_ALLOWED_ORIGINS),
-  ...parseCorsOrigins(process.env.CORS_ORIGIN),
+  ...(isProduction ? [] : parseCorsOrigins(process.env.CORS_ORIGIN)),
 ];
 
 const allowedOrigins = [
@@ -72,8 +110,6 @@ const allowedOrigins = [
 
 const localDevelopmentResourceOrigins = [
   ...localDevelopmentOrigins,
-  "http://127.0.0.1:5173",
-  "http://127.0.0.1:3000",
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,
 ];
@@ -219,7 +255,10 @@ app.use(
 
       const cleanOrigin = normalizeCorsOrigin(origin);
 
-      if (allowedOrigins.includes(cleanOrigin)) {
+      if (
+        allowedOrigins.includes(cleanOrigin) ||
+        isDevelopmentCorsOrigin(cleanOrigin)
+      ) {
         return callback(null, true);
       }
 

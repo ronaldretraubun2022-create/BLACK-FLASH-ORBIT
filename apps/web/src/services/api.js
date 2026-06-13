@@ -3,6 +3,7 @@ import { normalizePromptCategory } from "../data/promptCategories";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_WINDOW_MS = 60000;
+const LOCAL_DEV_API_PORT = "5000";
 const LOCAL_DEV_API_BASE_URL = "http://localhost:5000/api";
 const API_BASE_URL = normalizeApiBaseUrl(getConfiguredApiBaseUrl());
 
@@ -246,44 +247,86 @@ function normalizeApiBaseUrl(value) {
     const url = new URL(cleanValue);
     const pathname = url.pathname.replace(/\/+$/, "");
 
-    url.pathname = pathname && pathname !== "/" ? pathname : "/api";
+    url.pathname = normalizeApiPath(
+      pathname && pathname !== "/" ? pathname : "/api",
+    );
 
     return url.toString().replace(/\/+$/, "");
   }
 
-  return cleanValue;
+  return normalizeApiPath(cleanValue);
 }
 
 function getRuntimeApiBaseUrl() {
-  if (API_BASE_URL === "/api" && isLocalFrontendOrigin()) {
-    return LOCAL_DEV_API_BASE_URL;
+  if (API_BASE_URL === "/api" && isDevelopmentFrontendOrigin()) {
+    return getDevelopmentApiBaseUrl();
   }
 
   return API_BASE_URL;
 }
 
-function isLocalFrontendOrigin() {
+function getDevelopmentApiBaseUrl() {
+  if (typeof window === "undefined") return LOCAL_DEV_API_BASE_URL;
+
+  const hostname = window.location.hostname;
+
+  if (!isDevelopmentHostname(hostname)) {
+    return LOCAL_DEV_API_BASE_URL;
+  }
+
+  return `http://${hostname}:${LOCAL_DEV_API_PORT}/api`;
+}
+
+function isDevelopmentFrontendOrigin() {
   if (typeof window === "undefined") return false;
 
-  return ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  return isDevelopmentHostname(window.location.hostname);
+}
+
+function isDevelopmentHostname(hostname) {
+  const cleanHostname = String(hostname || "").toLowerCase();
+  const parts = cleanHostname.split(".").map((part) => Number(part));
+
+  if (cleanHostname === "localhost" || cleanHostname === "127.0.0.1") {
+    return true;
+  }
+
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    return false;
+  }
+
+  const [first, second] = parts;
+
+  return (
+    first === 10 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
 }
 
 function getApiPathSuffix(cleanPath) {
-  if (cleanPath === "/api") return "";
-  if (cleanPath.startsWith("/api/")) return cleanPath.slice(4);
+  const normalizedPath = normalizeApiPath(cleanPath);
 
-  return cleanPath;
+  if (normalizedPath === "/api") return "";
+  if (normalizedPath.startsWith("/api/")) return normalizedPath.slice(4);
+
+  return normalizedPath;
 }
 
 function joinApiUrl(baseUrl, pathSuffix) {
-  const cleanBaseUrl = String(baseUrl || "/api").replace(/\/+$/, "") || "/api";
+  const cleanBaseUrl =
+    normalizeApiPath(String(baseUrl || "/api").replace(/\/+$/, "")) || "/api";
   const cleanPathSuffix = String(pathSuffix || "");
 
   if (!cleanPathSuffix) return cleanBaseUrl;
 
-  return `${cleanBaseUrl}${
+  return normalizeApiPath(`${cleanBaseUrl}${
     cleanPathSuffix.startsWith("/") ? cleanPathSuffix : `/${cleanPathSuffix}`
-  }`;
+  }`);
+}
+
+function normalizeApiPath(value) {
+  return String(value || "").replace(/\/api(?:\/api)+(?=\/|$)/gi, "/api");
 }
 
 function getPrintableRequestUrl(requestUrl) {
