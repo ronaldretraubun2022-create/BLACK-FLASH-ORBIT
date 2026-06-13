@@ -38,6 +38,28 @@ function parseCorsOrigins(value) {
     .filter((origin) => origin && origin !== "*");
 }
 
+function parseUrlOrigins(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .map((item) => {
+      if (!item || item === "*") return "";
+
+      try {
+        return new URL(item).origin;
+      } catch {
+        return "";
+      }
+    })
+    .filter(Boolean);
+}
+
+function uniqueValues(values) {
+  return values.filter(
+    (value, index, source) => value && source.indexOf(value) === index,
+  );
+}
+
 const configuredCorsOrigins = [
   ...parseCorsOrigins(process.env.CORS_ALLOWED_ORIGINS),
   ...parseCorsOrigins(process.env.CORS_ORIGIN),
@@ -47,6 +69,78 @@ const allowedOrigins = [
   ...(isProduction ? [] : localDevelopmentOrigins),
   ...configuredCorsOrigins,
 ].filter((origin, index, origins) => origins.indexOf(origin) === index);
+
+const localDevelopmentResourceOrigins = [
+  ...localDevelopmentOrigins,
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:3000",
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
+];
+
+const localDevelopmentConnectOrigins = [
+  ...localDevelopmentResourceOrigins,
+  "ws://localhost:5173",
+  "ws://127.0.0.1:5173",
+  "ws://localhost:3000",
+  "ws://127.0.0.1:3000",
+  `ws://localhost:${PORT}`,
+  `ws://127.0.0.1:${PORT}`,
+];
+
+function getExternalConnectSources() {
+  return uniqueValues([
+    ...parseUrlOrigins(process.env.SUPABASE_URL),
+    ...parseUrlOrigins(process.env.VITE_SUPABASE_URL),
+    ...parseUrlOrigins(process.env.VITE_API_BASE_URL),
+    ...parseUrlOrigins(process.env.OPENROUTER_BASE_URL),
+    "https://*.supabase.co",
+    "wss://*.supabase.co",
+    "https://openrouter.ai",
+    "https://*.openrouter.ai",
+  ]);
+}
+
+function getHelmetOptions() {
+  const developmentResourceSources = isProduction
+    ? []
+    : uniqueValues(localDevelopmentResourceOrigins);
+  const developmentConnectSources = isProduction
+    ? []
+    : uniqueValues(localDevelopmentConnectOrigins);
+
+  return {
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: [
+          "'self'",
+          ...developmentResourceSources,
+          ...(isProduction ? [] : ["'unsafe-inline'", "'unsafe-eval'"]),
+        ],
+        styleSrc: ["'self'", "'unsafe-inline'", ...developmentResourceSources],
+        imgSrc: ["'self'", "data:", "blob:", ...developmentResourceSources],
+        connectSrc: [
+          "'self'",
+          ...getExternalConnectSources(),
+          ...developmentConnectSources,
+        ],
+        fontSrc: ["'self'", "data:", ...developmentResourceSources],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+    crossOriginResourcePolicy: {
+      policy: isProduction ? "same-origin" : "cross-origin",
+    },
+    referrerPolicy: {
+      policy: "strict-origin-when-cross-origin",
+    },
+    xContentTypeOptions: true,
+  };
+}
 
 function requireRouteHandler(routeName, handler) {
   if (typeof handler !== "function") {
@@ -111,12 +205,7 @@ if (NODE_ENV !== "test") {
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
-app.use(
-  helmet({
-    crossOriginResourcePolicy: false,
-    contentSecurityPolicy: false,
-  }),
-);
+app.use(helmet(getHelmetOptions()));
 
 app.use(compression());
 
