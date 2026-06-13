@@ -15,9 +15,44 @@ const {
 
 const router = express.Router();
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+const MAX_EXTRACTED_TEXT_LENGTH = 50000;
+const UPLOAD_EXTRACTION_ERROR_MESSAGE = "Gagal memproses dokumen upload.";
 const SUPPORTED_UPLOAD_EXTENSIONS = new Set([".txt", ".md", ".pdf", ".docx"]);
+const SUPPORTED_UPLOAD_MIME_TYPES = {
+  ".docx": new Set([
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ]),
+  ".md": new Set(["text/markdown", "text/plain", "application/octet-stream"]),
+  ".pdf": new Set(["application/pdf"]),
+  ".txt": new Set(["text/plain"]),
+};
+
+function getFileExtension(filename) {
+  return path.extname(filename || "").toLowerCase();
+}
+
+function getFileMimeType(file) {
+  return String(file?.mimetype || "").toLowerCase();
+}
+
+function isSupportedUploadFile(file) {
+  const extension = getFileExtension(file?.originalname);
+  const mimeType = getFileMimeType(file);
+
+  return (
+    SUPPORTED_UPLOAD_EXTENSIONS.has(extension) &&
+    SUPPORTED_UPLOAD_MIME_TYPES[extension]?.has(mimeType)
+  );
+}
 
 const upload = multer({
+  fileFilter(_req, file, callback) {
+    if (isSupportedUploadFile(file)) {
+      return callback(null, true);
+    }
+
+    return callback(new multer.MulterError("LIMIT_UNEXPECTED_FILE", "file"));
+  },
   limits: {
     fileSize: MAX_UPLOAD_BYTES,
     files: 1,
@@ -114,19 +149,20 @@ function sendError(res, error, fallbackMessage) {
 }
 
 function getUploadExtension(file) {
-  return path.extname(file?.originalname || "").toLowerCase();
+  return getFileExtension(file?.originalname);
 }
 
 function logUploadExtractionWarning(file) {
   console.warn("[ORBIT Knowledge Upload] extraction failed", {
     extension: getUploadExtension(file) || "unknown",
+    mimeType: getFileMimeType(file) || "unknown",
     size: file?.size || 0,
   });
 }
 
 function createUploadExtractionError() {
   return createHttpError(
-    "Gagal memproses dokumen upload.",
+    UPLOAD_EXTRACTION_ERROR_MESSAGE,
     400,
     "knowledge_upload_parse_failed",
   );
@@ -140,6 +176,79 @@ function createUploadTitle(file, fallbackTitle) {
   const originalName = normalizeText(file?.originalname, "Uploaded Document");
 
   return originalName.replace(/\.[^.]+$/, "") || "Uploaded Document";
+}
+
+function hasBytes(buffer, bytes) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < bytes.length) return false;
+
+  return bytes.every((byte, index) => buffer[index] === byte);
+}
+
+function hasNullByte(buffer) {
+  const sample = buffer.subarray(0, 512);
+
+  return sample.includes(0);
+}
+
+function looksLikeScript(buffer) {
+  const prefix = buffer
+    .subarray(0, 512)
+    .toString("utf8")
+    .replace(/^\uFEFF/, "")
+    .trimStart();
+
+  return (
+    /^mz\b/i.test(prefix) ||
+    /^#!\/(?:bin|usr\/bin)\//i.test(prefix) ||
+    /^#!\s*(?:\/usr\/bin\/env\s+)?(?:\/bin\/)?(?:sh|bash|zsh|dash|ksh|node|python|perl|ruby|php|pwsh|powershell)\b/i.test(
+      prefix,
+    ) ||
+    /^@echo\s+off\b/i.test(prefix) ||
+    /^(?:powershell(?:\.exe)?|pwsh(?:\.exe)?|cmd(?:\.exe)?|set-executionpolicy|start-process|invoke-expression|iex)\b/i.test(
+      prefix,
+    ) ||
+    /^<script\b/i.test(prefix)
+  );
+}
+
+function validateUploadContent(file, extension) {
+  const buffer = file?.buffer;
+
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    throw createUploadExtractionError();
+  }
+
+  if (extension === ".pdf" && !hasBytes(buffer, [0x25, 0x50, 0x44, 0x46])) {
+    logUploadExtractionWarning(file);
+    throw createUploadExtractionError();
+  }
+
+  if (extension === ".docx" && !hasBytes(buffer, [0x50, 0x4b])) {
+    logUploadExtractionWarning(file);
+    throw createUploadExtractionError();
+  }
+
+  if (extension === ".txt" || extension === ".md") {
+    const hasExecutableHeader =
+      hasBytes(buffer, [0x4d, 0x5a]) ||
+      hasBytes(buffer, [0x7f, 0x45, 0x4c, 0x46]);
+
+    if (hasExecutableHeader || hasNullByte(buffer) || looksLikeScript(buffer)) {
+      logUploadExtractionWarning(file);
+      throw createUploadExtractionError();
+    }
+  }
+}
+
+function capExtractedText(value) {
+  return String(value || "").slice(0, MAX_EXTRACTED_TEXT_LENGTH);
+}
+
+function isRejectedUploadContent(content) {
+  return (
+    !content ||
+    String(content).trim() === UPLOAD_EXTRACTION_ERROR_MESSAGE
+  );
 }
 
 async function extractUploadedText(file) {
@@ -161,9 +270,11 @@ async function extractUploadedText(file) {
     );
   }
 
+  validateUploadContent(file, extension);
+
   if (extension === ".txt" || extension === ".md") {
     try {
-      return file.buffer.toString("utf8");
+      return capExtractedText(file.buffer.toString("utf8"));
     } catch {
       logUploadExtractionWarning(file);
       throw createUploadExtractionError();
@@ -174,7 +285,7 @@ async function extractUploadedText(file) {
     try {
       const parsedPdf = await pdfParse(file.buffer);
 
-      return parsedPdf.text || "";
+      return capExtractedText(parsedPdf.text);
     } catch {
       logUploadExtractionWarning(file);
       throw createUploadExtractionError();
@@ -184,7 +295,7 @@ async function extractUploadedText(file) {
   try {
     const parsedDocx = await mammoth.extractRawText({ buffer: file.buffer });
 
-    return parsedDocx.value || "";
+    return capExtractedText(parsedDocx.value);
   } catch {
     logUploadExtractionWarning(file);
     throw createUploadExtractionError();
@@ -244,6 +355,15 @@ router.post("/documents/upload", parseKnowledgeUpload, async (req, res) => {
   try {
     const userEmail = getAuthenticatedEmail(req);
     const content = await extractUploadedText(req.file);
+
+    if (isRejectedUploadContent(content)) {
+      return sendError(
+        res,
+        createUploadExtractionError(),
+        "Gagal upload knowledge document.",
+      );
+    }
+
     const document = await createKnowledgeDocument({
       db: supabaseDatabase,
       input: {
