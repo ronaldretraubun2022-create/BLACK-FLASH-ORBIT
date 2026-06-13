@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   BrainCircuit,
   CheckCircle2,
+  Clock3,
   FileUp,
+  Loader2,
   Plus,
   RefreshCcw,
   Search,
@@ -28,17 +31,46 @@ import {
   uploadKnowledgeDocument,
 } from "../services/knowledgeService";
 
+const UPLOAD_STATUS_META = {
+  error: {
+    className: "border-rose-300/25 bg-rose-300/10 text-rose-100",
+    label: "Error",
+  },
+  processing: {
+    className: "border-amber-300/25 bg-amber-300/10 text-amber-100",
+    label: "Processing",
+  },
+  ready: {
+    className: "border-slate-300/15 bg-white/[0.04] text-slate-300",
+    label: "Ready",
+  },
+  success: {
+    className: "border-emerald-300/25 bg-emerald-300/10 text-emerald-100",
+    label: "Success",
+  },
+  uploading: {
+    className: "border-cyan-300/25 bg-cyan-300/10 text-cyan-100",
+    label: "Uploading",
+  },
+};
+
 function createUploadItem(file) {
   const validationError = getKnowledgeFileValidation(file);
 
   return {
     file,
-    id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+    id: `${file.name}-${file.size}-${file.lastModified}-${createQueueId()}`,
     message: validationError || "Ready to upload.",
     progress: 0,
     status: validationError ? "error" : "ready",
     validationError,
   };
+}
+
+function createQueueId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 export function KnowledgeBase() {
@@ -84,6 +116,27 @@ export function KnowledgeBase() {
   const failedUploads = uploadItems.filter(
     (item) => item.status === "error",
   ).length;
+  const uploadStats = useMemo(() => {
+    const totalProgress = uploadItems.reduce(
+      (total, item) => total + Number(item.progress || 0),
+      0,
+    );
+
+    return {
+      active: uploadItems.filter((item) =>
+        ["uploading", "processing"].includes(item.status),
+      ).length,
+      failed: failedUploads,
+      invalid: uploadItems.filter((item) => item.validationError).length,
+      progress:
+        uploadItems.length === 0
+          ? 0
+          : Math.round(totalProgress / uploadItems.length),
+      ready: uploadableItems.length,
+      success: successfulUploads,
+      total: uploadItems.length,
+    };
+  }, [failedUploads, successfulUploads, uploadItems, uploadableItems.length]);
 
   async function loadDocuments({ silent = false } = {}) {
     if (!silent) {
@@ -138,6 +191,11 @@ export function KnowledgeBase() {
     ]);
   }
 
+  function handleFileInputChange(event) {
+    addUploadFiles(event.target.files);
+    event.target.value = "";
+  }
+
   function removeUploadItem(itemId) {
     setUploadItems((currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
@@ -164,6 +222,11 @@ export function KnowledgeBase() {
     );
   }
 
+  function handleDragEnter(event) {
+    event.preventDefault();
+    setIsDragActive(true);
+  }
+
   function handleDragOver(event) {
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
@@ -172,7 +235,10 @@ export function KnowledgeBase() {
 
   function handleDragLeave(event) {
     event.preventDefault();
-    setIsDragActive(false);
+
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      setIsDragActive(false);
+    }
   }
 
   function handleDrop(event) {
@@ -430,6 +496,7 @@ export function KnowledgeBase() {
                 ? "border-cyan-300/60 bg-cyan-300/10"
                 : "border-white/15 bg-black/20 hover:border-cyan-300/35"
             }`}
+            onDragEnter={handleDragEnter}
             onDragLeave={handleDragLeave}
             onDragOver={handleDragOver}
             onDrop={handleDrop}>
@@ -448,7 +515,7 @@ export function KnowledgeBase() {
                 className="sr-only"
                 key={uploadInputKey}
                 multiple
-                onChange={(event) => addUploadFiles(event.target.files)}
+                onChange={handleFileInputChange}
                 type="file"
               />
             </label>
@@ -477,9 +544,11 @@ export function KnowledgeBase() {
             </label>
 
             <UploadQueue
+              isUploading={isUploading}
               items={uploadItems}
               onClear={clearUploadItems}
               onRemove={removeUploadItem}
+              stats={uploadStats}
             />
 
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -543,7 +612,7 @@ export function KnowledgeBase() {
   );
 }
 
-function UploadQueue({ items, onClear, onRemove }) {
+function UploadQueue({ isUploading, items, onClear, onRemove, stats }) {
   if (items.length === 0) {
     return (
       <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-xs leading-5 text-slate-500">
@@ -559,16 +628,65 @@ function UploadQueue({ items, onClear, onRemove }) {
           Upload Queue
         </span>
         <button
-          className="text-xs font-black text-slate-500 transition hover:text-cyan-100"
+          className="text-xs font-black text-slate-500 transition hover:text-cyan-100 disabled:opacity-40"
+          disabled={isUploading}
           onClick={onClear}
           type="button">
           Clear all
         </button>
       </div>
+      <QueueProgressSummary stats={stats} />
       {items.map((item) => (
         <UploadQueueItem item={item} key={item.id} onRemove={onRemove} />
       ))}
     </div>
+  );
+}
+
+function QueueProgressSummary({ stats }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-black text-slate-300">
+          Queue Progress
+        </span>
+        <span className="text-xs font-black text-cyan-100">
+          {stats.progress}%
+        </span>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+        <div
+          className="h-full rounded-full bg-cyan-300 transition-all"
+          style={{ width: `${stats.progress}%` }}
+        />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <QueueStatBadge label="Total" value={stats.total} />
+        <QueueStatBadge label="Ready" value={stats.ready} />
+        <QueueStatBadge label="Active" value={stats.active} />
+        <QueueStatBadge label="Success" tone="success" value={stats.success} />
+        <QueueStatBadge label="Error" tone="error" value={stats.failed} />
+        {stats.invalid > 0 && (
+          <QueueStatBadge label="Invalid" tone="error" value={stats.invalid} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function QueueStatBadge({ label, tone = "default", value }) {
+  const toneClass =
+    tone === "success"
+      ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-100"
+      : tone === "error"
+        ? "border-rose-300/20 bg-rose-300/10 text-rose-100"
+        : "border-white/10 bg-white/[0.04] text-slate-300";
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${toneClass}`}>
+      {label}: {value}
+    </span>
   );
 }
 
@@ -614,13 +732,33 @@ function UploadQueueItem({ item, onRemove }) {
         <span className={`text-xs font-bold ${getStatusColor(item.status)}`}>
           {item.message}
         </span>
-        <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase text-slate-500">
-          {item.status === "success" && <CheckCircle2 size={13} />}
-          {item.status}
-        </span>
+        <UploadStatusBadge status={item.status} />
       </div>
     </article>
   );
+}
+
+function UploadStatusBadge({ status }) {
+  const meta = UPLOAD_STATUS_META[status] || UPLOAD_STATUS_META.ready;
+
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${meta.className}`}>
+      <UploadStatusIcon status={status} />
+      {meta.label}
+    </span>
+  );
+}
+
+function UploadStatusIcon({ status }) {
+  if (status === "success") return <CheckCircle2 size={12} />;
+  if (status === "error") return <AlertTriangle size={12} />;
+  if (status === "uploading") {
+    return <Loader2 className="animate-spin" size={12} />;
+  }
+  if (status === "processing") return <Clock3 size={12} />;
+
+  return <FileUp size={12} />;
 }
 
 function getStatusColor(status) {
