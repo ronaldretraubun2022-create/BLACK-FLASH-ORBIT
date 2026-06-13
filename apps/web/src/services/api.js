@@ -454,7 +454,13 @@ export const api = {
     );
   },
 
-  async createPrompt({ category, content, isFavorite = false, title }) {
+  async createPrompt({
+    category,
+    content,
+    isFavorite = false,
+    isPinned = false,
+    title,
+  }) {
     return request("/api/v1/prompts", {
       headers: await getAuthenticatedHeaders(),
       method: "POST",
@@ -463,11 +469,19 @@ export const api = {
         content,
         category: normalizePromptCategory(category),
         isFavorite,
+        isPinned,
       }),
     });
   },
 
-  async updatePrompt({ category, content, id, isFavorite = false, title }) {
+  async updatePrompt({
+    category,
+    content,
+    id,
+    isFavorite = false,
+    isPinned = false,
+    title,
+  }) {
     return request(`/api/v1/prompts/${id}`, {
       method: "PUT",
       headers: await getAuthenticatedHeaders(),
@@ -476,6 +490,7 @@ export const api = {
         content,
         category: normalizePromptCategory(category),
         isFavorite,
+        isPinned,
       }),
     });
   },
@@ -487,6 +502,44 @@ export const api = {
       body: JSON.stringify({
         isFavorite,
       }),
+    });
+  },
+
+  async togglePromptPin({ id, isPinned }) {
+    return request(`/api/v1/prompts/${id}/pin`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify({
+        isPinned,
+      }),
+    });
+  },
+
+  async duplicatePrompt(id) {
+    return request(`/api/v1/prompts/${id}/duplicate`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async markPromptUsed(id) {
+    return request(`/api/v1/prompts/${id}/use`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async exportPrompts() {
+    return request("/api/v1/prompts/export", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async importPrompts(payload) {
+    return request("/api/v1/prompts/import", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
     });
   },
 

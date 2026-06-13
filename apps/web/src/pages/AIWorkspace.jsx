@@ -105,6 +105,16 @@ export function AIWorkspace() {
         .includes(query),
     );
   }, [sessionSearchQuery, sessions]);
+  const latestUserPrompt = useMemo(() => {
+    return [...(messages || [])]
+      .reverse()
+      .find((message) => message?.role === "user")?.content || "";
+  }, [messages]);
+  const latestAssistantResponse = useMemo(() => {
+    return [...(messages || [])]
+      .reverse()
+      .find((message) => message?.role === "assistant")?.content || "";
+  }, [messages]);
   const loadSessionMessages = useCallback(async (sessionId) => {
     const targetSessionId = String(sessionId || "").trim();
     const requestId = messageLoadRequestIdRef.current + 1;
@@ -1041,7 +1051,11 @@ export function AIWorkspace() {
             </div>
           </section>
 
-          <PromptLibrary onSelectTemplate={useLibraryPrompt} />
+          <PromptLibrary
+            currentPrompt={prompt || latestUserPrompt}
+            latestAssistantResponse={latestAssistantResponse}
+            onSelectTemplate={useLibraryPrompt}
+          />
 
           <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
             <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
