@@ -1,7 +1,8 @@
 function notFound(req, res, next) {
-  const error = new Error(`Route tidak ditemukan: ${req.originalUrl}`);
-  res.status(404);
-  next(error);
+  res.status(404).json({
+    success: false,
+    message: "Route tidak ditemukan.",
+  });
 }
 
 module.exports = notFound;
