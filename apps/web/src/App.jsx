@@ -1,19 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Activity,
   Archive,
-  BarChart3,
   Bell,
   Bot,
   CheckCircle2,
   ChevronRight,
-  CircleDot,
-  CloudLightning,
-  Command,
   FileText,
   Gauge,
   Image,
-  LayoutDashboard,
   Lock,
   Mic2,
   Newspaper,
@@ -24,6 +18,8 @@ import {
   UploadCloud,
   Zap,
 } from "lucide-react";
+import { CommandCenterHero } from "./components/CommandCenterHero.jsx";
+import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 
 const releaseState = [
   { label: "Branch", value: "sprint3-dev", tone: "text-amber-300" },
@@ -358,57 +354,7 @@ function App() {
   return (
     <main className="min-h-screen bg-[#050506] text-zinc-100">
       <div className="orbit-shell">
-        <aside className="orbit-sidebar">
-          <div className="flex items-center gap-3">
-            <div className="grid size-11 place-items-center rounded-lg border border-amber-300/30 bg-amber-300 text-black shadow-[0_0_40px_rgba(217,173,87,0.22)]">
-              <Command size={22} />
-            </div>
-            <div>
-              <p className="orbit-kicker">BLACK FLASH</p>
-              <h1 className="text-lg font-black leading-tight text-white">
-                ORBIT
-              </h1>
-            </div>
-          </div>
-
-          <nav className="mt-8 grid gap-2">
-            {[
-              ["Command", LayoutDashboard],
-              ["AI Newsroom", Bot],
-              ["Media Intel", CloudLightning],
-              ["Security", ShieldCheck],
-              ["Archive", Archive],
-            ].map(([label, Icon], index) => (
-              <a
-                className={`orbit-nav-link ${index === 0 ? "is-active" : ""}`}
-                href={`#${label.toLowerCase().replace(/\s+/g, "-")}`}
-                key={label}
-              >
-                <Icon size={18} />
-                <span>{label}</span>
-              </a>
-            ))}
-          </nav>
-
-          <div className="mt-auto rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            <p className="orbit-kicker">Release Channel</p>
-            <div className="mt-3 grid gap-3">
-              {releaseState.map((item) => (
-                <div
-                  className="flex items-center justify-between gap-3"
-                  key={item.label}
-                >
-                  <span className="text-xs font-semibold text-zinc-500">
-                    {item.label}
-                  </span>
-                  <span className={`text-xs font-black ${item.tone}`}>
-                    {item.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </aside>
+        <CommandCenterSidebar releaseState={releaseState} />
 
         <section className="min-w-0 flex-1">
           <header className="orbit-topbar">
@@ -430,79 +376,15 @@ function App() {
 
           <div className="grid gap-4 p-4 md:p-6 xl:grid-cols-[minmax(0,1fr)_360px]">
             <section className="grid gap-4">
-              <section className="orbit-hero" id="command">
-                <div className="relative z-10 max-w-3xl">
-                  <div className="mb-5 flex flex-wrap items-center gap-2">
-                    {releaseState.map((item) => (
-                      <span className="orbit-release-pill" key={item.label}>
-                        {item.label}:{" "}
-                        <strong className={item.tone}>{item.value}</strong>
-                      </span>
-                    ))}
-                    <span className="orbit-release-pill">
-                      Telemetry:{" "}
-                      <strong
-                        className={
-                          telemetryError
-                            ? "text-rose-300"
-                            : isTelemetryLoading
-                              ? "text-amber-300"
-                              : isUsingFallback
-                                ? "text-amber-300"
-                              : "text-emerald-300"
-                        }
-                      >
-                        {telemetryError
-                          ? "fallback"
-                          : isTelemetryLoading
-                            ? "syncing"
-                            : isUsingFallback
-                              ? "fallback"
-                            : "live"}
-                      </strong>
-                    </span>
-                  </div>
-
-                  <p className="orbit-kicker">AI Media Production Suite</p>
-                  <h3 className="mt-3 max-w-2xl text-4xl font-black leading-[1.02] text-white md:text-6xl">
-                    BLACK FLASH ORBIT Command Center
-                  </h3>
-                  <p className="mt-5 max-w-xl text-sm leading-7 text-zinc-300 md:text-base">
-                    Dashboard operasional untuk redaksi AI, transkrip audio,
-                    arsip berita, kontrol admin, dan produksi multimedia
-                    modern.
-                  </p>
-                  <p className="mt-3 text-xs font-bold uppercase text-zinc-500">
-                    {telemetryStatusText}
-                  </p>
-
-                  <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-                    <button className="orbit-primary-button">
-                      <Activity size={18} />
-                      Start Editorial Pulse
-                    </button>
-                    <button className="orbit-secondary-button">
-                      <BarChart3 size={18} />
-                      View System Report
-                    </button>
-                  </div>
-                </div>
-
-                <div className="orbit-radar" aria-label="Live newsroom radar">
-                  <span className="orbit-radar-ring" />
-                  <span className="orbit-radar-ring delay-1" />
-                  <span className="orbit-radar-ring delay-2" />
-                  <div className="relative z-10 text-center">
-                    <CircleDot className="mx-auto text-emerald-300" size={44} />
-                    <p className="mt-4 text-xs font-black uppercase text-amber-200">
-                      {formatMetric(healthStatus, "Live Signal")}
-                    </p>
-                    <p className="mt-1 text-3xl font-black text-white">
-                      {uptimeLabel}
-                    </p>
-                  </div>
-                </div>
-              </section>
+              <CommandCenterHero
+                healthStatus={formatMetric(healthStatus, "Live Signal")}
+                isTelemetryLoading={isTelemetryLoading}
+                isUsingFallback={isUsingFallback}
+                releaseState={releaseState}
+                telemetryError={telemetryError}
+                telemetryStatusText={telemetryStatusText}
+                uptimeLabel={uptimeLabel}
+              />
 
               <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {dashboardStats.map((stat) => {
