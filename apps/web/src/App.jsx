@@ -19,6 +19,8 @@ import {
   Zap,
 } from "lucide-react";
 import { CommandCenterHero } from "./components/CommandCenterHero.jsx";
+import { CommandCenterActivityPanel } from "./components/CommandCenterActivityPanel.jsx";
+import { CommandCenterMetricGrid } from "./components/CommandCenterMetricGrid.jsx";
 import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 
 const releaseState = [
@@ -386,32 +388,7 @@ function App() {
                 uptimeLabel={uptimeLabel}
               />
 
-              <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                {dashboardStats.map((stat) => {
-                  const Icon = stat.icon;
-
-                  return (
-                    <article className="orbit-card" key={stat.label}>
-                      <div className="flex items-center justify-between gap-4">
-                        <div>
-                          <p className="text-xs font-bold uppercase text-zinc-500">
-                            {stat.label}
-                          </p>
-                          <p className="mt-3 text-3xl font-black text-white">
-                            {stat.value}
-                          </p>
-                        </div>
-                        <div className="grid size-11 place-items-center rounded-lg bg-amber-300/10 text-amber-200">
-                          <Icon size={21} />
-                        </div>
-                      </div>
-                      <p className="mt-3 text-sm text-zinc-400">
-                        {stat.detail}
-                      </p>
-                    </article>
-                  );
-                })}
-              </section>
+              <CommandCenterMetricGrid dashboardStats={dashboardStats} />
 
               <section className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
                 <article className="orbit-panel" id="ai-newsroom">
@@ -492,65 +469,10 @@ function App() {
               </section>
             </section>
 
-            <aside className="grid content-start gap-4">
-              <section className="orbit-panel" id="security">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="orbit-kicker">Secure Operations</p>
-                    <h3 className="mt-2 text-2xl font-black text-white">
-                      Admin guardrail
-                    </h3>
-                  </div>
-                  <ShieldCheck className="text-emerald-300" size={28} />
-                </div>
-
-                <div className="mt-6 grid gap-3">
-                  {securityItems.map((signal) => {
-                    const Icon = signal.icon;
-
-                    return (
-                      <div className="orbit-signal" key={signal.label}>
-                        <div className="flex items-center gap-3">
-                          <Icon size={18} />
-                          <span>{signal.label}</span>
-                        </div>
-                        <strong>{signal.value}</strong>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-
-              <section className="orbit-panel" id="archive">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="orbit-kicker">Live Brief</p>
-                    <h3 className="mt-2 text-2xl font-black text-white">
-                      Editorial queue
-                    </h3>
-                  </div>
-                  <FileText className="text-amber-200" size={27} />
-                </div>
-
-                <div className="mt-6 grid gap-3">
-                  {liveBriefItems.map((brief) => (
-                    <article className="orbit-brief" key={brief.title}>
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-xs font-black uppercase text-amber-200">
-                          {brief.desk}
-                        </p>
-                        <span className="text-xs font-bold text-zinc-500">
-                          {brief.time}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-zinc-300">
-                        {brief.title}
-                      </p>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            </aside>
+            <CommandCenterActivityPanel
+              liveBriefItems={liveBriefItems}
+              securityItems={securityItems}
+            />
           </div>
         </section>
       </div>
