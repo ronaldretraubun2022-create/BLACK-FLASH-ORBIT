@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { UserMenu } from "./components/auth/UserMenu.jsx";
 import { useProfile } from "./hooks/useProfile.js";
+import { AINewsroom } from "./pages/AINewsroom.jsx";
 import {
   Archive,
   Bell,
@@ -468,6 +469,7 @@ function App() {
 
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<CommandCenterDashboard />} />
+        <Route path="/ai-newsroom" element={<AINewsroom />} />
       </Route>
 
       <Route path="*" element={<Navigate replace to="/" />} />

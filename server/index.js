@@ -11,6 +11,7 @@ const rateLimit = require("express-rate-limit");
 
 const apiRoutes = require("./routes");
 const aiRoutes = require("./routes/ai");
+const newsroomRoutes = require("./routes/newsroom.js");
 const auditRoutes = require("./routes/audit.routes");
 const backupRoutes = require("./routes/backup");
 const chatRoutes = require("./routes/chat.routes");
@@ -325,6 +326,10 @@ app.use(
 );
 
 app.use("/api/v1", requireRouteHandler("routes/index.js", apiRoutes));
+app.use(
+  "/api/ai/newsroom",
+  requireRouteHandler("routes/newsroom.js", newsroomRoutes),
+);
 app.use("/api/ai", requireRouteHandler("routes/ai.js", aiRoutes));
 app.use("/api/backup", requireRouteHandler("routes/backup.js", backupRoutes));
 app.use("/api/chat", requireRouteHandler("routes/chat.routes.js", chatRoutes));

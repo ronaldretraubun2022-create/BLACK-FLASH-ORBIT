@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "concurrently -k -n server,web -c blue,magenta \"npm:server\" \"npm:web\"",
     "start": "node server/index.js",
-    "test": "node -e \"console.log('No tests configured yet')\"",
+    "test": "npm run test:newsroom",
+    "test:newsroom": "node tests/newsroom.guard.test.js",
     "server": "nodemon server/index.js",
     "web": "vite",
     "build": "node scripts/build-web.mjs",

@@ -6,15 +6,16 @@ import {
   LayoutDashboard,
   ShieldCheck,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
 
 const navigationItems = [
-  ["Command", LayoutDashboard, "all"],
-  ["AI Newsroom", Bot, "all"],
-  ["Media Intel", CloudLightning, "all"],
-  ["Security", ShieldCheck, "admin"],
-  ["Archive", Archive, "all"],
+  ["Command", LayoutDashboard, "all", "#command"],
+  ["AI Newsroom", Bot, "all", "/ai-newsroom"],
+  ["Media Intel", CloudLightning, "all", "#media-intel"],
+  ["Security", ShieldCheck, "admin", "#security"],
+  ["Archive", Archive, "all", "#archive"],
 ];
 
 function isAdminRole(role) {
@@ -49,15 +50,29 @@ export function CommandCenterSidebar({ releaseState = [], userRole = "user" }) {
       </div>
 
       <nav className="mt-6 grid gap-2">
-        {visibleNavigationItems.map(([label, Icon], index) => (
-          <a
-            className={`orbit-nav-link ${index === 0 ? "is-active" : ""}`}
-            href={`#${label.toLowerCase().replace(/\s+/g, "-")}`}
-            key={label}>
-            <Icon size={18} />
-            <span>{label}</span>
-          </a>
-        ))}
+        {visibleNavigationItems.map(([label, Icon, , target], index) => {
+          const className = `orbit-nav-link ${index === 0 ? "is-active" : ""}`;
+          const content = (
+            <>
+              <Icon size={18} />
+              <span>{label}</span>
+            </>
+          );
+
+          if (target.startsWith("/")) {
+            return (
+              <Link className={className} key={label} to={target}>
+                {content}
+              </Link>
+            );
+          }
+
+          return (
+            <a className={className} href={target} key={label}>
+              {content}
+            </a>
+          );
+        })}
       </nav>
 
       <div className="mt-auto rounded-lg border border-white/10 bg-white/[0.04] p-4">
