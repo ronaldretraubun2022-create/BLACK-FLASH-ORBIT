@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Archive,
@@ -23,6 +24,8 @@ import {
   UploadCloud,
   Zap,
 } from "lucide-react";
+
+const DASHBOARD_STATUS_ENDPOINT = "/api/v1/dashboard/status";
 
 const releaseState = [
   { label: "Branch", value: "sprint3-dev", tone: "text-amber-300" },
@@ -115,7 +118,198 @@ const securitySignals = [
   { label: "Audit Trail", value: "enabled", icon: CheckCircle2 },
 ];
 
+function formatMetric(value, fallback) {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+
+  if (typeof value === "number") {
+    return new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: value % 1 === 0 ? 0 : 1,
+    }).format(value);
+  }
+
+  return String(value);
+}
+
+function formatUptime(seconds, fallback = "live") {
+  if (!Number.isFinite(seconds)) return fallback;
+
+  const totalMinutes = Math.max(0, Math.floor(seconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+
+  return `${Math.max(0, Math.floor(seconds))}s`;
+}
+
+function formatTime(value, fallback) {
+  if (!value) return fallback;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+
+  return date.toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Jayapura",
+  });
+}
+
+function getObjectValues(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+
+  return Object.values(value);
+}
+
 function App() {
+  const [dashboardData, setDashboardData] = useState(null);
+  const [isTelemetryLoading, setIsTelemetryLoading] = useState(true);
+  const [telemetryError, setTelemetryError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadDashboardTelemetry() {
+      setIsTelemetryLoading(true);
+      setTelemetryError("");
+
+      try {
+        const response = await fetch(DASHBOARD_STATUS_ENDPOINT, {
+          headers: {
+            Accept: "application/json",
+          },
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Telemetry request failed: ${response.status}`);
+        }
+
+        const payload = await response.json();
+        setDashboardData(payload?.data ?? null);
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+
+        setTelemetryError(error?.message || "Telemetry unavailable");
+        setDashboardData(null);
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsTelemetryLoading(false);
+        }
+      }
+    }
+
+    loadDashboardTelemetry();
+
+    return () => controller.abort();
+  }, []);
+
+  const {
+    automationItems,
+    dashboardStats,
+    healthStatus,
+    liveBriefItems,
+    projectFlow,
+    securityItems,
+    uptimeLabel,
+  } = useMemo(() => {
+    const metrics = dashboardData?.metrics ?? {};
+    const health = dashboardData?.health ?? {};
+    const projects = Array.isArray(dashboardData?.projects)
+      ? dashboardData.projects
+      : [];
+    const security = dashboardData?.security ?? {};
+    const activity = Array.isArray(dashboardData?.activity)
+      ? dashboardData.activity
+      : [];
+    const automation = getObjectValues(dashboardData?.automation);
+    const projectCount = metrics?.projects ?? projects.length;
+    const reportCount = metrics?.reports;
+    const uptime = metrics?.uptime ?? health?.uptime;
+    const computedUptime = formatUptime(uptime, commandStats[3].value);
+    const computedHealth = health?.status || commandStats[3].value;
+
+    return {
+      automationItems: automation,
+      dashboardStats: [
+        {
+          ...commandStats[0],
+          value: formatMetric(reportCount, commandStats[0].value),
+          detail:
+            reportCount === null || reportCount === undefined
+              ? commandStats[0].detail
+              : "reports tracked",
+        },
+        {
+          ...commandStats[1],
+          value: formatMetric(projectCount, commandStats[1].value),
+          detail:
+            projectCount === null || projectCount === undefined
+              ? commandStats[1].detail
+              : "projects synced",
+        },
+        {
+          ...commandStats[2],
+          value: formatMetric(activity.length || null, commandStats[2].value),
+          detail: activity.length ? "activity signals" : commandStats[2].detail,
+        },
+        {
+          ...commandStats[3],
+          value: formatMetric(computedHealth, commandStats[3].value),
+          detail: `uptime ${computedUptime}`,
+        },
+      ],
+      healthStatus: computedHealth,
+      liveBriefItems: activity.length
+        ? activity.slice(0, 3).map((item, index) => ({
+            desk: `${item?.type || "system"} desk`,
+            title: item?.message || liveBriefs[index]?.title || "Telemetry event",
+            time: formatTime(item?.time, liveBriefs[index]?.time || "live"),
+          }))
+        : liveBriefs,
+      projectFlow: projects.length
+        ? projects.slice(0, 4).map((project, index) => ({
+            title: project?.name || newsroomFlow[index]?.title || "ORBIT Module",
+            body: `${project?.type || "workspace"} status ${project?.status || "READY"} - last scan ${project?.lastScan || "live"}`,
+            icon: newsroomFlow[index]?.icon || Archive,
+            progress: `${formatMetric(project?.score, newsroomFlow[index]?.progress?.replace("%", "") || "100")}%`,
+          }))
+        : newsroomFlow,
+      securityItems: [
+        {
+          ...securitySignals[0],
+          value: security?.helmet || securitySignals[0].value,
+        },
+        {
+          ...securitySignals[1],
+          value: security?.rateLimit || securitySignals[1].value,
+        },
+        {
+          ...securitySignals[2],
+          value:
+            security?.securityScore !== null &&
+            security?.securityScore !== undefined
+              ? `${security.securityScore}/100`
+              : securitySignals[2].value,
+        },
+      ],
+      uptimeLabel: computedUptime,
+    };
+  }, [dashboardData]);
+
+  const moduleItems = useMemo(() => {
+    if (!automationItems.length) return aiModules;
+
+    return automationItems.slice(0, 4).map((engine, index) => ({
+      name: engine?.name || aiModules[index]?.name || "Automation Engine",
+      icon: aiModules[index]?.icon || Bot,
+      state: engine?.status || aiModules[index]?.state || "Ready",
+    }));
+  }, [automationItems]);
+
   return (
     <main className="min-h-screen bg-[#050506] text-zinc-100">
       <div className="orbit-shell">
@@ -200,6 +394,24 @@ function App() {
                         <strong className={item.tone}>{item.value}</strong>
                       </span>
                     ))}
+                    <span className="orbit-release-pill">
+                      Telemetry:{" "}
+                      <strong
+                        className={
+                          telemetryError
+                            ? "text-rose-300"
+                            : isTelemetryLoading
+                              ? "text-amber-300"
+                              : "text-emerald-300"
+                        }
+                      >
+                        {telemetryError
+                          ? "fallback"
+                          : isTelemetryLoading
+                            ? "syncing"
+                            : "live"}
+                      </strong>
+                    </span>
                   </div>
 
                   <p className="orbit-kicker">AI Media Production Suite</p>
@@ -211,6 +423,13 @@ function App() {
                     arsip berita, kontrol admin, dan produksi multimedia
                     modern.
                   </p>
+                  {(isTelemetryLoading || telemetryError) && (
+                    <p className="mt-3 text-xs font-bold uppercase text-zinc-500">
+                      {isTelemetryLoading
+                        ? "Loading backend telemetry..."
+                        : `Backend telemetry unavailable: ${telemetryError}`}
+                    </p>
+                  )}
 
                   <div className="mt-7 flex flex-col gap-3 sm:flex-row">
                     <button className="orbit-primary-button">
@@ -231,15 +450,17 @@ function App() {
                   <div className="relative z-10 text-center">
                     <CircleDot className="mx-auto text-emerald-300" size={44} />
                     <p className="mt-4 text-xs font-black uppercase text-amber-200">
-                      Live Signal
+                      {formatMetric(healthStatus, "Live Signal")}
                     </p>
-                    <p className="mt-1 text-3xl font-black text-white">24/7</p>
+                    <p className="mt-1 text-3xl font-black text-white">
+                      {uptimeLabel}
+                    </p>
                   </div>
                 </div>
               </section>
 
               <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                {commandStats.map((stat) => {
+                {dashboardStats.map((stat) => {
                   const Icon = stat.icon;
 
                   return (
@@ -278,7 +499,7 @@ function App() {
                   </div>
 
                   <div className="mt-6 grid gap-3">
-                    {newsroomFlow.map((step) => {
+                    {projectFlow.map((step) => {
                       const Icon = step.icon;
 
                       return (
@@ -317,7 +538,7 @@ function App() {
                   </div>
 
                   <div className="mt-6 grid gap-3">
-                    {aiModules.map((module) => {
+                    {moduleItems.map((module) => {
                       const Icon = module.icon;
 
                       return (
@@ -357,7 +578,7 @@ function App() {
                 </div>
 
                 <div className="mt-6 grid gap-3">
-                  {securitySignals.map((signal) => {
+                  {securityItems.map((signal) => {
                     const Icon = signal.icon;
 
                     return (
@@ -385,7 +606,7 @@ function App() {
                 </div>
 
                 <div className="mt-6 grid gap-3">
-                  {liveBriefs.map((brief) => (
+                  {liveBriefItems.map((brief) => (
                     <article className="orbit-brief" key={brief.title}>
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-xs font-black uppercase text-amber-200">
