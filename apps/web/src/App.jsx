@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { UserMenu } from "./components/auth/UserMenu.jsx";
 import {
   Archive,
   Bell,
@@ -390,9 +391,12 @@ function CommandCenterDashboard() {
               <button aria-label="Search" className="orbit-icon-button">
                 <Search size={18} />
               </button>
+
               <button aria-label="Notifications" className="orbit-icon-button">
                 <Bell size={18} />
               </button>
+
+              <UserMenu />
             </div>
           </header>
 
