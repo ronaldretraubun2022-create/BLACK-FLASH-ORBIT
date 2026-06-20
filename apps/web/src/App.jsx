@@ -22,11 +22,12 @@ import { CommandCenterActivityPanel } from "./components/CommandCenterActivityPa
 import { CommandCenterMetricGrid } from "./components/CommandCenterMetricGrid.jsx";
 import { CommandCenterOperationsPanel } from "./components/CommandCenterOperationsPanel.jsx";
 import { CommandCenterReleasePanel } from "./components/CommandCenterReleasePanel.jsx";
+import { CommandCenterSecurityPanel } from "./components/CommandCenterSecurityPanel.jsx";
 import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 
 const releaseState = [
   { label: "Branch", value: "sprint3-dev", tone: "text-amber-300" },
-  { label: "Tag", value: "v0.4.9-stable", tone: "text-white" },
+  { label: "Tag", value: "v0.5.1-stable", tone: "text-white" },
   { label: "Status", value: "clean", tone: "text-emerald-300" },
 ];
 
@@ -418,10 +419,17 @@ function App() {
               />
             </section>
 
-            <CommandCenterActivityPanel
-              liveBriefItems={liveBriefItems}
-              securityItems={securityItems}
-            />
+            <aside className="grid gap-4">
+              <CommandCenterActivityPanel
+                liveBriefItems={liveBriefItems}
+                securityItems={securityItems}
+              />
+
+              <CommandCenterSecurityPanel
+                securityItems={securityItems}
+                healthStatus={formatMetric(healthStatus, "READY")}
+              />
+            </aside>
           </div>
         </section>
       </div>

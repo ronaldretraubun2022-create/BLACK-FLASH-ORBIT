@@ -1,5 +1,7 @@
 require("dotenv").config();
 
+const http = require("node:http");
+
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -19,18 +21,23 @@ const errorHandler = require("./middleware/errorHandler");
 const app = express();
 
 const PORT = Number(process.env.PORT) || 5000;
+const HOST = process.env.HOST || "0.0.0.0";
 const NODE_ENV = process.env.NODE_ENV || "development";
 const isProduction = NODE_ENV === "production";
 
 const localDevelopmentOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
+  "http://localhost:5000",
   "http://127.0.0.1:5173",
   "http://127.0.0.1:3000",
+  "http://127.0.0.1:5000",
 ];
 
 function normalizeCorsOrigin(origin) {
-  return String(origin || "").trim().replace(/\/+$/, "");
+  return String(origin || "")
+    .trim()
+    .replace(/\/+$/, "");
 }
 
 function parseCorsOrigins(value) {
@@ -103,18 +110,18 @@ const configuredCorsOrigins = [
   ...(isProduction ? [] : parseCorsOrigins(process.env.CORS_ORIGIN)),
 ];
 
-const allowedOrigins = [
+const allowedOrigins = uniqueValues([
   ...(isProduction ? [] : localDevelopmentOrigins),
   ...configuredCorsOrigins,
-].filter((origin, index, origins) => origins.indexOf(origin) === index);
+]);
 
-const localDevelopmentResourceOrigins = [
+const localDevelopmentResourceOrigins = uniqueValues([
   ...localDevelopmentOrigins,
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,
-];
+]);
 
-const localDevelopmentConnectOrigins = [
+const localDevelopmentConnectOrigins = uniqueValues([
   ...localDevelopmentResourceOrigins,
   "ws://localhost:5173",
   "ws://127.0.0.1:5173",
@@ -122,7 +129,7 @@ const localDevelopmentConnectOrigins = [
   "ws://127.0.0.1:3000",
   `ws://localhost:${PORT}`,
   `ws://127.0.0.1:${PORT}`,
-];
+]);
 
 function getExternalConnectSources() {
   return uniqueValues([
@@ -193,6 +200,7 @@ function healthPayload() {
     service: "BLACK FLASH ORBIT API",
     version: "1.0.0",
     environment: NODE_ENV,
+    port: PORT,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
   };
@@ -242,9 +250,7 @@ app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
 app.use(helmet(getHelmetOptions()));
-
 app.use(compression());
-
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
@@ -273,7 +279,16 @@ if (NODE_ENV !== "test") {
 }
 
 app.get(
-  ["/", "/api", "/health", "/healthz", "/api/health", "/api/healthz"],
+  [
+    "/",
+    "/api",
+    "/health",
+    "/healthz",
+    "/api/health",
+    "/api/healthz",
+    "/api/v1/health",
+    "/api/v1/healthz",
+  ],
   (req, res) => {
     res.status(200).json(healthPayload());
   },
@@ -293,6 +308,7 @@ const apiLimiter = rateLimit({
       "/api/health",
       "/api/healthz",
       "/api/v1/health",
+      "/api/v1/healthz",
       "/api/v1/system",
     ].includes(req.path),
   message: {
@@ -320,12 +336,45 @@ app.use(
 app.use(notFound);
 app.use(errorHandler);
 
-if (require.main === module) {
-  app.listen(PORT, () => {
+function startServer() {
+  const server = http.createServer(app);
+
+  server.listen(PORT, HOST, () => {
+    const publicHost = HOST === "0.0.0.0" ? "localhost" : HOST;
+
     console.log(
-      `BLACK FLASH ORBIT server berjalan di http://localhost:${PORT}`,
+      `BLACK FLASH ORBIT server berjalan di http://${publicHost}:${PORT}`,
     );
   });
+
+  server.on("error", (error) => {
+    console.error("[ORBIT Server Error]", error);
+    process.exit(1);
+  });
+
+  function shutdown(signal) {
+    console.log(`\n[ORBIT] Received ${signal}. Shutting down server...`);
+
+    server.close((error) => {
+      if (error) {
+        console.error("[ORBIT Shutdown Error]", error);
+        process.exit(1);
+      }
+
+      process.exit(0);
+    });
+  }
+
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+
+  return server;
+}
+
+if (require.main === module) {
+  startServer();
 }
 
 module.exports = app;
+module.exports.startServer = startServer;
+module.exports.healthPayload = healthPayload;
