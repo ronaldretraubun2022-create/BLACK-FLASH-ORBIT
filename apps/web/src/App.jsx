@@ -25,8 +25,6 @@ import {
   Zap,
 } from "lucide-react";
 
-const DASHBOARD_STATUS_ENDPOINT = "/api/v1/dashboard/status";
-
 const releaseState = [
   { label: "Branch", value: "sprint3-dev", tone: "text-amber-300" },
   { label: "Tag", value: "v0.4.1-stable", tone: "text-white" },
@@ -177,7 +175,7 @@ function App() {
       setTelemetryError("");
 
       try {
-        const response = await fetch(DASHBOARD_STATUS_ENDPOINT, {
+        const response = await fetch("/api/v1/dashboard/status", {
           headers: {
             Accept: "application/json",
           },
@@ -206,6 +204,27 @@ function App() {
 
     return () => controller.abort();
   }, []);
+
+  const hasTelemetryData = Boolean(dashboardData);
+  const hasActivity =
+    Array.isArray(dashboardData?.activity) && dashboardData.activity.length > 0;
+  const hasProjects =
+    Array.isArray(dashboardData?.projects) && dashboardData.projects.length > 0;
+  const hasAutomation = getObjectValues(dashboardData?.automation).length > 0;
+  const isTelemetryConnected =
+    hasTelemetryData && !isTelemetryLoading && !telemetryError;
+  const isUsingFallback =
+    isTelemetryLoading ||
+    Boolean(telemetryError) ||
+    !hasTelemetryData ||
+    (isTelemetryConnected && (!hasActivity || !hasProjects || !hasAutomation));
+  const telemetryStatusText = isTelemetryLoading
+    ? "Syncing backend telemetry..."
+    : telemetryError
+      ? `Telemetry fallback active: ${telemetryError}`
+      : isTelemetryConnected && !hasActivity && !hasProjects && !hasAutomation
+        ? "Telemetry connected, waiting for records."
+        : "Backend telemetry live.";
 
   const {
     automationItems,
@@ -263,20 +282,37 @@ function App() {
         },
       ],
       healthStatus: computedHealth,
-      liveBriefItems: activity.length
+      liveBriefItems: hasActivity
         ? activity.slice(0, 3).map((item, index) => ({
             desk: `${item?.type || "system"} desk`,
             title: item?.message || liveBriefs[index]?.title || "Telemetry event",
             time: formatTime(item?.time, liveBriefs[index]?.time || "live"),
           }))
+        : isTelemetryConnected
+          ? [
+              {
+                desk: "Telemetry",
+                title: "No live activity yet.",
+                time: "live",
+              },
+            ]
         : liveBriefs,
-      projectFlow: projects.length
+      projectFlow: hasProjects
         ? projects.slice(0, 4).map((project, index) => ({
             title: project?.name || newsroomFlow[index]?.title || "ORBIT Module",
             body: `${project?.type || "workspace"} status ${project?.status || "READY"} - last scan ${project?.lastScan || "live"}`,
             icon: newsroomFlow[index]?.icon || Archive,
             progress: `${formatMetric(project?.score, newsroomFlow[index]?.progress?.replace("%", "") || "100")}%`,
           }))
+        : isTelemetryConnected
+          ? [
+              {
+                title: "No synced projects yet.",
+                body: "Backend telemetry connected. Project records belum tersedia.",
+                icon: Archive,
+                progress: "0%",
+              },
+            ]
         : newsroomFlow,
       securityItems: [
         {
@@ -298,7 +334,7 @@ function App() {
       ],
       uptimeLabel: computedUptime,
     };
-  }, [dashboardData]);
+  }, [dashboardData, hasActivity, hasProjects, isTelemetryConnected]);
 
   const moduleItems = useMemo(() => {
     if (!automationItems.length) return aiModules;
@@ -309,6 +345,15 @@ function App() {
       state: engine?.status || aiModules[index]?.state || "Ready",
     }));
   }, [automationItems]);
+
+  const displayedModuleItems = useMemo(() => {
+    if (hasAutomation) return moduleItems;
+
+    return moduleItems.map((module) => ({
+      ...module,
+      state: isTelemetryConnected ? "fallback-ready" : module.state,
+    }));
+  }, [hasAutomation, isTelemetryConnected, moduleItems]);
 
   return (
     <main className="min-h-screen bg-[#050506] text-zinc-100">
@@ -402,6 +447,8 @@ function App() {
                             ? "text-rose-300"
                             : isTelemetryLoading
                               ? "text-amber-300"
+                              : isUsingFallback
+                                ? "text-amber-300"
                               : "text-emerald-300"
                         }
                       >
@@ -409,6 +456,8 @@ function App() {
                           ? "fallback"
                           : isTelemetryLoading
                             ? "syncing"
+                            : isUsingFallback
+                              ? "fallback"
                             : "live"}
                       </strong>
                     </span>
@@ -423,13 +472,9 @@ function App() {
                     arsip berita, kontrol admin, dan produksi multimedia
                     modern.
                   </p>
-                  {(isTelemetryLoading || telemetryError) && (
-                    <p className="mt-3 text-xs font-bold uppercase text-zinc-500">
-                      {isTelemetryLoading
-                        ? "Loading backend telemetry..."
-                        : `Backend telemetry unavailable: ${telemetryError}`}
-                    </p>
-                  )}
+                  <p className="mt-3 text-xs font-bold uppercase text-zinc-500">
+                    {telemetryStatusText}
+                  </p>
 
                   <div className="mt-7 flex flex-col gap-3 sm:flex-row">
                     <button className="orbit-primary-button">
@@ -538,7 +583,7 @@ function App() {
                   </div>
 
                   <div className="mt-6 grid gap-3">
-                    {moduleItems.map((module) => {
+                    {displayedModuleItems.map((module) => {
                       const Icon = module.icon;
 
                       return (
