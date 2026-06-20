@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 import {
   Archive,
   Bell,
@@ -17,6 +18,10 @@ import {
   UploadCloud,
   Zap,
 } from "lucide-react";
+import {
+  ProtectedRoute,
+  PublicOnlyRoute,
+} from "./components/auth/ProtectedRoute.jsx";
 import { CommandCenterHero } from "./components/CommandCenterHero.jsx";
 import { CommandCenterActivityPanel } from "./components/CommandCenterActivityPanel.jsx";
 import { CommandCenterMetricGrid } from "./components/CommandCenterMetricGrid.jsx";
@@ -24,11 +29,13 @@ import { CommandCenterOperationsPanel } from "./components/CommandCenterOperatio
 import { CommandCenterReleasePanel } from "./components/CommandCenterReleasePanel.jsx";
 import { CommandCenterSecurityPanel } from "./components/CommandCenterSecurityPanel.jsx";
 import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
+import { Login } from "./pages/Login.jsx";
+import { Register } from "./pages/Register.jsx";
 
 const releaseState = [
   { label: "Branch", value: "sprint3-dev", tone: "text-amber-300" },
-  { label: "Tag", value: "v0.5.1-stable", tone: "text-white" },
-  { label: "Status", value: "clean", tone: "text-emerald-300" },
+  { label: "Tag", value: "v0.5.3-auth", tone: "text-white" },
+  { label: "Status", value: "protected", tone: "text-emerald-300" },
 ];
 
 const commandStats = [
@@ -50,12 +57,7 @@ const commandStats = [
     detail: "indexed files",
     icon: Image,
   },
-  {
-    label: "Ops Health",
-    value: "99.9",
-    detail: "uptime score",
-    icon: Gauge,
-  },
+  { label: "Ops Health", value: "99.9", detail: "uptime score", icon: Gauge },
 ];
 
 const newsroomFlow = [
@@ -117,9 +119,7 @@ const securitySignals = [
 ];
 
 function formatMetric(value, fallback) {
-  if (value === null || value === undefined || value === "") {
-    return fallback;
-  }
+  if (value === null || value === undefined || value === "") return fallback;
 
   if (typeof value === "number") {
     return new Intl.NumberFormat("en-US", {
@@ -158,11 +158,10 @@ function formatTime(value, fallback) {
 
 function getObjectValues(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-
   return Object.values(value);
 }
 
-function App() {
+function CommandCenterDashboard() {
   const [dashboardData, setDashboardData] = useState(null);
   const [isTelemetryLoading, setIsTelemetryLoading] = useState(true);
   const [telemetryError, setTelemetryError] = useState("");
@@ -176,9 +175,7 @@ function App() {
 
       try {
         const response = await fetch("/api/v1/dashboard/status", {
-          headers: {
-            Accept: "application/json",
-          },
+          headers: { Accept: "application/json" },
           signal: controller.signal,
         });
 
@@ -218,6 +215,7 @@ function App() {
     Boolean(telemetryError) ||
     !hasTelemetryData ||
     (isTelemetryConnected && (!hasActivity || !hasProjects || !hasAutomation));
+
   const telemetryStatusText = isTelemetryLoading
     ? "Syncing backend telemetry..."
     : telemetryError
@@ -225,6 +223,7 @@ function App() {
       : isTelemetryConnected && !hasActivity && !hasProjects && !hasAutomation
         ? "Telemetry connected, waiting for records."
         : "Backend telemetry live.";
+
   const telemetryLabels = [
     {
       label: "Runtime",
@@ -386,6 +385,7 @@ function App() {
                 Newsroom Intelligence Dashboard
               </h2>
             </div>
+
             <div className="flex items-center gap-2">
               <button aria-label="Search" className="orbit-icon-button">
                 <Search size={18} />
@@ -410,7 +410,6 @@ function App() {
               />
 
               <CommandCenterMetricGrid dashboardStats={dashboardStats} />
-
               <CommandCenterReleasePanel />
 
               <CommandCenterOperationsPanel
@@ -434,6 +433,23 @@ function App() {
         </section>
       </div>
     </main>
+  );
+}
+
+function App() {
+  return (
+    <Routes>
+      <Route element={<PublicOnlyRoute />}>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+      </Route>
+
+      <Route element={<ProtectedRoute />}>
+        <Route path="/" element={<CommandCenterDashboard />} />
+      </Route>
+
+      <Route path="*" element={<Navigate replace to="/" />} />
+    </Routes>
   );
 }
 
