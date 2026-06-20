@@ -6,6 +6,7 @@ export function CommandCenterHero({
   isUsingFallback,
   releaseState,
   telemetryError,
+  telemetryLabels,
   telemetryStatusText,
   uptimeLabel,
 }) {
@@ -53,6 +54,13 @@ export function CommandCenterHero({
         <p className="mt-3 text-xs font-bold uppercase text-zinc-500">
           {telemetryStatusText}
         </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {telemetryLabels.map((item) => (
+            <span className="orbit-release-pill" key={item.label}>
+              {item.label}: <strong className="text-zinc-200">{item.value}</strong>
+            </span>
+          ))}
+        </div>
 
         <div className="mt-7 flex flex-col gap-3 sm:flex-row">
           <button className="orbit-primary-button">

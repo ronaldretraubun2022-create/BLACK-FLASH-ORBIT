@@ -223,6 +223,22 @@ function App() {
       : isTelemetryConnected && !hasActivity && !hasProjects && !hasAutomation
         ? "Telemetry connected, waiting for records."
         : "Backend telemetry live.";
+  const telemetryLabels = [
+    {
+      label: "Runtime",
+      value: dashboardData?.system?.runtime || "not reported",
+    },
+    {
+      label: "Health Module",
+      value: dashboardData?.health?.module || "not reported",
+    },
+    {
+      label: "Metrics Timestamp",
+      value: dashboardData?.metrics?.timestamp
+        ? formatTime(dashboardData.metrics.timestamp, "not reported")
+        : "not reported",
+    },
+  ];
 
   const {
     automationItems,
@@ -384,6 +400,7 @@ function App() {
                 isUsingFallback={isUsingFallback}
                 releaseState={releaseState}
                 telemetryError={telemetryError}
+                telemetryLabels={telemetryLabels}
                 telemetryStatusText={telemetryStatusText}
                 uptimeLabel={uptimeLabel}
               />
