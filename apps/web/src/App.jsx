@@ -21,11 +21,12 @@ import { CommandCenterHero } from "./components/CommandCenterHero.jsx";
 import { CommandCenterActivityPanel } from "./components/CommandCenterActivityPanel.jsx";
 import { CommandCenterMetricGrid } from "./components/CommandCenterMetricGrid.jsx";
 import { CommandCenterOperationsPanel } from "./components/CommandCenterOperationsPanel.jsx";
+import { CommandCenterReleasePanel } from "./components/CommandCenterReleasePanel.jsx";
 import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 
 const releaseState = [
   { label: "Branch", value: "sprint3-dev", tone: "text-amber-300" },
-  { label: "Tag", value: "v0.4.1-stable", tone: "text-white" },
+  { label: "Tag", value: "v0.4.9-stable", tone: "text-white" },
   { label: "Status", value: "clean", tone: "text-emerald-300" },
 ];
 
@@ -299,7 +300,8 @@ function App() {
       liveBriefItems: hasActivity
         ? activity.slice(0, 3).map((item, index) => ({
             desk: `${item?.type || "system"} desk`,
-            title: item?.message || liveBriefs[index]?.title || "Telemetry event",
+            title:
+              item?.message || liveBriefs[index]?.title || "Telemetry event",
             time: formatTime(item?.time, liveBriefs[index]?.time || "live"),
           }))
         : isTelemetryConnected
@@ -310,10 +312,11 @@ function App() {
                 time: "live",
               },
             ]
-        : liveBriefs,
+          : liveBriefs,
       projectFlow: hasProjects
         ? projects.slice(0, 4).map((project, index) => ({
-            title: project?.name || newsroomFlow[index]?.title || "ORBIT Module",
+            title:
+              project?.name || newsroomFlow[index]?.title || "ORBIT Module",
             body: `${project?.type || "workspace"} status ${project?.status || "READY"} - last scan ${project?.lastScan || "live"}`,
             icon: newsroomFlow[index]?.icon || Archive,
             progress: `${formatMetric(project?.score, newsroomFlow[index]?.progress?.replace("%", "") || "100")}%`,
@@ -327,7 +330,7 @@ function App() {
                 progress: "0%",
               },
             ]
-        : newsroomFlow,
+          : newsroomFlow,
       securityItems: [
         {
           ...securitySignals[0],
@@ -406,6 +409,8 @@ function App() {
               />
 
               <CommandCenterMetricGrid dashboardStats={dashboardStats} />
+
+              <CommandCenterReleasePanel />
 
               <CommandCenterOperationsPanel
                 displayedModuleItems={displayedModuleItems}
