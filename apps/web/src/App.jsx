@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { UserMenu } from "./components/auth/UserMenu.jsx";
+import { useProfile } from "./hooks/useProfile.js";
 import {
   Archive,
   Bell,
@@ -33,10 +34,12 @@ import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 import { Login } from "./pages/Login.jsx";
 import { Register } from "./pages/Register.jsx";
 
+const adminRoles = new Set(["admin", "owner", "super_admin"]);
+
 const releaseState = [
   { label: "Branch", value: "sprint3-dev", tone: "text-amber-300" },
-  { label: "Tag", value: "v0.5.3-auth", tone: "text-white" },
-  { label: "Status", value: "protected", tone: "text-emerald-300" },
+  { label: "Tag", value: "v0.5.5-rbac", tone: "text-white" },
+  { label: "Status", value: "role-guarded", tone: "text-emerald-300" },
 ];
 
 const commandStats = [
@@ -58,7 +61,12 @@ const commandStats = [
     detail: "indexed files",
     icon: Image,
   },
-  { label: "Ops Health", value: "99.9", detail: "uptime score", icon: Gauge },
+  {
+    label: "Ops Health",
+    value: "99.9",
+    detail: "uptime score",
+    icon: Gauge,
+  },
 ];
 
 const newsroomFlow = [
@@ -119,6 +127,10 @@ const securitySignals = [
   { label: "Audit Trail", value: "enabled", icon: CheckCircle2 },
 ];
 
+function isAdminRole(role) {
+  return adminRoles.has(String(role || "").toLowerCase());
+}
+
 function formatMetric(value, fallback) {
   if (value === null || value === undefined || value === "") return fallback;
 
@@ -166,6 +178,10 @@ function CommandCenterDashboard() {
   const [dashboardData, setDashboardData] = useState(null);
   const [isTelemetryLoading, setIsTelemetryLoading] = useState(true);
   const [telemetryError, setTelemetryError] = useState("");
+  const { profile } = useProfile();
+
+  const userRole = profile?.role || "user";
+  const canAccessSecurity = isAdminRole(userRole);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -376,7 +392,7 @@ function CommandCenterDashboard() {
   return (
     <main className="min-h-screen bg-[#050506] text-zinc-100">
       <div className="orbit-shell">
-        <CommandCenterSidebar releaseState={releaseState} />
+        <CommandCenterSidebar releaseState={releaseState} userRole={userRole} />
 
         <section className="min-w-0 flex-1">
           <header className="orbit-topbar">
@@ -428,10 +444,12 @@ function CommandCenterDashboard() {
                 securityItems={securityItems}
               />
 
-              <CommandCenterSecurityPanel
-                securityItems={securityItems}
-                healthStatus={formatMetric(healthStatus, "READY")}
-              />
+              {canAccessSecurity && (
+                <CommandCenterSecurityPanel
+                  securityItems={securityItems}
+                  healthStatus={formatMetric(healthStatus, "READY")}
+                />
+              )}
             </aside>
           </div>
         </section>
