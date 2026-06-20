@@ -1,6 +1,28 @@
 import { FileText, ShieldCheck } from "lucide-react";
 
-export function CommandCenterActivityPanel({ liveBriefItems, securityItems }) {
+function maskEmail(text = "") {
+  return String(text).replace(
+    /([a-zA-Z0-9._%+-])([a-zA-Z0-9._%+-]*)(@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g,
+    "$1***$3",
+  );
+}
+
+function maskSessionIds(text = "") {
+  return String(text).replace(/\b([0-9a-f]{8})-[0-9a-f-]{27,}\b/gi, "$1...");
+}
+
+function cleanActivityText(text = "") {
+  return maskSessionIds(maskEmail(text))
+    .replace(/\s+/g, " ")
+    .replace("AI chat success:", "AI chat success •")
+    .replace("AI chat failed:", "AI chat failed •")
+    .trim();
+}
+
+export function CommandCenterActivityPanel({
+  liveBriefItems = [],
+  securityItems = [],
+}) {
   return (
     <aside className="grid content-start gap-4">
       <section className="orbit-panel" id="security">
@@ -16,7 +38,7 @@ export function CommandCenterActivityPanel({ liveBriefItems, securityItems }) {
 
         <div className="mt-6 grid gap-3">
           {securityItems.map((signal) => {
-            const Icon = signal.icon;
+            const Icon = signal.icon || ShieldCheck;
 
             return (
               <div className="orbit-signal" key={signal.label}>
@@ -43,18 +65,20 @@ export function CommandCenterActivityPanel({ liveBriefItems, securityItems }) {
         </div>
 
         <div className="mt-6 grid gap-3">
-          {liveBriefItems.map((brief) => (
-            <article className="orbit-brief" key={brief.title}>
+          {liveBriefItems.map((brief, index) => (
+            <article
+              className="orbit-brief"
+              key={`${brief.desk || "brief"}-${brief.time || index}`}>
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs font-black uppercase text-amber-200">
-                  {brief.desk}
+                  {brief.desk || "System"}
                 </p>
                 <span className="text-xs font-bold text-zinc-500">
-                  {brief.time}
+                  {brief.time || "live"}
                 </span>
               </div>
               <p className="mt-2 text-sm leading-6 text-zinc-300">
-                {brief.title}
+                {cleanActivityText(brief.title || "No activity available.")}
               </p>
             </article>
           ))}
