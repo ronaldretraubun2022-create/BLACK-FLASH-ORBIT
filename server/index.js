@@ -16,6 +16,7 @@ const auditRoutes = require("./routes/audit.routes");
 const backupRoutes = require("./routes/backup");
 const chatRoutes = require("./routes/chat.routes");
 const knowledgeRoutes = require("./routes/knowledge.routes");
+const webBuilderRoutes = require("./routes/webBuilder.routes");
 const notFound = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
 
@@ -336,6 +337,10 @@ app.use("/api/chat", requireRouteHandler("routes/chat.routes.js", chatRoutes));
 app.use(
   ["/api/knowledge", "/api/v1/knowledge"],
   requireRouteHandler("routes/knowledge.routes.js", knowledgeRoutes),
+);
+app.use(
+  "/api/v1/web-builder",
+  requireRouteHandler("routes/webBuilder.routes.js", webBuilderRoutes),
 );
 
 app.use(notFound);
