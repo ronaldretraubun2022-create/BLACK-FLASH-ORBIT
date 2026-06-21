@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
+import { recoverStaleRefreshToken } from "../lib/authRecovery";
 import { insertRegisteredUserProfile } from "../services/profile";
 
 const AuthContext = createContext(null);
@@ -23,7 +24,9 @@ export function AuthProvider({ children }) {
           setSession(nextSession);
         }
       })
-      .catch(() => {
+      .catch(async (authError) => {
+        await recoverStaleRefreshToken(authError);
+
         if (isMounted) {
           setSession(null);
         }
@@ -106,7 +109,11 @@ export function AuthProvider({ children }) {
 async function getFreshAuthSession() {
   const { data, error } = await supabase.auth.getSession();
 
-  if (error) throw error;
+  if (error) {
+    if (await recoverStaleRefreshToken(error)) return null;
+
+    throw error;
+  }
 
   const session = data.session;
 
@@ -130,7 +137,11 @@ function shouldRefreshSession(session) {
 async function refreshAuthSession() {
   const { data, error } = await supabase.auth.refreshSession();
 
-  if (error) throw error;
+  if (error) {
+    if (await recoverStaleRefreshToken(error)) return null;
+
+    throw error;
+  }
 
   return data.session ?? null;
 }

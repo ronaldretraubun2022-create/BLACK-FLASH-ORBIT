@@ -1,4 +1,8 @@
 import { supabase } from "../lib/supabase";
+import {
+  createSessionExpiredError,
+  recoverStaleRefreshToken,
+} from "../lib/authRecovery";
 import { normalizePromptCategory } from "../data/promptCategories";
 
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -43,16 +47,20 @@ async function getSupabaseAccessToken() {
     throw new Error("Supabase environment belum dikonfigurasi.");
   }
 
-  let session = await getSessionFromSupabaseAuth();
+  try {
+    let session = await getSessionFromSupabaseAuth();
 
-  if (shouldRefreshSession(session)) {
-    await refreshSupabaseSession();
-    session = await getSessionFromSupabaseAuth();
+    if (shouldRefreshSession(session)) {
+      await refreshSupabaseSession();
+      session = await getSessionFromSupabaseAuth();
+    }
+
+    logFrontendAuthDebug(session);
+
+    return requireAccessToken(session?.access_token);
+  } catch (error) {
+    await throwRecoveredAuthError(error);
   }
-
-  logFrontendAuthDebug(session);
-
-  return requireAccessToken(session?.access_token);
 }
 
 export async function getAuthenticatedHeaders() {
@@ -88,13 +96,23 @@ async function refreshSupabaseSession() {
   const { data, error } = await supabase.auth.refreshSession();
 
   if (error) {
-    throw error;
+    await throwRecoveredAuthError(error);
   }
 
   return data.session ?? null;
 }
 
+async function throwRecoveredAuthError(error) {
+  if (await recoverStaleRefreshToken(error)) {
+    throw createSessionExpiredError();
+  }
+
+  throw error;
+}
+
 function logFrontendAuthDebug(session) {
+  if (import.meta.env.VITE_ENABLE_AUTH_DEBUG !== "true") return;
+
   const accessToken = session?.access_token || "";
 
   console.info("[AI Auth Frontend]", {

@@ -68,7 +68,7 @@ export function CommandCenterActivityPanel({
           {liveBriefItems.map((brief, index) => (
             <article
               className="orbit-brief"
-              key={`${brief.desk || "brief"}-${brief.time || index}`}>
+              key={`${brief.desk || "brief"}-${brief.time || "live"}-${index}`}>
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs font-black uppercase text-amber-200">
                   {brief.desk || "System"}

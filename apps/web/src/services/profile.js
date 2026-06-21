@@ -1,6 +1,4 @@
-import { getAuthenticatedHeaders } from "./api";
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+import { getAuthenticatedHeaders, resolveApiUrl } from "./api";
 
 export function createProfilePayload(user) {
   return {
@@ -13,7 +11,7 @@ export function createProfilePayload(user) {
 export async function ensureUserProfile(user) {
   if (!user) return null;
 
-  const response = await fetch(`${API_BASE_URL}/api/v1/profile`, {
+  const response = await fetch(resolveApiUrl("/v1/profile"), {
     method: "GET",
     headers: {
       Accept: "application/json",
