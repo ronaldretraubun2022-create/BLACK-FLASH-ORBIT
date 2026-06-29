@@ -3,6 +3,8 @@ const {
   normalizeNewsroomDraft,
   hasTemporalReference,
   classifyNewsroomFact,
+  buildEvidenceEngine,
+  formatEvidenceMatrix,
   formatFactClassificationTable,
 } = require("../server/routes/newsroom.js");
 const {
@@ -188,6 +190,46 @@ runTest("formatFactClassificationTable renders required output section", () => {
   assert(table.includes("## Fact Classification Table"));
   assert(table.includes("| Statement | Type | Confidence | Verification | Sources |"));
   assert(table.includes("| Papua Selatan memperoleh penghargaan Rp3 miliar |"));
+});
+
+runTest("formatEvidenceMatrix renders Evidence Matrix", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const matrix = formatEvidenceMatrix(evidence);
+
+  assert(matrix.includes("## Evidence Matrix"));
+  assert(
+    matrix.includes(
+      "| Statement | evidence_found | evidence_missing | evidence_strength | Evidence Score |",
+    ),
+  );
+  assert(matrix.includes("Official Statement"));
+});
+
+runTest("formatEvidenceMatrix renders Evidence Score", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut BPS, angka kemiskinan turun 2 persen berdasarkan data statistik",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const matrix = formatEvidenceMatrix(evidence);
+
+  assert(matrix.includes("## Evidence Score"));
+  assert(/Overall Evidence Score: \d+%/.test(matrix));
+});
+
+runTest("formatEvidenceMatrix renders Missing Evidence recommendations", () => {
+  const fact = classifyNewsroomFact(
+    "Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const matrix = formatEvidenceMatrix(evidence);
+
+  assert(matrix.includes("## Missing Evidence Recommendations"));
+  assert(evidence.evidence_missing.includes("Official Document"));
+  assert(evidence.evidence_missing.includes("Statistical Data"));
+  assert(matrix.includes("Tambahkan dokumen resmi"));
 });
 
 runTest("normalizeOpenRouterModel skips null and empty values", () => {

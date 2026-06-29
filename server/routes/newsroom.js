@@ -21,6 +21,26 @@ const DEFAULT_RECOMMENDED_SOURCES = [
   "Kemendagri",
   "Dokumen Resmi OPD",
 ];
+const EVIDENCE_TYPES = [
+  "Official Document",
+  "Official Statement",
+  "Government Website",
+  "Statistical Data",
+  "Independent Report",
+  "News Media",
+  "Social Media",
+  "User Input",
+];
+const EVIDENCE_TYPE_WEIGHTS = {
+  "Official Document": 30,
+  "Official Statement": 20,
+  "Government Website": 20,
+  "Statistical Data": 20,
+  "Independent Report": 15,
+  "News Media": 10,
+  "Social Media": 5,
+  "User Input": 5,
+};
 const OFFICIAL_SOURCE_KEYWORDS = [
   "bappenas",
   "bappeda",
@@ -338,6 +358,203 @@ function classifyNewsroomFacts(statements, context = {}) {
   );
 }
 
+function detectEvidenceTypes(statement, context = {}) {
+  const text = String(statement || "").toLowerCase();
+  const hints = [
+    statement,
+    context.source,
+    ...(Array.isArray(context.sources) ? context.sources : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+  const found = [];
+
+  if (
+    /(dokumen resmi|peraturan|perda|keputusan|rpjmd|rkpd|renstra|apbd|dokumen)\b/.test(
+      hints,
+    )
+  ) {
+    found.push("Official Document");
+  }
+
+  if (
+    /(menurut|menyatakan|menyampaikan|diumumkan|rilis|siaran pers|keterangan resmi)/.test(
+      hints,
+    ) &&
+    hasOfficialSource(hints, context)
+  ) {
+    found.push("Official Statement");
+  }
+
+  if (
+    /(go\.id|portal pemerintah|website pemerintah|situs resmi|pemprov|kemendagri|bps\.go\.id)/.test(
+      hints,
+    )
+  ) {
+    found.push("Government Website");
+  }
+
+  if (
+    hasNumberLikeClaim(text) &&
+    /(bps|statistik|sensus|data|angka|persen|inflasi|penduduk|kemiskinan|pengangguran)/.test(
+      hints,
+    )
+  ) {
+    found.push("Statistical Data");
+  }
+
+  if (/(laporan independen|lembaga riset|peneliti|universitas|ngo|lsm)/.test(hints)) {
+    found.push("Independent Report");
+  }
+
+  if (/(media|berita|koran|majalah|redaksi|wartawan|jurnalis|\.com\b|\.id\b)/.test(hints)) {
+    found.push("News Media");
+  }
+
+  if (/(facebook|instagram|twitter|x\.com|tiktok|youtube|whatsapp|telegram|media sosial)/.test(hints)) {
+    found.push("Social Media");
+  }
+
+  if (context.userInput === true || isUserProvidedStatement(statement, context)) {
+    found.push("User Input");
+  }
+
+  return EVIDENCE_TYPES.filter((type) => found.includes(type));
+}
+
+function getMissingEvidenceTypes(statement, foundTypes, classification) {
+  const missing = [];
+  const hasOfficialEvidence =
+    foundTypes.includes("Official Document") ||
+    foundTypes.includes("Official Statement") ||
+    foundTypes.includes("Government Website");
+
+  if (!hasOfficialEvidence) {
+    missing.push("Official Document", "Official Statement");
+  }
+
+  if (hasNumberLikeClaim(statement) && !foundTypes.includes("Statistical Data")) {
+    missing.push("Statistical Data");
+  }
+
+  if (
+    ["INFERENCE", "ASSUMPTION", "CONFLICTING"].includes(classification) &&
+    !foundTypes.includes("Independent Report") &&
+    !foundTypes.includes("News Media")
+  ) {
+    missing.push("Independent Report", "News Media");
+  }
+
+  return [...new Set(missing)].filter((type) => !foundTypes.includes(type));
+}
+
+function calculateEvidenceScore(foundTypes, missingTypes) {
+  const foundScore = foundTypes.reduce(
+    (total, type) => total + (EVIDENCE_TYPE_WEIGHTS[type] || 0),
+    0,
+  );
+  const missingPenalty = Math.min(missingTypes.length * 8, 35);
+
+  return clampScore(foundScore - missingPenalty);
+}
+
+function getEvidenceStrength(score) {
+  if (score >= 75) return "STRONG";
+  if (score >= 50) return "MODERATE";
+  if (score >= 25) return "LIMITED";
+  return "MISSING";
+}
+
+function getMissingEvidenceRecommendations(missingTypes) {
+  const recommendations = {
+    "Official Document": "Tambahkan dokumen resmi seperti regulasi, APBD, RKPD, atau laporan OPD.",
+    "Official Statement": "Konfirmasi melalui pernyataan resmi lembaga terkait.",
+    "Government Website": "Cek situs resmi pemerintah atau portal data pemerintah.",
+    "Statistical Data": "Validasi angka melalui BPS atau laporan statistik resmi.",
+    "Independent Report": "Bandingkan dengan laporan lembaga riset atau kajian independen.",
+    "News Media": "Cari pembanding dari media kredibel dan arsip berita.",
+    "Social Media": "Gunakan unggahan media sosial hanya sebagai sinyal awal.",
+    "User Input": "Pisahkan input pengguna dari fakta terverifikasi.",
+  };
+
+  return [...new Set(missingTypes)]
+    .map((type) => recommendations[type])
+    .filter(Boolean);
+}
+
+function buildEvidenceEngine(factClassifications, context = {}) {
+  const items = factClassifications.map((fact) => {
+    const evidenceFound = detectEvidenceTypes(fact.statement, {
+      ...context,
+      userInput: fact.classification === "USER_INPUT" || context.userInput,
+    });
+    const evidenceMissing = getMissingEvidenceTypes(
+      fact.statement,
+      evidenceFound,
+      fact.classification,
+    );
+    const score = calculateEvidenceScore(evidenceFound, evidenceMissing);
+
+    return {
+      statement: fact.statement,
+      classification: fact.classification,
+      evidence_found: evidenceFound,
+      evidence_missing: evidenceMissing,
+      evidence_strength: getEvidenceStrength(score),
+      evidence_score: score,
+      missing_recommendations:
+        getMissingEvidenceRecommendations(evidenceMissing),
+    };
+  });
+  const evidenceScore =
+    items.length === 0
+      ? 0
+      : clampScore(
+          items.reduce((total, item) => total + item.evidence_score, 0) /
+            items.length,
+        );
+  const missingEvidence = [
+    ...new Set(items.flatMap((item) => item.evidence_missing)),
+  ];
+
+  return {
+    items,
+    evidence_score: evidenceScore,
+    evidence_strength: getEvidenceStrength(evidenceScore),
+    evidence_missing: missingEvidence,
+    missing_recommendations:
+      getMissingEvidenceRecommendations(missingEvidence),
+  };
+}
+
+function formatEvidenceMatrix(evidence) {
+  const rows = evidence.items.map((item) =>
+    [
+      escapeMarkdownCell(item.statement),
+      item.evidence_found.length ? item.evidence_found.join(", ") : "None",
+      item.evidence_missing.length ? item.evidence_missing.join(", ") : "None",
+      item.evidence_strength,
+      `${item.evidence_score}%`,
+    ].join(" | "),
+  );
+  const recommendations = evidence.missing_recommendations.length
+    ? evidence.missing_recommendations.map((item) => `- ${item}`)
+    : ["- Tidak ada evidence utama yang hilang."];
+
+  return [
+    "## Evidence Matrix",
+    "| Statement | evidence_found | evidence_missing | evidence_strength | Evidence Score |",
+    "|---|---|---|---|---:|",
+    ...rows.map((row) => `| ${row} |`),
+    "",
+    "## Evidence Score",
+    `Overall Evidence Score: ${evidence.evidence_score}% (${evidence.evidence_strength})`,
+    "",
+    "## Missing Evidence Recommendations",
+    ...recommendations,
+  ].join("\n");
+}
+
 function formatFactClassificationTable(items) {
   const rows = items.map((item) =>
     [
@@ -547,8 +764,14 @@ router.post("/", requireAuth, async (req, res) => {
     );
     const factClassificationTable =
       formatFactClassificationTable(factClassifications);
+    const evidence = buildEvidenceEngine(factClassifications, {
+      topic: trimmedTopic,
+      userInput: true,
+    });
+    const evidenceMatrix = formatEvidenceMatrix(evidence);
     const prompt = buildNewsroomPrompt({
       ...promptPayload,
+      evidenceMatrix,
       factClassificationTable,
     });
     const draft = await generateWithOpenRouter(prompt);
@@ -557,7 +780,8 @@ router.post("/", requireAuth, async (req, res) => {
       String(draft || "").trim(),
       userProvidedTemporalInfo,
     );
-    const draftWithFactClassification = [
+    const draftWithEvidence = [
+      evidenceMatrix,
       factClassificationTable,
       normalizedDraft,
     ]
@@ -583,7 +807,8 @@ router.post("/", requireAuth, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      draft: draftWithFactClassification,
+      draft: draftWithEvidence,
+      evidence,
       factClassifications,
       confidence: {
         score: finalConfidenceScore,
@@ -595,7 +820,7 @@ router.post("/", requireAuth, async (req, res) => {
         priority: priority || null,
         verifiedFactsCount,
         verificationItemsCount,
-        promptVersion: "2.5.0",
+        promptVersion: "2.6.0",
         createdAt: new Date().toISOString(),
       },
     });
@@ -615,4 +840,6 @@ module.exports.normalizeNewsroomDraft = normalizeNewsroomDraft;
 module.exports.hasTemporalReference = hasTemporalReference;
 module.exports.classifyNewsroomFact = classifyNewsroomFact;
 module.exports.classifyNewsroomFacts = classifyNewsroomFacts;
+module.exports.buildEvidenceEngine = buildEvidenceEngine;
+module.exports.formatEvidenceMatrix = formatEvidenceMatrix;
 module.exports.formatFactClassificationTable = formatFactClassificationTable;
