@@ -453,6 +453,96 @@ export const api = {
     });
   },
 
+  async getWebBuilderProjects() {
+    const response = await request("/api/v1/web-builder/projects", {
+      headers: await getAuthenticatedHeaders(),
+    });
+
+    return Array.isArray(response?.data) ? response.data : [];
+  },
+
+  async createWebBuilderProject(payload) {
+    return request("/api/v1/web-builder/projects", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getWebBuilderProject(projectId) {
+    return request(`/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`, {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async updateWebBuilderProject(projectId, payload) {
+    return request(`/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`, {
+      method: "PATCH",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteWebBuilderProject(projectId) {
+    return request(`/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`, {
+      method: "DELETE",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async getWebBuilderPages(projectId) {
+    const response = await request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}/pages`,
+      {
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+
+    return Array.isArray(response?.data) ? response.data : [];
+  },
+
+  async createWebBuilderPage(projectId, payload) {
+    return request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}/pages`,
+      {
+        method: "POST",
+        headers: await getAuthenticatedHeaders(),
+        body: JSON.stringify(payload),
+      },
+    );
+  },
+
+  async exportWebBuilderProject(projectId) {
+    return request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}/export`,
+      {
+        method: "POST",
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
+  async getWebBuilderPage(pageId) {
+    return request(`/api/v1/web-builder/pages/${encodeURIComponent(pageId)}`, {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async updateWebBuilderPage(pageId, payload) {
+    return request(`/api/v1/web-builder/pages/${encodeURIComponent(pageId)}`, {
+      method: "PATCH",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteWebBuilderPage(pageId) {
+    return request(`/api/v1/web-builder/pages/${encodeURIComponent(pageId)}`, {
+      method: "DELETE",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
   async getSecurity() {
     return normalizeSecurity(
       await request("/api/v1/security", {
