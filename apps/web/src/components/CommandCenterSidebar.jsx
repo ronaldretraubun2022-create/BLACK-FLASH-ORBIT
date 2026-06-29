@@ -3,16 +3,18 @@ import {
   Bot,
   CloudLightning,
   Command,
+  Globe2,
   LayoutDashboard,
   ShieldCheck,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
 
 const navigationItems = [
   ["Command", LayoutDashboard, "all", "#command"],
   ["AI Newsroom", Bot, "all", "/ai-newsroom"],
+  ["Web Builder", Globe2, "all", "/web-builder"],
   ["Media Intel", CloudLightning, "all", "#media-intel"],
   ["Security", ShieldCheck, "admin", "#security"],
   ["Archive", Archive, "all", "#archive"],
@@ -23,6 +25,7 @@ function isAdminRole(role) {
 }
 
 export function CommandCenterSidebar({ releaseState = [], userRole = "user" }) {
+  const location = useLocation();
   const visibleNavigationItems = navigationItems.filter(
     ([, , access]) => access === "all" || isAdminRole(userRole),
   );
@@ -51,7 +54,10 @@ export function CommandCenterSidebar({ releaseState = [], userRole = "user" }) {
 
       <nav className="mt-6 grid gap-2">
         {visibleNavigationItems.map(([label, Icon, , target], index) => {
-          const className = `orbit-nav-link ${index === 0 ? "is-active" : ""}`;
+          const isActive = target.startsWith("/")
+            ? location.pathname === target
+            : location.pathname === "/" && index === 0;
+          const className = `orbit-nav-link ${isActive ? "is-active" : ""}`;
           const content = (
             <>
               <Icon size={18} />

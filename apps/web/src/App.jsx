@@ -34,6 +34,7 @@ import { CommandCenterSecurityPanel } from "./components/CommandCenterSecurityPa
 import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 import { Login } from "./pages/Login.jsx";
 import { Register } from "./pages/Register.jsx";
+import { WebBuilder } from "./pages/WebBuilder.jsx";
 import { getAuthenticatedHeaders } from "./services/api.js";
 
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
@@ -472,6 +473,7 @@ function App() {
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<CommandCenterDashboard />} />
         <Route path="/ai-newsroom" element={<AINewsroom />} />
+        <Route path="/web-builder" element={<WebBuilder />} />
       </Route>
 
       <Route path="*" element={<Navigate replace to="/" />} />
