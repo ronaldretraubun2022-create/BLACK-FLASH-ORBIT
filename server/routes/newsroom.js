@@ -89,6 +89,22 @@ const SOURCE_QUALITY_RULES = [
     pattern: /\b(?:user input|input pengguna)\b/i,
   },
 ];
+const FACT_CLASSIFICATION_SCORES = {
+  FACT: 100,
+  OFFICIAL_CLAIM: 85,
+  OBSERVATION: 75,
+  INFERENCE: 60,
+  USER_INPUT: 55,
+  ASSUMPTION: 45,
+  UNVERIFIED: 30,
+  CONFLICTING: 20,
+};
+const CONFIDENCE_WEIGHTS = {
+  evidence_score_weight: 40,
+  source_quality_weight: 30,
+  fact_classification_weight: 20,
+  verification_weight: 10,
+};
 const OFFICIAL_SOURCE_KEYWORDS = [
   "bappenas",
   "bappeda",
@@ -623,6 +639,14 @@ function getSourceQualityLevel(score) {
   return "LOW";
 }
 
+function getConfidenceLevel(score) {
+  if (score >= 90) return "VERY HIGH";
+  if (score >= 75) return "HIGH";
+  if (score >= 60) return "MEDIUM";
+  if (score >= 40) return "LOW";
+  return "VERY LOW";
+}
+
 function buildSourceQualityEngine(factClassifications, evidence) {
   const evidenceSources = (evidence?.items || []).flatMap(
     (item) => item.evidence_found || [],
@@ -678,6 +702,145 @@ function formatSourceQualityMatrix(sourceQuality) {
     ...rows.map((row) => `| ${row} |`),
     "",
     `Overall Source Quality Score: ${sourceQuality.source_quality_score}% (${sourceQuality.source_quality_level})`,
+  ].join("\n");
+}
+
+function calculateFactClassificationScore(factClassifications) {
+  if (!Array.isArray(factClassifications) || factClassifications.length === 0) {
+    return 0;
+  }
+
+  const total = factClassifications.reduce((sum, fact) => {
+    const classificationScore =
+      FACT_CLASSIFICATION_SCORES[fact.classification] ||
+      FACT_CLASSIFICATION_SCORES.UNVERIFIED;
+    const statedConfidence = Number(fact.confidence) || 0;
+
+    return sum + classificationScore * 0.7 + statedConfidence * 0.3;
+  }, 0);
+
+  return clampScore(total / factClassifications.length);
+}
+
+function calculateVerificationScore(factClassifications, evidence) {
+  if (!Array.isArray(factClassifications) || factClassifications.length === 0) {
+    return 0;
+  }
+
+  const totalFacts = factClassifications.length;
+  const verificationNeededCount = factClassifications.filter(
+    (fact) => fact.verification_needed === true,
+  ).length;
+  const missingEvidenceCount = (evidence?.items || []).reduce(
+    (total, item) => total + (item.evidence_missing || []).length,
+    0,
+  );
+  const verificationPenalty = (verificationNeededCount / totalFacts) * 30;
+  const missingEvidencePenalty = Math.min(
+    (missingEvidenceCount / totalFacts) * 15,
+    60,
+  );
+
+  return clampScore(100 - verificationPenalty - missingEvidencePenalty);
+}
+
+function buildConfidenceEngine({ evidence, sourceQuality, factClassifications }) {
+  const evidenceScore = clampScore(evidence?.evidence_score || 0);
+  const sourceQualityScore = clampScore(
+    sourceQuality?.source_quality_score || 0,
+  );
+  const factClassificationScore =
+    calculateFactClassificationScore(factClassifications);
+  const verificationScore = calculateVerificationScore(
+    factClassifications,
+    evidence,
+  );
+  const evidenceContribution =
+    (evidenceScore * CONFIDENCE_WEIGHTS.evidence_score_weight) / 100;
+  const sourceQualityContribution =
+    (sourceQualityScore * CONFIDENCE_WEIGHTS.source_quality_weight) / 100;
+  const factClassificationContribution =
+    (factClassificationScore *
+      CONFIDENCE_WEIGHTS.fact_classification_weight) /
+    100;
+  const verificationContribution =
+    (verificationScore * CONFIDENCE_WEIGHTS.verification_weight) / 100;
+  const confidenceScore = clampScore(
+    evidenceContribution +
+      sourceQualityContribution +
+      factClassificationContribution +
+      verificationContribution,
+  );
+  const confidenceLevel = getConfidenceLevel(confidenceScore);
+
+  return {
+    confidence_score: confidenceScore,
+    confidence_level: confidenceLevel,
+    confidence_explanation:
+      `Skor dihitung dari Evidence Score ${evidenceScore}%, ` +
+      `Source Quality ${sourceQualityScore}%, ` +
+      `Fact Classification ${factClassificationScore}%, dan ` +
+      `Verification ${verificationScore}% dengan bobot 40/30/20/10.`,
+    confidence_breakdown: {
+      evidence_score: evidenceScore,
+      evidence_score_weight: CONFIDENCE_WEIGHTS.evidence_score_weight,
+      evidence_score_contribution: clampScore(evidenceContribution),
+      source_quality_score: sourceQualityScore,
+      source_quality_weight: CONFIDENCE_WEIGHTS.source_quality_weight,
+      source_quality_contribution: clampScore(sourceQualityContribution),
+      fact_classification_score: factClassificationScore,
+      fact_classification_weight:
+        CONFIDENCE_WEIGHTS.fact_classification_weight,
+      fact_classification_contribution: clampScore(
+        factClassificationContribution,
+      ),
+      verification_score: verificationScore,
+      verification_weight: CONFIDENCE_WEIGHTS.verification_weight,
+      verification_contribution: clampScore(verificationContribution),
+    },
+  };
+}
+
+function formatConfidenceAnalysis(confidence) {
+  const breakdown = confidence.confidence_breakdown;
+  const rows = [
+    [
+      "Evidence Score",
+      `${breakdown.evidence_score}%`,
+      `${breakdown.evidence_score_weight}%`,
+      `${breakdown.evidence_score_contribution}%`,
+    ],
+    [
+      "Source Quality",
+      `${breakdown.source_quality_score}%`,
+      `${breakdown.source_quality_weight}%`,
+      `${breakdown.source_quality_contribution}%`,
+    ],
+    [
+      "Fact Classification",
+      `${breakdown.fact_classification_score}%`,
+      `${breakdown.fact_classification_weight}%`,
+      `${breakdown.fact_classification_contribution}%`,
+    ],
+    [
+      "Verification",
+      `${breakdown.verification_score}%`,
+      `${breakdown.verification_weight}%`,
+      `${breakdown.verification_contribution}%`,
+    ],
+  ];
+
+  return [
+    "## Confidence Analysis",
+    `Overall Confidence Score: ${confidence.confidence_score}%`,
+    `Confidence Level: ${confidence.confidence_level}`,
+    "",
+    "| Component | Score | Weight | Contribution |",
+    "|---|---:|---:|---:|",
+    ...rows.map((row) => `| ${row.join(" | ")} |`),
+    "",
+    "### Confidence Explanation",
+    confidence.confidence_explanation,
   ].join("\n");
 }
 
@@ -900,6 +1063,13 @@ router.post("/", requireAuth, async (req, res) => {
       evidence,
     );
     const sourceQualityMatrix = formatSourceQualityMatrix(sourceQuality);
+    const confidenceAnalysis = buildConfidenceEngine({
+      evidence,
+      sourceQuality,
+      factClassifications,
+    });
+    const confidenceAnalysisSection =
+      formatConfidenceAnalysis(confidenceAnalysis);
     const prompt = buildNewsroomPrompt({
       ...promptPayload,
       evidenceMatrix,
@@ -915,6 +1085,7 @@ router.post("/", requireAuth, async (req, res) => {
       evidenceMatrix,
       factClassificationTable,
       sourceQualityMatrix,
+      confidenceAnalysisSection,
       normalizedDraft,
     ]
       .filter(Boolean)
@@ -943,9 +1114,14 @@ router.post("/", requireAuth, async (req, res) => {
       evidence,
       factClassifications,
       sourceQuality,
+      confidenceAnalysis,
       confidence: {
         score: finalConfidenceScore,
         publicationReadiness,
+        confidence_score: confidenceAnalysis.confidence_score,
+        confidence_level: confidenceAnalysis.confidence_level,
+        confidence_breakdown: confidenceAnalysis.confidence_breakdown,
+        confidence_explanation: confidenceAnalysis.confidence_explanation,
       },
       metadata: {
         ...promptPayload,
@@ -954,9 +1130,12 @@ router.post("/", requireAuth, async (req, res) => {
         source_quality_score: sourceQuality.source_quality_score,
         source_quality_level: sourceQuality.source_quality_level,
         source_quality_items: sourceQuality.source_quality_items,
+        confidence_score: confidenceAnalysis.confidence_score,
+        confidence_level: confidenceAnalysis.confidence_level,
+        confidence_breakdown: confidenceAnalysis.confidence_breakdown,
         verifiedFactsCount,
         verificationItemsCount,
-        promptVersion: "2.7.0",
+        promptVersion: "2.8.0",
         createdAt: new Date().toISOString(),
       },
     });
@@ -978,6 +1157,8 @@ module.exports.classifyNewsroomFact = classifyNewsroomFact;
 module.exports.classifyNewsroomFacts = classifyNewsroomFacts;
 module.exports.buildEvidenceEngine = buildEvidenceEngine;
 module.exports.buildSourceQualityEngine = buildSourceQualityEngine;
+module.exports.buildConfidenceEngine = buildConfidenceEngine;
 module.exports.formatEvidenceMatrix = formatEvidenceMatrix;
 module.exports.formatFactClassificationTable = formatFactClassificationTable;
 module.exports.formatSourceQualityMatrix = formatSourceQualityMatrix;
+module.exports.formatConfidenceAnalysis = formatConfidenceAnalysis;

@@ -5,9 +5,11 @@ const {
   classifyNewsroomFact,
   buildEvidenceEngine,
   buildSourceQualityEngine,
+  buildConfidenceEngine,
   formatEvidenceMatrix,
   formatFactClassificationTable,
   formatSourceQualityMatrix,
+  formatConfidenceAnalysis,
 } = require("../server/routes/newsroom.js");
 const {
   normalizeOpenRouterModel,
@@ -268,6 +270,10 @@ runTest(
       prompt.includes("Jangan tulis ulang section Source Quality Matrix."),
       "prompt must forbid duplicated Source Quality Matrix output",
     );
+    assert(
+      prompt.includes("Jangan tulis ulang section Confidence Analysis."),
+      "prompt must forbid duplicated Confidence Analysis output",
+    );
   },
 );
 
@@ -314,6 +320,88 @@ runTest("buildSourceQualityEngine scores social media low", () => {
 
   assert(sourceQuality.source_quality_score <= 35);
   assert.strictEqual(sourceQuality.source_quality_level, "LOW");
+});
+
+runTest("formatConfidenceAnalysis renders Confidence Analysis", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut BPS dan Kemendagri, angka kemiskinan turun 2 persen berdasarkan data statistik pada portal bps.go.id",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+  const confidence = buildConfidenceEngine({
+    evidence,
+    sourceQuality,
+    factClassifications: [fact],
+  });
+  const section = formatConfidenceAnalysis(confidence);
+
+  assert(section.includes("## Confidence Analysis"));
+  assert(section.includes("Overall Confidence Score:"));
+  assert(section.includes("Confidence Level:"));
+  assert(section.includes("### Confidence Explanation"));
+});
+
+runTest("buildConfidenceEngine scores official sources as high confidence", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut BPS dan Kemendagri, angka kemiskinan turun 2 persen berdasarkan data statistik pada portal bps.go.id",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+  const confidence = buildConfidenceEngine({
+    evidence,
+    sourceQuality,
+    factClassifications: [fact],
+  });
+
+  assert(confidence.confidence_score >= 75);
+  assert(["HIGH", "VERY HIGH"].includes(confidence.confidence_level));
+});
+
+runTest("buildConfidenceEngine scores user input only as low confidence", () => {
+  const fact = classifyNewsroomFact("Warga menyebut layanan publik membaik", {
+    topic: "Warga menyebut layanan publik membaik",
+    userInput: true,
+  });
+  const evidence = buildEvidenceEngine([fact], { userInput: true });
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+  const confidence = buildConfidenceEngine({
+    evidence,
+    sourceQuality,
+    factClassifications: [fact],
+  });
+
+  assert(confidence.confidence_score < 60);
+  assert(["LOW", "VERY LOW"].includes(confidence.confidence_level));
+});
+
+runTest("buildConfidenceEngine calculates mixed source confidence", () => {
+  const facts = [
+    classifyNewsroomFact(
+      "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+    ),
+    classifyNewsroomFact(
+      "Program ini diprediksi akan meningkatkan ekonomi daerah",
+    ),
+    classifyNewsroomFact("Unggahan Facebook menyebut antrean layanan panjang"),
+  ];
+  const evidence = buildEvidenceEngine(facts);
+  const sourceQuality = buildSourceQualityEngine(facts, evidence);
+  const confidence = buildConfidenceEngine({
+    evidence,
+    sourceQuality,
+    factClassifications: facts,
+  });
+  const breakdown = confidence.confidence_breakdown;
+  const expectedScore = Math.round(
+    breakdown.evidence_score * 0.4 +
+      breakdown.source_quality_score * 0.3 +
+      breakdown.fact_classification_score * 0.2 +
+      breakdown.verification_score * 0.1,
+  );
+
+  assert.strictEqual(confidence.confidence_score, expectedScore);
+  assert(confidence.confidence_score > 0);
+  assert(confidence.confidence_score < 100);
 });
 
 runTest("normalizeOpenRouterModel skips null and empty values", () => {
