@@ -2,6 +2,8 @@ const assert = require("assert");
 const {
   normalizeNewsroomDraft,
   hasTemporalReference,
+  classifyNewsroomFact,
+  formatFactClassificationTable,
 } = require("../server/routes/newsroom.js");
 const {
   normalizeOpenRouterModel,
@@ -119,6 +121,74 @@ runTest(
     );
   },
 );
+
+runTest("classifyNewsroomFact marks user-provided topic as USER_INPUT", () => {
+  const statement = "Papua Selatan menyiapkan program layanan publik terpadu";
+  const result = classifyNewsroomFact(statement, {
+    topic: statement,
+    userInput: true,
+  });
+
+  assert.strictEqual(result.classification, "USER_INPUT");
+  assert.strictEqual(result.verification_needed, true);
+  assert(Array.isArray(result.recommended_sources));
+});
+
+runTest("classifyNewsroomFact marks unsourced numbers as UNVERIFIED", () => {
+  const result = classifyNewsroomFact(
+    "Papua Selatan memperoleh penghargaan Rp3 miliar",
+    { userInput: true },
+  );
+
+  assert.strictEqual(result.classification, "UNVERIFIED");
+  assert.strictEqual(result.verification_needed, true);
+  assert(result.confidence < 60);
+});
+
+runTest("classifyNewsroomFact marks recommendations as INFERENCE", () => {
+  const result = classifyNewsroomFact(
+    "Pemerintah perlu memperkuat kanal layanan publik digital",
+  );
+
+  assert.strictEqual(result.classification, "INFERENCE");
+  assert.strictEqual(result.verification_needed, true);
+});
+
+runTest(
+  "classifyNewsroomFact marks predicted impacts as ASSUMPTION or INFERENCE",
+  () => {
+    const result = classifyNewsroomFact(
+      "Program ini diprediksi akan meningkatkan ekonomi daerah",
+    );
+
+    assert(
+      ["ASSUMPTION", "INFERENCE"].includes(result.classification),
+      "predicted impact should not be FACT",
+    );
+    assert.strictEqual(result.verification_needed, true);
+  },
+);
+
+runTest("classifyNewsroomFact marks official institution claims as OFFICIAL_CLAIM", () => {
+  const result = classifyNewsroomFact(
+    "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+
+  assert.strictEqual(result.classification, "OFFICIAL_CLAIM");
+  assert.strictEqual(result.verification_needed, true);
+  assert(result.recommended_sources.includes("Kemendagri"));
+});
+
+runTest("formatFactClassificationTable renders required output section", () => {
+  const result = classifyNewsroomFact(
+    "Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+  const table = formatFactClassificationTable([result]);
+
+  assert(table.includes("## Fact Classification Table"));
+  assert(table.includes("| Statement | Type | Confidence | Verification | Sources |"));
+  assert(table.includes("| Papua Selatan memperoleh penghargaan Rp3 miliar |"));
+});
 
 runTest("normalizeOpenRouterModel skips null and empty values", () => {
   assert.strictEqual(normalizeOpenRouterModel(null), "");

@@ -4,6 +4,12 @@ function sanitizeText(value) {
     .trim();
 }
 
+function sanitizePromptBlock(value) {
+  return String(value || "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f<>]/g, " ")
+    .trim();
+}
+
 function buildNewsroomPrompt({
   topic,
   layer,
@@ -12,6 +18,7 @@ function buildNewsroomPrompt({
   complexity,
   factGuard = true,
   citationEngine = true,
+  factClassificationTable = "",
   sourceConfidence = true,
 }) {
   const safeTopic = sanitizeText(topic);
@@ -54,6 +61,9 @@ TIMELINE GUARD RULES:
     : "";
 
   const enableSourceConfidence = Boolean(sourceConfidence);
+  const safeFactClassificationTable = sanitizePromptBlock(
+    factClassificationTable,
+  );
 
   const citationEngineInstructions = enableCitationEngine
     ? `
@@ -123,11 +133,12 @@ Kompleksitas: ${safeComplexity}
 Topik: ${safeTopic}
 
 Tulis hasil dalam format berikut:
-1. Executive Summary
-2. Analisis
-3. Risiko
-4. Rekomendasi
-5. Action Plan
+1. Fact Classification Table
+2. Executive Summary
+3. Analisis
+4. Risiko
+5. Rekomendasi
+6. Action Plan
 ${verificationSection}
 ${
   enableSourceConfidence
@@ -157,7 +168,12 @@ Catatan tambahan:
 - Jaga keakuratan judul dan konteks.
 - Hindari asumsi faktual tanpa verifikasi.
 - Sertakan peringatan verifikasi apabila terdapat fakta yang perlu dikonfirmasi.
+- Gunakan Fact Classification Table berikut sebagai dasar sebelum membuat analisis.
+- Jika menambahkan klaim faktual baru, klasifikasikan dulu dalam Fact Classification Table.
 ${enableFactGuard ? "- Jangan tampilkan asumsi sebagai fakta. Tandai semua asumsi secara jelas." : ""}
+
+Fact Classification Table awal:
+${safeFactClassificationTable || "Belum ada pernyataan faktual yang dapat diklasifikasi."}
 `;
 }
 

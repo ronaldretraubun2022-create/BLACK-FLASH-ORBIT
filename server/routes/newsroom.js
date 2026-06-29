@@ -5,6 +5,42 @@ const { generateWithOpenRouter } = require("../services/openrouter");
 
 const router = express.Router();
 const MAX_TOPIC_LENGTH = 3000;
+const FACT_CLASSIFICATIONS = new Set([
+  "FACT",
+  "OFFICIAL_CLAIM",
+  "USER_INPUT",
+  "OBSERVATION",
+  "INFERENCE",
+  "ASSUMPTION",
+  "UNVERIFIED",
+  "CONFLICTING",
+]);
+const DEFAULT_RECOMMENDED_SOURCES = [
+  "Pemerintah Provinsi",
+  "BPS",
+  "Kemendagri",
+  "Dokumen Resmi OPD",
+];
+const OFFICIAL_SOURCE_KEYWORDS = [
+  "bappenas",
+  "bappeda",
+  "bawaslu",
+  "bps",
+  "dinas",
+  "diskominfo",
+  "dprd",
+  "kementerian",
+  "kemendagri",
+  "kemenkeu",
+  "kemenpan",
+  "kpu",
+  "pemda",
+  "pemerintah",
+  "pemkab",
+  "pemkot",
+  "pemprov",
+  "polri",
+];
 const DEBUG_NEWSROOM_AI = process.env.DEBUG_NEWSROOM_AI === "true";
 
 function logNewsroomDebug(message, metadata) {
@@ -39,6 +75,290 @@ function getPublicationReadiness(score) {
   if (score >= 85) return "Ready";
   if (score >= 60) return "Review Required";
   return "Verification Required";
+}
+
+function normalizeStatement(value) {
+  return sanitizeText(value).replace(/\s+/g, " ");
+}
+
+function includesAnyKeyword(value, keywords) {
+  const text = String(value || "").toLowerCase();
+
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function hasNumberLikeClaim(statement) {
+  return /(?:\b\d+(?:[.,]\d+)?\b|rp\s*\d+|%|persen|miliar|juta|ribu|triliun)/i.test(
+    statement,
+  );
+}
+
+function hasOfficialSource(statement, context = {}) {
+  const sourceHints = [
+    statement,
+    context.source,
+    ...(Array.isArray(context.sources) ? context.sources : []),
+  ].join(" ");
+
+  return includesAnyKeyword(sourceHints, OFFICIAL_SOURCE_KEYWORDS);
+}
+
+function getRecommendedSources(statement, classification) {
+  const sources = [];
+  const text = String(statement || "").toLowerCase();
+
+  if (/kemendagri|pemda|pemprov|pemerintah|dinas|diskominfo/.test(text)) {
+    sources.push("Kemendagri", "Pemerintah Provinsi", "Diskominfo");
+  }
+
+  if (/bps|statistik|penduduk|kemiskinan|inflasi|ekonomi|tenaga kerja/.test(text)) {
+    sources.push("BPS", "Laporan Statistik Resmi");
+  }
+
+  if (/anggaran|rp\s*\d+|miliar|juta|triliun|dana/.test(text)) {
+    sources.push("Kemenkeu", "APBD", "Dokumen Resmi OPD");
+  }
+
+  if (/pemilu|pilkada|suara|kpu|bawaslu/.test(text)) {
+    sources.push("KPU", "Bawaslu");
+  }
+
+  if (classification === "OBSERVATION") {
+    sources.push("Catatan Lapangan", "Dokumentasi Foto/Video");
+  }
+
+  if (sources.length === 0) {
+    sources.push(...DEFAULT_RECOMMENDED_SOURCES);
+  }
+
+  return [...new Set(sources)].slice(0, 5);
+}
+
+function createFactClassification({
+  classification,
+  confidence,
+  reason,
+  statement,
+  verificationNeeded,
+}) {
+  const safeClassification = FACT_CLASSIFICATIONS.has(classification)
+    ? classification
+    : "UNVERIFIED";
+
+  return {
+    statement,
+    classification: safeClassification,
+    confidence: clampScore(confidence),
+    reason,
+    verification_needed: Boolean(verificationNeeded),
+    recommended_sources: getRecommendedSources(statement, safeClassification),
+  };
+}
+
+function isUserProvidedStatement(statement, context = {}) {
+  const cleanStatement = normalizeStatement(statement).toLowerCase();
+  const cleanTopic = normalizeStatement(context.topic).toLowerCase();
+
+  if (!cleanStatement || !cleanTopic) return false;
+
+  return cleanStatement === cleanTopic || cleanTopic.includes(cleanStatement);
+}
+
+function classifyNewsroomFact(statement, context = {}) {
+  const cleanStatement = normalizeStatement(statement);
+
+  if (!cleanStatement) {
+    return createFactClassification({
+      classification: "UNVERIFIED",
+      confidence: 0,
+      reason: "Pernyataan kosong dan tidak dapat diverifikasi.",
+      statement: "",
+      verificationNeeded: true,
+    });
+  }
+
+  const lowerStatement = cleanStatement.toLowerCase();
+  const officialSource = hasOfficialSource(cleanStatement, context);
+  const numberLikeClaim = hasNumberLikeClaim(cleanStatement);
+
+  if (
+    context.conflicting === true ||
+    includesAnyKeyword(lowerStatement, [
+      "bertentangan",
+      "berbeda dengan",
+      "konflik",
+      "tidak sesuai",
+    ])
+  ) {
+    return createFactClassification({
+      classification: "CONFLICTING",
+      confidence: 55,
+      reason: "Pernyataan mengandung sinyal konflik atau perbedaan data.",
+      statement: cleanStatement,
+      verificationNeeded: true,
+    });
+  }
+
+  if (context.verified === true || context.sourceType === "verified") {
+    return createFactClassification({
+      classification: "FACT",
+      confidence: 90,
+      reason: "Pernyataan ditandai sebagai fakta terverifikasi dalam konteks.",
+      statement: cleanStatement,
+      verificationNeeded: false,
+    });
+  }
+
+  if (
+    officialSource &&
+    includesAnyKeyword(lowerStatement, [
+      "berdasarkan",
+      "dilaporkan",
+      "diumumkan",
+      "mengklaim",
+      "menurut",
+      "menyampaikan",
+      "menyatakan",
+      "rilis",
+    ])
+  ) {
+    return createFactClassification({
+      classification: "OFFICIAL_CLAIM",
+      confidence: 75,
+      reason:
+        "Pernyataan merujuk lembaga resmi, tetapi tetap perlu konfirmasi dokumen/sumber utama.",
+      statement: cleanStatement,
+      verificationNeeded: true,
+    });
+  }
+
+  if (numberLikeClaim && !officialSource) {
+    return createFactClassification({
+      classification: "UNVERIFIED",
+      confidence: 45,
+      reason: "Pernyataan memuat angka tanpa sumber resmi yang jelas.",
+      statement: cleanStatement,
+      verificationNeeded: true,
+    });
+  }
+
+  if (
+    includesAnyKeyword(lowerStatement, [
+      "diasumsikan",
+      "diperkirakan",
+      "diprediksi",
+      "kemungkinan",
+      "potensi dampak",
+      "berpotensi",
+      "akan berdampak",
+      "akan meningkatkan",
+    ])
+  ) {
+    return createFactClassification({
+      classification: "ASSUMPTION",
+      confidence: 50,
+      reason: "Pernyataan bersifat prediktif atau berbasis asumsi.",
+      statement: cleanStatement,
+      verificationNeeded: true,
+    });
+  }
+
+  if (
+    includesAnyKeyword(lowerStatement, [
+      "dapat disimpulkan",
+      "mengindikasikan",
+      "merekomendasikan",
+      "perlu",
+      "rekomendasi",
+      "sebaiknya",
+      "strategi",
+    ])
+  ) {
+    return createFactClassification({
+      classification: "INFERENCE",
+      confidence: 65,
+      reason: "Pernyataan adalah rekomendasi atau kesimpulan analitis.",
+      statement: cleanStatement,
+      verificationNeeded: true,
+    });
+  }
+
+  if (
+    includesAnyKeyword(lowerStatement, [
+      "catatan lapangan",
+      "diamati",
+      "ditemukan",
+      "observasi",
+      "terlihat",
+      "terpantau",
+    ])
+  ) {
+    return createFactClassification({
+      classification: "OBSERVATION",
+      confidence: 70,
+      reason: "Pernyataan berasal dari pengamatan atau catatan lapangan.",
+      statement: cleanStatement,
+      verificationNeeded: true,
+    });
+  }
+
+  if (context.userInput === true || isUserProvidedStatement(cleanStatement, context)) {
+    return createFactClassification({
+      classification: "USER_INPUT",
+      confidence: 80,
+      reason: "Pernyataan berasal dari input pengguna dan belum berdiri sebagai fakta terverifikasi.",
+      statement: cleanStatement,
+      verificationNeeded: true,
+    });
+  }
+
+  return createFactClassification({
+    classification: "UNVERIFIED",
+    confidence: 40,
+    reason: "Pernyataan belum memiliki sumber atau status verifikasi yang jelas.",
+    statement: cleanStatement,
+    verificationNeeded: true,
+  });
+}
+
+function splitFactStatements(value) {
+  return String(value || "")
+    .split(/(?:[.!?]\s+|\n+|;\s+)/)
+    .map(normalizeStatement)
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function classifyNewsroomFacts(statements, context = {}) {
+  return statements.map((statement) =>
+    classifyNewsroomFact(statement, {
+      ...context,
+      topic: context.topic,
+    }),
+  );
+}
+
+function formatFactClassificationTable(items) {
+  const rows = items.map((item) =>
+    [
+      escapeMarkdownCell(item.statement),
+      item.classification,
+      `${item.confidence}%`,
+      item.verification_needed ? "Required" : "Not required",
+      item.recommended_sources.join(", "),
+    ].join(" | "),
+  );
+
+  return [
+    "## Fact Classification Table",
+    "| Statement | Type | Confidence | Verification | Sources |",
+    "|---|---|---:|---|---|",
+    ...rows.map((row) => `| ${row} |`),
+  ].join("\n");
+}
+
+function escapeMarkdownCell(value) {
+  return String(value || "").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
 }
 
 function hasTemporalReference(value) {
@@ -218,13 +538,31 @@ router.post("/", requireAuth, async (req, res) => {
       sourceConfidence: sourceConfidence !== false,
     };
 
-    const prompt = buildNewsroomPrompt(promptPayload);
+    const factClassifications = classifyNewsroomFacts(
+      splitFactStatements(trimmedTopic),
+      {
+        topic: trimmedTopic,
+        userInput: true,
+      },
+    );
+    const factClassificationTable =
+      formatFactClassificationTable(factClassifications);
+    const prompt = buildNewsroomPrompt({
+      ...promptPayload,
+      factClassificationTable,
+    });
     const draft = await generateWithOpenRouter(prompt);
     const userProvidedTemporalInfo = hasTemporalReference(trimmedTopic);
     const normalizedDraft = normalizeNewsroomDraft(
       String(draft || "").trim(),
       userProvidedTemporalInfo,
     );
+    const draftWithFactClassification = [
+      factClassificationTable,
+      normalizedDraft,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     logNewsroomDebug("[AI Newsroom Route] draft generated", {
       draftLength: normalizedDraft.length,
@@ -245,7 +583,8 @@ router.post("/", requireAuth, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      draft: normalizedDraft,
+      draft: draftWithFactClassification,
+      factClassifications,
       confidence: {
         score: finalConfidenceScore,
         publicationReadiness,
@@ -256,7 +595,7 @@ router.post("/", requireAuth, async (req, res) => {
         priority: priority || null,
         verifiedFactsCount,
         verificationItemsCount,
-        promptVersion: "2.4.3",
+        promptVersion: "2.5.0",
         createdAt: new Date().toISOString(),
       },
     });
@@ -274,3 +613,6 @@ router.post("/", requireAuth, async (req, res) => {
 module.exports = router;
 module.exports.normalizeNewsroomDraft = normalizeNewsroomDraft;
 module.exports.hasTemporalReference = hasTemporalReference;
+module.exports.classifyNewsroomFact = classifyNewsroomFact;
+module.exports.classifyNewsroomFacts = classifyNewsroomFacts;
+module.exports.formatFactClassificationTable = formatFactClassificationTable;
