@@ -1,5 +1,10 @@
+const { createClient } = require("@supabase/supabase-js");
+
 const SERVICE_NAME = "BLACK FLASH ORBIT API";
 const API_VERSION = "v1";
+
+let telemetryAuthClient = null;
+let telemetryAuthClientKey = "";
 
 const projects = [
   {
@@ -64,6 +69,146 @@ function getTimestamp() {
 
 function getEnvironment() {
   return process.env.VERCEL_ENV || process.env.NODE_ENV || "development";
+}
+
+function createHttpError(message, statusCode = 500, code = "server_error") {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
+function getRequestPath(req) {
+  return req.originalUrl || req.url || "unknown";
+}
+
+function logTelemetryAuthEvent(req, reason, metadata = {}) {
+  console.warn("[ORBIT Telemetry Auth]", {
+    method: req.method,
+    path: getRequestPath(req),
+    reason,
+    status: metadata.status || null,
+    userId: metadata.userId || null,
+  });
+}
+
+function getTelemetryAuthConfig() {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+  const supabaseAnonKey =
+    process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw createHttpError(
+      "Supabase auth belum dikonfigurasi.",
+      500,
+      "telemetry_auth_not_configured",
+    );
+  }
+
+  return { supabaseAnonKey, supabaseUrl };
+}
+
+function getTelemetryAuthClient() {
+  const { supabaseAnonKey, supabaseUrl } = getTelemetryAuthConfig();
+  const nextClientKey = `${supabaseUrl}:${supabaseAnonKey}`;
+
+  if (!telemetryAuthClient || telemetryAuthClientKey !== nextClientKey) {
+    telemetryAuthClient = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        persistSession: false,
+      },
+    });
+    telemetryAuthClientKey = nextClientKey;
+  }
+
+  return telemetryAuthClient;
+}
+
+function getBearerToken(req) {
+  const authorization = req.headers?.authorization || "";
+
+  if (!authorization) {
+    throw createHttpError(
+      "Missing bearer token.",
+      401,
+      "missing_authorization",
+    );
+  }
+
+  if (!authorization.startsWith("Bearer ")) {
+    throw createHttpError(
+      "Invalid bearer token.",
+      401,
+      "invalid_bearer_format",
+    );
+  }
+
+  const token = authorization.slice("Bearer ".length).trim();
+
+  if (!token) {
+    throw createHttpError(
+      "Invalid bearer token.",
+      401,
+      "invalid_bearer_format",
+    );
+  }
+
+  return token;
+}
+
+async function requireTelemetryAuth(req, res) {
+  try {
+    const token = getBearerToken(req);
+    const authClient = getTelemetryAuthClient();
+    const { data, error } = await authClient.auth.getUser(token);
+
+    if (error || !data?.user?.id) {
+      throw createHttpError(
+        "Invalid or expired token.",
+        401,
+        "invalid_supabase_token",
+      );
+    }
+
+    req.user = data.user;
+
+    return data.user;
+  } catch (error) {
+    const statusCode = error.statusCode || error.status || 500;
+    const safeStatusCode =
+      statusCode >= 400 && statusCode < 600 ? statusCode : 500;
+
+    logTelemetryAuthEvent(req, error.code || "telemetry_auth_failed", {
+      status: safeStatusCode,
+    });
+
+    sendJson(
+      res,
+      {
+        success: false,
+        code: error.code || "telemetry_auth_failed",
+        message:
+          safeStatusCode === 401
+            ? "Autentikasi diperlukan."
+            : "Telemetry auth gagal.",
+      },
+      safeStatusCode,
+    );
+
+    return null;
+  }
+}
+
+function withTelemetryAuth(handler) {
+  return async function protectedTelemetryHandler(req, res) {
+    const user = await requireTelemetryAuth(req, res);
+
+    if (!user) return undefined;
+
+    return handler(req, res, user);
+  };
 }
 
 function getMemory() {
@@ -209,3 +354,4 @@ module.exports.getOrbitProjects = getOrbitProjects;
 module.exports.getOrbitSecurity = getOrbitSecurity;
 module.exports.getOrbitSystem = getOrbitSystem;
 module.exports.sendJson = sendJson;
+module.exports.withTelemetryAuth = withTelemetryAuth;

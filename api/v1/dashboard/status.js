@@ -1,9 +1,10 @@
 const {
   createDashboardResponse,
   sendJson,
+  withTelemetryAuth,
 } = require("../../../server/lib/orbitDashboardTelemetry");
 
-module.exports = function handler(req, res) {
+module.exports = withTelemetryAuth(function handler(req, res) {
   if (req.method && req.method !== "GET") {
     return sendJson(
       res,
@@ -16,4 +17,4 @@ module.exports = function handler(req, res) {
   }
 
   return sendJson(res, createDashboardResponse());
-};
+});

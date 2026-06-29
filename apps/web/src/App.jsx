@@ -34,6 +34,7 @@ import { CommandCenterSecurityPanel } from "./components/CommandCenterSecurityPa
 import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 import { Login } from "./pages/Login.jsx";
 import { Register } from "./pages/Register.jsx";
+import { getAuthenticatedHeaders } from "./services/api.js";
 
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
 
@@ -192,8 +193,9 @@ function CommandCenterDashboard() {
       setTelemetryError("");
 
       try {
+        const authHeaders = await getAuthenticatedHeaders();
         const response = await fetch("/api/v1/dashboard/status", {
-          headers: { Accept: "application/json" },
+          headers: { Accept: "application/json", ...authHeaders },
           signal: controller.signal,
         });
 

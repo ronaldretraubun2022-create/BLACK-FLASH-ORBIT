@@ -127,8 +127,6 @@ function getApiErrorMessage(errorBody, status) {
   const candidates = [
     errorBody?.message,
     errorBody?.error,
-    errorBody?.providerError?.message,
-    errorBody?.providerError?.metadata?.raw,
   ]
     .filter(Boolean)
     .map((value) => formatErrorValue(value))
@@ -374,6 +372,8 @@ function getPrintableRequestUrl(requestUrl) {
 }
 
 function logApiRequestUrl(path, requestUrl) {
+  if (import.meta.env.VITE_ENABLE_API_DEBUG !== "true") return;
+
   console.info("[ORBIT API Request]", {
     path,
     url: getPrintableRequestUrl(requestUrl),
@@ -429,32 +429,50 @@ export const api = {
     }
   },
 
-  getSystem() {
-    return request("/api/v1/system");
+  async getSystem() {
+    return request("/api/v1/system", {
+      headers: await getAuthenticatedHeaders(),
+    });
   },
 
-  getMetrics() {
-    return request("/api/v1/metrics");
+  async getMetrics() {
+    return request("/api/v1/metrics", {
+      headers: await getAuthenticatedHeaders(),
+    });
   },
 
-  getActivity() {
-    return request("/api/v1/activity");
+  async getActivity() {
+    return request("/api/v1/activity", {
+      headers: await getAuthenticatedHeaders(),
+    });
   },
 
-  getProjects() {
-    return request("/api/v1/projects");
+  async getProjects() {
+    return request("/api/v1/projects", {
+      headers: await getAuthenticatedHeaders(),
+    });
   },
 
   async getSecurity() {
-    return normalizeSecurity(await request("/api/v1/security"));
+    return normalizeSecurity(
+      await request("/api/v1/security", {
+        headers: await getAuthenticatedHeaders(),
+      }),
+    );
   },
 
-  getDashboardStatus() {
-    return request("/api/v1/dashboard/status");
+  async getDashboardStatus() {
+    return request("/api/v1/dashboard/status", {
+      headers: await getAuthenticatedHeaders(),
+    });
   },
 
   async getReports() {
-    return normalizeReports(await request("/api/v1/reports"));
+    return normalizeReports(
+      await request("/api/v1/reports", {
+        headers: await getAuthenticatedHeaders(),
+      }),
+    );
   },
 
   async getPromptCategories() {
@@ -569,7 +587,11 @@ export const api = {
   },
 
   async getAutomation() {
-    return normalizeAutomation(await request("/api/v1/automation"));
+    return normalizeAutomation(
+      await request("/api/v1/automation", {
+        headers: await getAuthenticatedHeaders(),
+      }),
+    );
   },
 
   async getAutomationStatus() {

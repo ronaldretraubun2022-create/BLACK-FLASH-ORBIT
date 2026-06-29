@@ -25,11 +25,13 @@ function getUserContext(req) {
 
 function sendError(res, error, fallbackMessage) {
   const statusCode = error.statusCode || error.status || 500;
+  const message =
+    statusCode >= 500 ? fallbackMessage : error.message || fallbackMessage;
 
   return res.status(statusCode).json({
     success: false,
     code: error.code || "web_builder_request_failed",
-    message: error.message || fallbackMessage,
+    message,
   });
 }
 

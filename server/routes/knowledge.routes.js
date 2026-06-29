@@ -140,11 +140,13 @@ function getAuthenticatedEmail(req) {
 
 function sendError(res, error, fallbackMessage) {
   const status = error.statusCode || error.status || 500;
+  const message =
+    status >= 500 ? fallbackMessage : error.message || fallbackMessage;
 
   return res.status(status).json({
     success: false,
     code: error.code || "knowledge_request_failed",
-    message: error.message || fallbackMessage,
+    message,
   });
 }
 

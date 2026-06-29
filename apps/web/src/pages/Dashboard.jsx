@@ -158,6 +158,8 @@ function getTelemetryWarning(failedEndpoints) {
 }
 
 function logTelemetryDebug(endpoints, results, failedEndpoints) {
+  if (import.meta.env.VITE_ENABLE_API_DEBUG !== "true") return;
+
   console.log("Telemetry Endpoints", endpoints);
   console.log("Telemetry Results", results);
   console.log("Failed Endpoints", failedEndpoints);

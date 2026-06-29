@@ -445,11 +445,13 @@ function createHttpError(message, statusCode = 500, code = "server_error") {
 
 function sendPromptError(res, error, fallbackMessage) {
   const statusCode = error.statusCode || error.status || 500;
+  const message =
+    statusCode >= 500 ? fallbackMessage : error.message || fallbackMessage;
 
   return res.status(statusCode).json({
     success: false,
     code: error.code || "prompt_request_failed",
-    message: error.message || fallbackMessage,
+    message,
   });
 }
 
@@ -1082,6 +1084,24 @@ router.get("/healthz", (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+router.use(
+  [
+    "/activity",
+    "/automation",
+    "/dashboard",
+    "/metrics",
+    "/monitoring",
+    "/osint",
+    "/projects",
+    "/reports",
+    "/security",
+    "/settings",
+    "/system",
+    "/workspace",
+  ],
+  requireAuth,
+);
 
 router.get("/system", (req, res) => {
   res.json({

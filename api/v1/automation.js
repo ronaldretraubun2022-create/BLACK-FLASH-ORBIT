@@ -1,6 +1,10 @@
-const { getOrbitAutomation, sendJson } = require("../../server/lib/orbitDashboardTelemetry");
+const {
+  getOrbitAutomation,
+  sendJson,
+  withTelemetryAuth,
+} = require("../../server/lib/orbitDashboardTelemetry");
 
-module.exports = function handler(req, res) {
+module.exports = withTelemetryAuth(function handler(req, res) {
   const engines = getOrbitAutomation();
 
   sendJson(res, {
@@ -15,4 +19,4 @@ module.exports = function handler(req, res) {
     message: "Automation telemetry ready.",
     timestamp: new Date().toISOString(),
   });
-};
+});

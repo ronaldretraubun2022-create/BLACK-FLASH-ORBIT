@@ -27,10 +27,12 @@ function createHttpError(message, statusCode = 500, code = "SERVER_ERROR") {
 
 function sendError(res, error, fallbackMessage) {
   const statusCode = error.statusCode || error.status || 500;
+  const message =
+    statusCode >= 500 ? fallbackMessage : error.message || fallbackMessage;
 
   return res.status(statusCode).json({
     success: false,
-    error: error.message || fallbackMessage,
+    error: message,
     code: error.code || null,
   });
 }

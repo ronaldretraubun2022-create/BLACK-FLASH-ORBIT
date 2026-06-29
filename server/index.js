@@ -201,8 +201,6 @@ function healthPayload() {
     status: "online",
     service: "BLACK FLASH ORBIT API",
     version: "1.0.0",
-    environment: NODE_ENV,
-    port: PORT,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
   };
@@ -311,7 +309,6 @@ const apiLimiter = rateLimit({
       "/api/healthz",
       "/api/v1/health",
       "/api/v1/healthz",
-      "/api/v1/system",
     ].includes(req.path),
   message: {
     success: false,

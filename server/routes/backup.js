@@ -100,11 +100,25 @@ async function getAuthenticatedUser(client, token) {
 }
 
 function sendError(res, error, fallbackMessage) {
-  return res.status(error.statusCode || error.status || 500).json({
+  const statusCode = error.statusCode || error.status || 500;
+  const message =
+    statusCode >= 500 ? fallbackMessage : error.message || fallbackMessage;
+
+  return res.status(statusCode).json({
     success: false,
-    error: error.message || fallbackMessage,
+    error: message,
     code: error.code || null,
   });
+}
+
+function recordImportError(errors, scope, error) {
+  console.warn("[ORBIT Backup Import] table import failed", {
+    code: error?.code || null,
+    scope,
+    status: error?.status || null,
+  });
+
+  errors.push(`${scope}: gagal import data`);
 }
 
 function safeString(value, maxLength = MAX_TEXT_LENGTH) {
@@ -385,7 +399,7 @@ router.post("/import", async (req, res) => {
         .upsert(sessions, { onConflict: "id" });
 
       if (error) {
-        errors.push(`sessions: ${error.message}`);
+        recordImportError(errors, "sessions", error);
       }
     }
 
@@ -395,7 +409,7 @@ router.post("/import", async (req, res) => {
         .upsert(messages, { onConflict: "id" });
 
       if (error) {
-        errors.push(`messages: ${error.message}`);
+        recordImportError(errors, "messages", error);
       }
     }
 
@@ -405,7 +419,7 @@ router.post("/import", async (req, res) => {
         .upsert(promptTemplates, { onConflict: "id" });
 
       if (error) {
-        errors.push(`prompt_templates: ${error.message}`);
+        recordImportError(errors, "prompt_templates", error);
       }
     }
 

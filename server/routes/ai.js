@@ -187,12 +187,16 @@ function createHttpError(
 function sendSafeError(res, error, fallbackMessage = "Request AI gagal.") {
   const status = Number(error?.statusCode || error?.status || 500);
   const safeStatus = status >= 400 && status < 600 ? status : 500;
+  const message =
+    safeStatus >= 500
+      ? fallbackMessage
+      : error?.safeMessage || error?.message || fallbackMessage;
 
   return res.status(safeStatus).json({
     success: false,
     status: safeStatus,
     code: error?.code || "ai_request_failed",
-    message: error?.safeMessage || error?.message || fallbackMessage,
+    message,
   });
 }
 
@@ -425,15 +429,13 @@ function getOpenRouterError(data) {
   return data?.error || data?.provider_error || data?.providerError || null;
 }
 
-function getOpenRouterErrorMessage(data) {
-  const providerError = getOpenRouterError(data);
+function getSafeOpenRouterErrorMetadata(providerError) {
+  if (!providerError || typeof providerError !== "object") return null;
 
-  return (
-    providerError?.message ||
-    providerError?.metadata?.raw ||
-    data?.message ||
-    "OpenRouter gagal memproses request."
-  );
+  return {
+    code: providerError.code || null,
+    type: providerError.type || providerError.name || null,
+  };
 }
 
 function getSafeOpenRouterStatusMessage(status) {
@@ -781,7 +783,6 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
 
     if (!response.ok) {
       const providerError = getOpenRouterError(data);
-      const errorMessage = getOpenRouterErrorMessage(data);
       const safeProviderMessage = getSafeOpenRouterStatusMessage(
         response.status,
       );
@@ -789,8 +790,8 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       console.error("[OpenRouter API Error]", {
         status: response.status,
         model,
-        message: errorMessage,
-        providerError,
+        message: safeProviderMessage,
+        providerError: getSafeOpenRouterErrorMetadata(providerError),
       });
 
       throw createHttpError(

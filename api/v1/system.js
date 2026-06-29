@@ -1,5 +1,9 @@
-const { getOrbitSystem, sendJson } = require("../../server/lib/orbitDashboardTelemetry");
+const {
+  getOrbitSystem,
+  sendJson,
+  withTelemetryAuth,
+} = require("../../server/lib/orbitDashboardTelemetry");
 
-module.exports = function handler(req, res) {
+module.exports = withTelemetryAuth(function handler(req, res) {
   sendJson(res, getOrbitSystem());
-};
+});
