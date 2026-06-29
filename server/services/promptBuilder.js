@@ -157,11 +157,12 @@ Catatan tambahan:
 - Jaga keakuratan judul dan konteks.
 - Hindari asumsi faktual tanpa verifikasi.
 - Sertakan peringatan verifikasi apabila terdapat fakta yang perlu dikonfirmasi.
-- Backend sudah merender Evidence Matrix, Evidence Score, Missing Evidence Recommendations, dan Fact Classification Table sebelum output AI.
+- Backend sudah merender Evidence Matrix, Evidence Score, Missing Evidence Recommendations, Fact Classification Table, dan Source Quality Matrix sebelum output AI.
 - Jangan tulis ulang section Evidence Matrix.
 - Jangan tulis ulang section Evidence Score.
 - Jangan tulis ulang section Missing Evidence Recommendations.
 - Jangan tulis ulang section Fact Classification Table.
+- Jangan tulis ulang section Source Quality Matrix.
 - Mulai output AI langsung dari "Executive Summary".
 - Setiap kesimpulan harus didukung evidence_found, evidence_missing, dan evidence_strength.
 - Jika evidence_missing masih ada, tulis kesimpulan sebagai indikasi yang memerlukan verifikasi.

@@ -41,6 +41,54 @@ const EVIDENCE_TYPE_WEIGHTS = {
   "Social Media": 5,
   "User Input": 5,
 };
+const SOURCE_QUALITY_RULES = [
+  {
+    level: "Official Government Source",
+    score: 100,
+    pattern:
+      /\b(?:kemendagri|kemenkeu|kementerian|pemerintah provinsi|pemprov|pemda|dinas|diskominfo|dokumen resmi opd|apbd|rkpd|rpjmd|peraturan|perda)\b/i,
+  },
+  {
+    level: "BPS / statistical source",
+    score: 100,
+    pattern: /\b(?:bps|statistik|sensus|laporan statistik resmi)\b/i,
+  },
+  {
+    level: "Official institution statement",
+    score: 90,
+    pattern: /\b(?:official statement|official statement|siaran pers resmi|pernyataan resmi|official statement)\b/i,
+  },
+  {
+    level: "Government website",
+    score: 90,
+    pattern: /\b(?:government website|portal data pemerintah|go\.id|situs resmi pemerintah)\b/i,
+  },
+  {
+    level: "Independent report",
+    score: 75,
+    pattern: /\b(?:independent report|laporan independen|lembaga riset|universitas|ngo|lsm)\b/i,
+  },
+  {
+    level: "Established news media",
+    score: 70,
+    pattern: /\b(?:kompas|tempo|antara|reuters|bbc|cnn|detik|established news media)\b/i,
+  },
+  {
+    level: "Local media",
+    score: 60,
+    pattern: /\b(?:media lokal|local media|wartawan lokal|koran lokal)\b/i,
+  },
+  {
+    level: "Social media",
+    score: 35,
+    pattern: /\b(?:social media|media sosial|facebook|instagram|twitter|x\.com|tiktok|youtube|whatsapp|telegram)\b/i,
+  },
+  {
+    level: "User input only",
+    score: 20,
+    pattern: /\b(?:user input|input pengguna)\b/i,
+  },
+];
 const OFFICIAL_SOURCE_KEYWORDS = [
   "bappenas",
   "bappeda",
@@ -555,6 +603,84 @@ function formatEvidenceMatrix(evidence) {
   ].join("\n");
 }
 
+function classifySourceQuality(source) {
+  const cleanSource = normalizeStatement(source);
+  const matchedRule =
+    SOURCE_QUALITY_RULES.find((rule) => rule.pattern.test(cleanSource)) ||
+    SOURCE_QUALITY_RULES[SOURCE_QUALITY_RULES.length - 1];
+
+  return {
+    source: cleanSource || "User Input",
+    source_quality_level: matchedRule.level,
+    source_quality_score: matchedRule.score,
+  };
+}
+
+function getSourceQualityLevel(score) {
+  if (score >= 90) return "HIGH";
+  if (score >= 70) return "MEDIUM";
+  if (score >= 50) return "LIMITED";
+  return "LOW";
+}
+
+function buildSourceQualityEngine(factClassifications, evidence) {
+  const evidenceSources = (evidence?.items || []).flatMap(
+    (item) => item.evidence_found || [],
+  );
+  const hasSubstantiveEvidence = evidenceSources.some(
+    (source) => !["Social Media", "User Input"].includes(source),
+  );
+  const hasSocialOnlyEvidence =
+    evidenceSources.includes("Social Media") && !hasSubstantiveEvidence;
+  const recommendedSources =
+    hasSocialOnlyEvidence || !hasSubstantiveEvidence
+      ? []
+      : factClassifications.flatMap((fact) => fact.recommended_sources || []);
+  const sourceNames = [...recommendedSources, ...evidenceSources];
+  const uniqueSources = [...new Set(sourceNames.filter(Boolean))];
+  const qualityItems = (uniqueSources.length > 0 ? uniqueSources : ["User Input"])
+    .map(classifySourceQuality)
+    .sort(
+      (first, second) =>
+        second.source_quality_score - first.source_quality_score ||
+        first.source.localeCompare(second.source),
+    );
+  const sourceQualityScore =
+    qualityItems.length === 0
+      ? 0
+      : clampScore(
+          qualityItems.reduce(
+            (total, item) => total + item.source_quality_score,
+            0,
+          ) / qualityItems.length,
+        );
+
+  return {
+    source_quality_score: sourceQualityScore,
+    source_quality_level: getSourceQualityLevel(sourceQualityScore),
+    source_quality_items: qualityItems,
+  };
+}
+
+function formatSourceQualityMatrix(sourceQuality) {
+  const rows = sourceQuality.source_quality_items.map((item) =>
+    [
+      escapeMarkdownCell(item.source),
+      item.source_quality_level,
+      `${item.source_quality_score}%`,
+    ].join(" | "),
+  );
+
+  return [
+    "## Source Quality Matrix",
+    "| Source | Trust Level | Source Quality Score |",
+    "|---|---|---:|",
+    ...rows.map((row) => `| ${row} |`),
+    "",
+    `Overall Source Quality Score: ${sourceQuality.source_quality_score}% (${sourceQuality.source_quality_level})`,
+  ].join("\n");
+}
+
 function formatFactClassificationTable(items) {
   const rows = items.map((item) =>
     [
@@ -769,6 +895,11 @@ router.post("/", requireAuth, async (req, res) => {
       userInput: true,
     });
     const evidenceMatrix = formatEvidenceMatrix(evidence);
+    const sourceQuality = buildSourceQualityEngine(
+      factClassifications,
+      evidence,
+    );
+    const sourceQualityMatrix = formatSourceQualityMatrix(sourceQuality);
     const prompt = buildNewsroomPrompt({
       ...promptPayload,
       evidenceMatrix,
@@ -783,6 +914,7 @@ router.post("/", requireAuth, async (req, res) => {
     const draftWithEvidence = [
       evidenceMatrix,
       factClassificationTable,
+      sourceQualityMatrix,
       normalizedDraft,
     ]
       .filter(Boolean)
@@ -810,6 +942,7 @@ router.post("/", requireAuth, async (req, res) => {
       draft: draftWithEvidence,
       evidence,
       factClassifications,
+      sourceQuality,
       confidence: {
         score: finalConfidenceScore,
         publicationReadiness,
@@ -818,9 +951,12 @@ router.post("/", requireAuth, async (req, res) => {
         ...promptPayload,
         assessment: assessment || null,
         priority: priority || null,
+        source_quality_score: sourceQuality.source_quality_score,
+        source_quality_level: sourceQuality.source_quality_level,
+        source_quality_items: sourceQuality.source_quality_items,
         verifiedFactsCount,
         verificationItemsCount,
-        promptVersion: "2.6.0",
+        promptVersion: "2.7.0",
         createdAt: new Date().toISOString(),
       },
     });
@@ -841,5 +977,7 @@ module.exports.hasTemporalReference = hasTemporalReference;
 module.exports.classifyNewsroomFact = classifyNewsroomFact;
 module.exports.classifyNewsroomFacts = classifyNewsroomFacts;
 module.exports.buildEvidenceEngine = buildEvidenceEngine;
+module.exports.buildSourceQualityEngine = buildSourceQualityEngine;
 module.exports.formatEvidenceMatrix = formatEvidenceMatrix;
 module.exports.formatFactClassificationTable = formatFactClassificationTable;
+module.exports.formatSourceQualityMatrix = formatSourceQualityMatrix;

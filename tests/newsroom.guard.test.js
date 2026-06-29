@@ -4,8 +4,10 @@ const {
   hasTemporalReference,
   classifyNewsroomFact,
   buildEvidenceEngine,
+  buildSourceQualityEngine,
   formatEvidenceMatrix,
   formatFactClassificationTable,
+  formatSourceQualityMatrix,
 } = require("../server/routes/newsroom.js");
 const {
   normalizeOpenRouterModel,
@@ -262,8 +264,57 @@ runTest(
       !prompt.includes("Fact Classification Table awal:"),
       "prompt must not include backend Fact Classification Table for regeneration",
     );
+    assert(
+      prompt.includes("Jangan tulis ulang section Source Quality Matrix."),
+      "prompt must forbid duplicated Source Quality Matrix output",
+    );
   },
 );
+
+runTest("formatSourceQualityMatrix renders Source Quality Matrix", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+  const matrix = formatSourceQualityMatrix(sourceQuality);
+
+  assert(matrix.includes("## Source Quality Matrix"));
+  assert(matrix.includes("| Source | Trust Level | Source Quality Score |"));
+  assert(/Overall Source Quality Score: \d+%/.test(matrix));
+});
+
+runTest("buildSourceQualityEngine scores official source high", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+
+  assert(sourceQuality.source_quality_score >= 90);
+  assert.strictEqual(sourceQuality.source_quality_level, "HIGH");
+});
+
+runTest("buildSourceQualityEngine scores user input only low", () => {
+  const fact = classifyNewsroomFact("Warga menyebut layanan publik membaik", {
+    topic: "Warga menyebut layanan publik membaik",
+    userInput: true,
+  });
+  const evidence = buildEvidenceEngine([fact], { userInput: true });
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+
+  assert(sourceQuality.source_quality_score <= 20);
+  assert.strictEqual(sourceQuality.source_quality_level, "LOW");
+});
+
+runTest("buildSourceQualityEngine scores social media low", () => {
+  const fact = classifyNewsroomFact("Unggahan Facebook menyebut antrean layanan panjang");
+  const evidence = buildEvidenceEngine([fact]);
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+
+  assert(sourceQuality.source_quality_score <= 35);
+  assert.strictEqual(sourceQuality.source_quality_level, "LOW");
+});
 
 runTest("normalizeOpenRouterModel skips null and empty values", () => {
   assert.strictEqual(normalizeOpenRouterModel(null), "");
