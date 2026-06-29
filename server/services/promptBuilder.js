@@ -4,22 +4,14 @@ function sanitizeText(value) {
     .trim();
 }
 
-function sanitizePromptBlock(value) {
-  return String(value || "")
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f<>]/g, " ")
-    .trim();
-}
-
 function buildNewsroomPrompt({
   topic,
   layer,
   mode,
   audience,
   complexity,
-  evidenceMatrix = "",
   factGuard = true,
   citationEngine = true,
-  factClassificationTable = "",
   sourceConfidence = true,
 }) {
   const safeTopic = sanitizeText(topic);
@@ -62,10 +54,6 @@ TIMELINE GUARD RULES:
     : "";
 
   const enableSourceConfidence = Boolean(sourceConfidence);
-  const safeEvidenceMatrix = sanitizePromptBlock(evidenceMatrix);
-  const safeFactClassificationTable = sanitizePromptBlock(
-    factClassificationTable,
-  );
 
   const citationEngineInstructions = enableCitationEngine
     ? `
@@ -135,15 +123,11 @@ Kompleksitas: ${safeComplexity}
 Topik: ${safeTopic}
 
 Tulis hasil dalam format berikut:
-1. Evidence Matrix
-2. Evidence Score
-3. Missing Evidence Recommendations
-4. Fact Classification Table
-5. Executive Summary
-6. Analisis
-7. Risiko
-8. Rekomendasi
-9. Action Plan
+1. Executive Summary
+2. Analisis
+3. Risiko
+4. Rekomendasi
+5. Action Plan
 ${verificationSection}
 ${
   enableSourceConfidence
@@ -173,18 +157,15 @@ Catatan tambahan:
 - Jaga keakuratan judul dan konteks.
 - Hindari asumsi faktual tanpa verifikasi.
 - Sertakan peringatan verifikasi apabila terdapat fakta yang perlu dikonfirmasi.
-- Gunakan Evidence Matrix berikut sebelum menulis Executive Summary.
+- Backend sudah merender Evidence Matrix, Evidence Score, Missing Evidence Recommendations, dan Fact Classification Table sebelum output AI.
+- Jangan tulis ulang section Evidence Matrix.
+- Jangan tulis ulang section Evidence Score.
+- Jangan tulis ulang section Missing Evidence Recommendations.
+- Jangan tulis ulang section Fact Classification Table.
+- Mulai output AI langsung dari "Executive Summary".
 - Setiap kesimpulan harus didukung evidence_found, evidence_missing, dan evidence_strength.
 - Jika evidence_missing masih ada, tulis kesimpulan sebagai indikasi yang memerlukan verifikasi.
-- Gunakan Fact Classification Table berikut sebagai dasar sebelum membuat analisis.
-- Jika menambahkan klaim faktual baru, klasifikasikan dulu dalam Fact Classification Table.
 ${enableFactGuard ? "- Jangan tampilkan asumsi sebagai fakta. Tandai semua asumsi secara jelas." : ""}
-
-Evidence Matrix awal:
-${safeEvidenceMatrix || "Belum ada evidence metadata yang dapat disusun."}
-
-Fact Classification Table awal:
-${safeFactClassificationTable || "Belum ada pernyataan faktual yang dapat diklasifikasi."}
 `;
 }
 

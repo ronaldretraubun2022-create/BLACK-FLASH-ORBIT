@@ -12,6 +12,7 @@ const {
   getOpenRouterModels,
   isValidOpenRouterModel,
 } = require("../server/services/openrouter.js");
+const { buildNewsroomPrompt } = require("../server/services/promptBuilder.js");
 
 function runTest(name, fn) {
   try {
@@ -231,6 +232,38 @@ runTest("formatEvidenceMatrix renders Missing Evidence recommendations", () => {
   assert(evidence.evidence_missing.includes("Statistical Data"));
   assert(matrix.includes("Tambahkan dokumen resmi"));
 });
+
+runTest(
+  "buildNewsroomPrompt starts AI output at Executive Summary only",
+  () => {
+    const prompt = buildNewsroomPrompt({
+      topic: "Papua Selatan memperoleh penghargaan Rp3 miliar",
+      layer: "Strategic",
+      mode: "Analysis",
+      audience: "Editor",
+      complexity: "High",
+      evidenceMatrix: "## Evidence Matrix\nbackend-rendered",
+      factClassificationTable: "## Fact Classification Table\nbackend-rendered",
+    });
+
+    assert(
+      prompt.includes("1. Executive Summary"),
+      "prompt output format must start from Executive Summary",
+    );
+    assert(
+      !prompt.includes("1. Evidence Matrix"),
+      "prompt must not ask AI to regenerate Evidence Matrix",
+    );
+    assert(
+      !prompt.includes("Evidence Matrix awal:"),
+      "prompt must not include backend Evidence Matrix for regeneration",
+    );
+    assert(
+      !prompt.includes("Fact Classification Table awal:"),
+      "prompt must not include backend Fact Classification Table for regeneration",
+    );
+  },
+);
 
 runTest("normalizeOpenRouterModel skips null and empty values", () => {
   assert.strictEqual(normalizeOpenRouterModel(null), "");
