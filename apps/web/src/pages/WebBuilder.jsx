@@ -57,6 +57,98 @@ const previewViewports = {
   },
 };
 
+const componentLibrary = [
+  {
+    id: "hero",
+    label: "Hero",
+    type: "hero",
+    summary: "Lead visual untuk headline utama dan ringkasan editorial.",
+    props: {
+      label: "Papua Selatan Today",
+      title: "Newsroom intelligence for regional multimedia coverage",
+      body: "Dashboard publikasi untuk berita cepat, visual lapangan, dan arsip editorial.",
+      actionLabel: "Baca laporan utama",
+    },
+  },
+  {
+    id: "navbar",
+    label: "Navbar",
+    type: "text",
+    summary: "Navigasi brand dan kanal utama media.",
+    props: {
+      label: "ORBIT News",
+      title: "BLACK FLASH ORBIT",
+      body: "Beranda / Berita / Multimedia / Arsip",
+    },
+  },
+  {
+    id: "footer",
+    label: "Footer",
+    type: "text",
+    summary: "Penutup situs dengan identitas redaksi dan kanal kontak.",
+    props: {
+      label: "Footer",
+      title: "BLACK FLASH ORBIT",
+      body: "Editorial desk, multimedia archive, and secure newsroom operations.",
+    },
+  },
+  {
+    id: "card",
+    label: "Card",
+    type: "feature-grid",
+    summary: "Kartu modular untuk highlight data, program, atau layanan.",
+    props: {
+      label: "Highlights",
+      title: "Editorial command cards",
+      body: "Ringkasan modul siap pakai untuk project newsroom.",
+      items: ["Breaking Desk", "Fact Check", "Media Archive"],
+    },
+  },
+  {
+    id: "gallery",
+    label: "Gallery",
+    type: "gallery",
+    summary: "Grid visual untuk foto lapangan dan aset multimedia.",
+    props: {
+      label: "Gallery",
+      title: "Field visuals",
+      body: "Kurasi foto, video still, dan dokumentasi lapangan.",
+      items: ["Jayapura Desk", "Merauke Field", "Asmat Archive"],
+    },
+  },
+  {
+    id: "news-grid",
+    label: "News Grid",
+    type: "article-list",
+    summary: "Grid artikel untuk headline, ringkasan, dan kanal berita.",
+    props: {
+      label: "Latest News",
+      title: "Top newsroom updates",
+      body: "Daftar berita utama untuk halaman depan.",
+      items: [
+        "Agenda pemerintahan daerah",
+        "Kabar ekonomi masyarakat",
+        "Liputan multimedia lapangan",
+      ],
+    },
+  },
+  {
+    id: "cta",
+    label: "CTA",
+    type: "cta",
+    summary: "Ajakan aksi untuk langganan, kontak redaksi, atau arsip.",
+    props: {
+      label: "CTA",
+      title: "Siapkan paket publikasi berikutnya",
+      body: "Kirim draft, aset visual, dan metadata agar editor dapat meninjau paket berita.",
+      actionLabel: "Mulai kurasi",
+    },
+  },
+];
+
+const defaultComponentIds = componentLibrary.map((component) => component.id);
+const componentIdSet = new Set(defaultComponentIds);
+
 function getResponseData(response, fallback = null) {
   return response?.data ?? response ?? fallback;
 }
@@ -137,12 +229,44 @@ function createProjectPayload(form) {
   return payload;
 }
 
-function createPagePayload(form) {
+function getSelectedComponents(componentIds = defaultComponentIds) {
+  const selectedIds = componentIds.filter((componentId) =>
+    componentIdSet.has(componentId),
+  );
+  const activeIds = selectedIds.length ? selectedIds : defaultComponentIds;
+
+  return activeIds
+    .map((componentId) =>
+      componentLibrary.find((component) => component.id === componentId),
+    )
+    .filter(Boolean);
+}
+
+function createComponentSection(component, index) {
+  return {
+    id: `${component.id}-${index + 1}`,
+    type: component.type,
+    props: { ...component.props },
+    styles: {
+      component: component.id,
+    },
+  };
+}
+
+function buildComponentSections(componentIds = defaultComponentIds) {
+  return getSelectedComponents(componentIds).map(createComponentSection);
+}
+
+function createPagePayload(form, componentIds = defaultComponentIds) {
   const path = form.path.trim() || "/";
+  const selectedComponents = getSelectedComponents(componentIds);
 
   return {
+    metadata: {
+      componentLibrary: selectedComponents.map((component) => component.id),
+    },
     path: path.startsWith("/") ? path : `/${path}`,
-    sections: [],
+    sections: selectedComponents.map(createComponentSection),
     title: form.title.trim(),
   };
 }
@@ -172,7 +296,83 @@ function getPreviewPages(projectDetail, projectForm, pageForm, selectedProjectId
   return [fallbackPage];
 }
 
+function getSectionItems(props, fallbackItems = []) {
+  if (Array.isArray(props.items) && props.items.length) {
+    return props.items.slice(0, 4);
+  }
+
+  return fallbackItems;
+}
+
+function renderPreviewSection(section) {
+  const props = section?.props || {};
+  const component = section?.styles?.component || section?.id || section?.type;
+  const label = escapeHtml(props.label || component || "Component");
+  const title = escapeHtml(props.title || props.heading || "Untitled");
+  const body = escapeHtml(props.body || props.content || props.text || "");
+  const actionLabel = escapeHtml(props.actionLabel || "Open");
+
+  if (component === "navbar") {
+    return `<nav class="component component-nav"><strong>${title}</strong><span>${body}</span></nav>`;
+  }
+
+  if (component === "footer") {
+    return `<footer class="component component-footer"><strong>${title}</strong><span>${body}</span></footer>`;
+  }
+
+  if (section?.type === "hero") {
+    return `<section class="component component-hero"><div><p>${label}</p><h2>${title}</h2><span>${body}</span></div><a>${actionLabel}</a></section>`;
+  }
+
+  if (section?.type === "gallery") {
+    const items = getSectionItems(props, ["Frame 01", "Frame 02", "Frame 03"]);
+    const itemMarkup = items
+      .map(
+        (item, index) =>
+          `<figure><div>${String(index + 1).padStart(2, "0")}</div><figcaption>${escapeHtml(item)}</figcaption></figure>`,
+      )
+      .join("");
+
+    return `<section class="component"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="gallery-grid">${itemMarkup}</div></section>`;
+  }
+
+  if (section?.type === "article-list") {
+    const items = getSectionItems(props, [
+      "Lead berita utama",
+      "Update redaksi",
+      "Arsip multimedia",
+    ]);
+    const itemMarkup = items
+      .map(
+        (item) =>
+          `<article><p>Newsroom</p><h3>${escapeHtml(item)}</h3><span>Ringkasan berita siap publikasi.</span></article>`,
+      )
+      .join("");
+
+    return `<section class="component"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="news-grid">${itemMarkup}</div></section>`;
+  }
+
+  if (section?.type === "feature-grid") {
+    const items = getSectionItems(props, ["Editorial", "Multimedia", "Archive"]);
+    const itemMarkup = items
+      .map(
+        (item) =>
+          `<article><strong>${escapeHtml(item)}</strong><span>Reusable content block.</span></article>`,
+      )
+      .join("");
+
+    return `<section class="component"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="card-grid">${itemMarkup}</div></section>`;
+  }
+
+  if (section?.type === "cta") {
+    return `<section class="component component-cta"><div><p>${label}</p><h2>${title}</h2><span>${body}</span></div><a>${actionLabel}</a></section>`;
+  }
+
+  return `<section class="component"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span></section>`;
+}
+
 function buildPreviewHtml({
+  componentSections,
   page,
   previewMode,
   project,
@@ -191,11 +391,15 @@ function buildPreviewHtml({
     pageForm,
     project?.id,
   );
+  const activeSections = Array.isArray(page?.sections) && page.sections.length
+    ? page.sections
+    : componentSections;
   const pages = Array.isArray(project?.pages) && project.pages.length
     ? project.pages.slice(0, 4)
     : (fallbackPages.length ? fallbackPages : [page])
         .filter(Boolean)
         .slice(0, 4);
+  const sectionMarkup = (activeSections || []).map(renderPreviewSection).join("");
   const pageMarkup = pages
     .map(
       (item) => `
@@ -297,6 +501,131 @@ function buildPreviewHtml({
       color: var(--muted);
       font-weight: 800;
     }
+    .component {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.035);
+      padding: 16px;
+    }
+    .component h2 {
+      margin: 8px 0 8px;
+      font-size: 24px;
+      line-height: 1.12;
+    }
+    .component span,
+    .component article span,
+    figcaption {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .component-label,
+    .component-hero p,
+    .component-cta p {
+      margin: 0;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+    .component-nav,
+    .component-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-radius: 16px;
+    }
+    .component-nav strong,
+    .component-footer strong {
+      color: var(--text);
+      font-size: 14px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .component-hero,
+    .component-cta {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 16px;
+      background: linear-gradient(135deg, rgba(245,193,75,0.16), rgba(255,255,255,0.04));
+    }
+    .component-hero a,
+    .component-cta a {
+      border-radius: 999px;
+      background: var(--accent);
+      color: #080808;
+      font-size: 12px;
+      font-weight: 900;
+      padding: 10px 14px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .card-grid,
+    .gallery-grid,
+    .news-grid {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+    .card-grid article,
+    .news-grid article,
+    .gallery-grid figure {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(0,0,0,0.22);
+      padding: 12px;
+    }
+    .card-grid strong,
+    .news-grid h3 {
+      display: block;
+      margin: 0 0 6px;
+      color: var(--text);
+      font-size: 15px;
+    }
+    .news-grid p {
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .gallery-grid figure div {
+      display: grid;
+      min-height: 92px;
+      place-items: center;
+      border-radius: 12px;
+      background: linear-gradient(135deg, rgba(217,173,87,0.32), rgba(128,0,32,0.34));
+      color: var(--text);
+      font-weight: 900;
+    }
+    .gallery-grid figcaption {
+      display: block;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    @media (max-width: 520px) {
+      .component-nav,
+      .component-footer,
+      .component-hero,
+      .component-cta {
+        grid-template-columns: 1fr;
+        align-items: start;
+      }
+      .component-nav,
+      .component-footer {
+        display: grid;
+      }
+      .component-hero a,
+      .component-cta a {
+        width: fit-content;
+      }
+    }
   </style>
 </head>
 <body>
@@ -311,6 +640,9 @@ function buildPreviewHtml({
         <span class="chip">Mode: ${escapeHtml(previewMode)}</span>
       </div>
     </section>
+
+    <div class="section-title">Components</div>
+    ${sectionMarkup || '<section class="component"><h2>No components selected</h2><span>Select a component from the library.</span></section>'}
 
     <div class="section-title">Pages</div>
     <section class="grid">
@@ -388,6 +720,8 @@ export function WebBuilder() {
   const [lastExport, setLastExport] = useState(null);
   const [previewMode, setPreviewMode] = useState("desktop");
   const [previewRevision, setPreviewRevision] = useState(0);
+  const [selectedComponentIds, setSelectedComponentIds] =
+    useState(defaultComponentIds);
 
   const userRole = profile?.role || "user";
 
@@ -476,23 +810,51 @@ export function WebBuilder() {
     [exportedProjects, pages.length, projects.length],
   );
 
+  const selectedComponentSections = useMemo(
+    () => buildComponentSections(selectedComponentIds),
+    [selectedComponentIds],
+  );
   const activePreviewPage = pages[0] || {
     path: pageForm.path || "/",
-    sections: [],
+    sections: selectedComponentSections,
     title: pageForm.title || "Home",
   };
   const previewHtml = useMemo(
     () =>
       buildPreviewHtml({
+        componentSections: selectedComponentSections,
         page: activePreviewPage,
         previewMode,
         project: selectedProject,
         projectForm,
         pageForm,
       }),
-    [activePreviewPage, pageForm, previewMode, projectForm, selectedProject],
+    [
+      activePreviewPage,
+      pageForm,
+      previewMode,
+      projectForm,
+      selectedComponentSections,
+      selectedProject,
+    ],
   );
   const previewFrame = previewViewports[previewMode];
+
+  function toggleComponent(componentId) {
+    if (!componentIdSet.has(componentId)) return;
+
+    setSelectedComponentIds((currentIds) => {
+      if (currentIds.includes(componentId)) {
+        const nextIds = currentIds.filter((item) => item !== componentId);
+
+        return nextIds.length ? nextIds : currentIds;
+      }
+
+      return defaultComponentIds.filter(
+        (item) => item === componentId || currentIds.includes(item),
+      );
+    });
+  }
 
   async function handleCreateProject(event) {
     event.preventDefault();
@@ -546,7 +908,10 @@ export function WebBuilder() {
     setNotice("");
 
     try {
-      await api.createWebBuilderPage(selectedProjectId, createPagePayload(pageForm));
+      await api.createWebBuilderPage(
+        selectedProjectId,
+        createPagePayload(pageForm, selectedComponentIds),
+      );
       setPageForm(emptyPageForm);
       setNotice("Halaman Web Builder berhasil dibuat.");
       await loadProjectDetail(selectedProjectId);
@@ -835,6 +1200,58 @@ export function WebBuilder() {
                       label="Last Export"
                       value={formatDateTime(selectedProject?.lastExportedAt)}
                     />
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="orbit-kicker">Component Library</p>
+                      <h3 className="mt-2 text-lg font-black text-white">
+                        Reusable blocks
+                      </h3>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
+                        Pilih blok untuk template halaman dan live preview.
+                      </p>
+                    </div>
+                    <StatusPill tone="green">
+                      {selectedComponentIds.length} selected
+                    </StatusPill>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {componentLibrary.map((component) => {
+                      const isSelected = selectedComponentIds.includes(
+                        component.id,
+                      );
+
+                      return (
+                        <button
+                          aria-pressed={isSelected}
+                          className={`rounded-lg border p-4 text-left transition ${
+                            isSelected
+                              ? "border-amber-300/35 bg-amber-300/10"
+                              : "border-white/10 bg-black/20 hover:border-white/20"
+                          }`}
+                          key={component.id}
+                          onClick={() => toggleComponent(component.id)}
+                          type="button">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <h4 className="text-sm font-black text-white">
+                                {component.label}
+                              </h4>
+                              <p className="mt-2 text-xs leading-5 text-zinc-500">
+                                {component.summary}
+                              </p>
+                            </div>
+                            <span className="shrink-0 rounded-md border border-white/10 bg-black/25 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-zinc-500">
+                              {component.type}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
 
