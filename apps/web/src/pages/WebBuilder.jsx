@@ -9,6 +9,9 @@ import {
   Plus,
   RefreshCcw,
   Rocket,
+  Monitor,
+  Tablet,
+  Smartphone,
 } from "lucide-react";
 import { UserMenu } from "../components/auth/UserMenu.jsx";
 import { CommandCenterSidebar } from "../components/CommandCenterSidebar.jsx";
@@ -30,6 +33,28 @@ const emptyProjectForm = {
 const emptyPageForm = {
   path: "/",
   title: "",
+};
+
+const AUTO_REFRESH_MS = 30000;
+const previewViewports = {
+  desktop: {
+    icon: Monitor,
+    label: "Desktop",
+    width: "100%",
+    maxWidth: "100%",
+  },
+  tablet: {
+    icon: Tablet,
+    label: "Tablet",
+    width: "768px",
+    maxWidth: "100%",
+  },
+  mobile: {
+    icon: Smartphone,
+    label: "Mobile",
+    width: "390px",
+    maxWidth: "100%",
+  },
 };
 
 function getResponseData(response, fallback = null) {
@@ -122,6 +147,180 @@ function createPagePayload(form) {
   };
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function getPreviewPages(projectDetail, projectForm, pageForm, selectedProjectId) {
+  if (projectDetail?.pages?.length) return projectDetail.pages;
+
+  if (!selectedProjectId) return [];
+
+  const fallbackPage = {
+    id: "preview-page",
+    path: pageForm.path || "/",
+    sections: [],
+    sortOrder: 0,
+    title: pageForm.title || "Home",
+  };
+
+  return [fallbackPage];
+}
+
+function buildPreviewHtml({
+  page,
+  previewMode,
+  project,
+  projectForm,
+  pageForm,
+}) {
+  const resolvedTitle =
+    project?.title || projectForm.title || "Web Builder Preview";
+  const resolvedDescription =
+    project?.description ||
+    projectForm.description ||
+    "Realtime preview from existing Web Builder state.";
+  const fallbackPages = getPreviewPages(
+    project,
+    projectForm,
+    pageForm,
+    project?.id,
+  );
+  const pages = Array.isArray(project?.pages) && project.pages.length
+    ? project.pages.slice(0, 4)
+    : (fallbackPages.length ? fallbackPages : [page])
+        .filter(Boolean)
+        .slice(0, 4);
+  const pageMarkup = pages
+    .map(
+      (item) => `
+        <article class="page-card">
+          <div class="page-path">${escapeHtml(item.path || "/")}</div>
+          <h3>${escapeHtml(item.title || "Page")}</h3>
+          <p>${escapeHtml(
+            item.sections?.length ? `${item.sections.length} sections ready` : "Empty page skeleton",
+          )}</p>
+        </article>`,
+    )
+    .join("");
+
+  return `<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #050506;
+      --panel: rgba(255,255,255,0.04);
+      --line: rgba(255,255,255,0.12);
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+      --accent: #f5c14b;
+      --accent-strong: #d9ad57;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top, rgba(217,173,87,0.18), transparent 28%),
+        linear-gradient(180deg, #0a0a0b, var(--bg));
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    .shell {
+      padding: 20px;
+      max-width: ${previewMode === "mobile" ? "390px" : previewMode === "tablet" ? "768px" : "1200px"};
+      margin: 0 auto;
+    }
+    .hero, .page-card {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 18px;
+      backdrop-filter: blur(14px);
+    }
+    .hero { padding: 20px; }
+    .eyebrow {
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    h1 { margin: 12px 0 8px; font-size: 32px; line-height: 1.05; }
+    p { margin: 0; color: var(--muted); line-height: 1.6; }
+    .meta {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: var(--text);
+      background: rgba(0,0,0,0.22);
+    }
+    .grid {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    }
+    .page-card { padding: 14px; }
+    .page-path {
+      font-size: 11px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      font-weight: 800;
+    }
+    .page-card h3 {
+      margin: 10px 0 6px;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+    .section-title {
+      margin: 18px 0 10px;
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 800;
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="eyebrow">Live Preview</div>
+      <h1>${escapeHtml(resolvedTitle)}</h1>
+      <p>${escapeHtml(resolvedDescription)}</p>
+      <div class="meta">
+        <span class="chip">Selected: ${escapeHtml(project?.slug || projectForm.slug || "draft")}</span>
+        <span class="chip">Path: ${escapeHtml(page?.path || pageForm.path || "/")}</span>
+        <span class="chip">Mode: ${escapeHtml(previewMode)}</span>
+      </div>
+    </section>
+
+    <div class="section-title">Pages</div>
+    <section class="grid">
+      ${pageMarkup || '<article class="page-card"><h3>No pages yet</h3><p>Add a page to render the live preview.</p></article>'}
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
 function WebBuilderStat({ label, value }) {
   return (
     <article className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
@@ -187,6 +386,8 @@ export function WebBuilder() {
   const [notice, setNotice] = useState("");
   const [lastSync, setLastSync] = useState("-");
   const [lastExport, setLastExport] = useState(null);
+  const [previewMode, setPreviewMode] = useState("desktop");
+  const [previewRevision, setPreviewRevision] = useState(0);
 
   const userRole = profile?.role || "user";
 
@@ -244,6 +445,18 @@ export function WebBuilder() {
     loadProjectDetail(selectedProjectId);
   }, [loadProjectDetail, selectedProjectId]);
 
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      loadProjects();
+      if (selectedProjectId) {
+        loadProjectDetail(selectedProjectId);
+      }
+      setPreviewRevision((current) => current + 1);
+    }, AUTO_REFRESH_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadProjectDetail, loadProjects, selectedProjectId]);
+
   const pages = Array.isArray(projectDetail?.pages) ? projectDetail.pages : [];
   const exportedProjects = projects.filter(
     (project) => project.status === "exported",
@@ -262,6 +475,24 @@ export function WebBuilder() {
     ],
     [exportedProjects, pages.length, projects.length],
   );
+
+  const activePreviewPage = pages[0] || {
+    path: pageForm.path || "/",
+    sections: [],
+    title: pageForm.title || "Home",
+  };
+  const previewHtml = useMemo(
+    () =>
+      buildPreviewHtml({
+        page: activePreviewPage,
+        previewMode,
+        project: selectedProject,
+        projectForm,
+        pageForm,
+      }),
+    [activePreviewPage, pageForm, previewMode, projectForm, selectedProject],
+  );
+  const previewFrame = previewViewports[previewMode];
 
   async function handleCreateProject(event) {
     event.preventDefault();
@@ -689,6 +920,66 @@ export function WebBuilder() {
                       </button>
                     </form>
                   </article>
+                </section>
+
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <p className="orbit-kicker">Live Preview</p>
+                      <h3 className="mt-2 text-lg font-black text-white">
+                        Realtime render
+                      </h3>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
+                        Preview berubah saat state project/page berubah dan ikut
+                        refresh otomatis setiap {AUTO_REFRESH_MS / 1000} detik.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(previewViewports).map(([key, item]) => {
+                        const Icon = item.icon;
+                        const isActive = previewMode === key;
+
+                        return (
+                          <button
+                            className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-black transition ${
+                              isActive
+                                ? "border-amber-300/35 bg-amber-300/10 text-amber-100"
+                                : "border-white/10 bg-black/20 text-zinc-300 hover:border-white/20"
+                            }`}
+                            key={key}
+                            onClick={() => setPreviewMode(key)}
+                            type="button">
+                            <Icon size={15} />
+                            {item.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-lg border border-white/10 bg-black/30 p-3">
+                    <div className="overflow-auto rounded-md border border-white/10 bg-[#0a0a0b] p-3">
+                      <div
+                        className="mx-auto overflow-hidden rounded-[20px] border border-white/10 bg-black shadow-2xl shadow-black/40"
+                        style={{
+                          maxWidth: previewFrame.maxWidth,
+                          width: previewFrame.width,
+                        }}>
+                        <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-zinc-500">
+                          <span>{previewFrame.label}</span>
+                          <span>auto refresh {AUTO_REFRESH_MS / 1000}s</span>
+                        </div>
+                        <iframe
+                          className="block min-h-[640px] w-full bg-black"
+                          key={`${selectedProjectId || "draft"}-${previewMode}-${previewRevision}`}
+                          sandbox=""
+                          srcDoc={previewHtml}
+                          title="Web Builder Live Preview"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </section>
               </section>
             </section>
