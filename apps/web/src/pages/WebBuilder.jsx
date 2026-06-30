@@ -9,6 +9,7 @@ import {
   Layers3,
   Loader2,
   Plus,
+  GripVertical,
   RefreshCcw,
   Rocket,
   Trash2,
@@ -753,6 +754,7 @@ export function WebBuilder() {
   const [notice, setNotice] = useState("");
   const [lastSync, setLastSync] = useState("-");
   const [lastExport, setLastExport] = useState(null);
+  const [draggedSectionId, setDraggedSectionId] = useState("");
   const [previewMode, setPreviewMode] = useState("desktop");
   const [previewRevision, setPreviewRevision] = useState(0);
   const [draftSections, setDraftSections] = useState(() =>
@@ -1013,6 +1015,66 @@ export function WebBuilder() {
 
       return nextSections;
     });
+    syncPreview();
+  }
+
+  function handleDragStartSection(sectionId, event) {
+    setDraggedSectionId(sectionId);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", sectionId);
+  }
+
+  function handleDragEndSection() {
+    setDraggedSectionId("");
+  }
+
+  function handleDropSection(targetSectionId) {
+    setDraftSections((currentSections) => {
+      const draggedIndex = currentSections.findIndex(
+        (section) => section.id === draggedSectionId,
+      );
+      const targetIndex = currentSections.findIndex(
+        (section) => section.id === targetSectionId,
+      );
+
+      if (
+        draggedIndex < 0 ||
+        targetIndex < 0 ||
+        draggedIndex === targetIndex
+      ) {
+        return currentSections;
+      }
+
+      const nextSections = [...currentSections];
+      const [draggedSection] = nextSections.splice(draggedIndex, 1);
+      const insertIndex =
+        draggedIndex < targetIndex ? targetIndex - 1 : targetIndex;
+
+      nextSections.splice(insertIndex, 0, draggedSection);
+      return nextSections;
+    });
+
+    setDraggedSectionId("");
+    syncPreview();
+  }
+
+  function handleDropSectionToEnd() {
+    setDraftSections((currentSections) => {
+      const draggedIndex = currentSections.findIndex(
+        (section) => section.id === draggedSectionId,
+      );
+
+      if (draggedIndex < 0 || draggedIndex === currentSections.length - 1) {
+        return currentSections;
+      }
+
+      const nextSections = [...currentSections];
+      const [draggedSection] = nextSections.splice(draggedIndex, 1);
+      nextSections.push(draggedSection);
+      return nextSections;
+    });
+
+    setDraggedSectionId("");
     syncPreview();
   }
 
@@ -1434,6 +1496,7 @@ export function WebBuilder() {
                             (item) => item.id === componentId,
                           );
                           const isActive = activeDraftSection?.id === section.id;
+                          const isDragged = draggedSectionId === section.id;
 
                           return (
                             <article
@@ -1441,25 +1504,41 @@ export function WebBuilder() {
                                 isActive
                                   ? "border-amber-300/35 bg-amber-300/10"
                                   : "border-white/10 bg-black/20"
-                              }`}
-                              key={section.id}>
+                              } ${isDragged ? "opacity-50" : ""}`}
+                              key={section.id}
+                              onDragOver={(event) => event.preventDefault()}
+                              onDrop={() => handleDropSection(section.id)}>
                               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                <button
-                                  className="min-w-0 text-left"
-                                  onClick={() => setActiveSectionId(section.id)}
-                                  type="button">
-                                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">
-                                    {component?.label || section.type}
-                                  </p>
-                                  <h4 className="mt-1 truncate text-sm font-black text-white">
-                                    {section.props?.title || "Untitled section"}
-                                  </h4>
-                                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">
-                                    {section.props?.body ||
-                                      section.props?.content ||
-                                      "No body copy yet."}
-                                  </p>
-                                </button>
+                                <div className="flex min-w-0 flex-1 items-start gap-3">
+                                  <button
+                                    aria-label={`Drag ${section.props?.title || section.type || "section"}`}
+                                    className="mt-0.5 inline-flex shrink-0 cursor-grab items-center justify-center rounded-md border border-white/10 bg-white/5 p-2 text-zinc-300 active:cursor-grabbing"
+                                    draggable
+                                    onDragEnd={handleDragEndSection}
+                                    onDragStart={(event) =>
+                                      handleDragStartSection(section.id, event)
+                                    }
+                                    title="Drag to reorder"
+                                    type="button">
+                                    <GripVertical size={15} />
+                                  </button>
+                                  <button
+                                    className="min-w-0 text-left"
+                                    onClick={() => setActiveSectionId(section.id)}
+                                    type="button">
+                                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">
+                                      {component?.label || section.type}
+                                    </p>
+                                    <h4 className="mt-1 truncate text-sm font-black text-white">
+                                      {section.props?.title || "Untitled section"}
+                                    </h4>
+                                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">
+                                      {section.props?.body ||
+                                        section.props?.content ||
+                                        "No body copy yet."}
+                                    </p>
+                                  </button>
+                                </div>
 
                                 <div className="flex shrink-0 gap-1">
                                   <button
@@ -1496,6 +1575,15 @@ export function WebBuilder() {
                           membangun halaman.
                         </WebBuilderEmptyState>
                       )}
+                      {draftSections.length ? (
+                        <button
+                          className="rounded-lg border border-dashed border-white/10 bg-black/10 px-3 py-2 text-left text-xs font-semibold text-zinc-500 transition hover:border-amber-300/35 hover:bg-amber-300/5 hover:text-zinc-300"
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={handleDropSectionToEnd}
+                          type="button">
+                          Drop here to append the dragged section to the end.
+                        </button>
+                      ) : null}
                     </div>
 
                     <article className="rounded-lg border border-white/10 bg-black/20 p-4">
