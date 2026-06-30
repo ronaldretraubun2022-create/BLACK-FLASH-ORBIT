@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowUpRight,
+  ArrowDown,
+  ArrowUp,
   FileCode2,
   Globe2,
   Layers3,
@@ -9,6 +11,7 @@ import {
   Plus,
   RefreshCcw,
   Rocket,
+  Trash2,
   Monitor,
   Tablet,
   Smartphone,
@@ -257,16 +260,48 @@ function buildComponentSections(componentIds = defaultComponentIds) {
   return getSelectedComponents(componentIds).map(createComponentSection);
 }
 
-function createPagePayload(form, componentIds = defaultComponentIds) {
+function createDraftSection(componentId) {
+  const component = componentLibrary.find((item) => item.id === componentId);
+
+  if (!component) return null;
+
+  return {
+    ...createComponentSection(component, 0),
+    id: `${component.id}-${Date.now().toString(36)}`,
+  };
+}
+
+function cloneSectionForPayload(section, index) {
+  return {
+    id: section.id || `section-${index + 1}`,
+    type: section.type,
+    props: { ...(section.props || {}) },
+    styles: { ...(section.styles || {}) },
+  };
+}
+
+function cloneSectionsForDraft(sections) {
+  if (!Array.isArray(sections) || !sections.length) return [];
+
+  return sections.map((section, index) => cloneSectionForPayload(section, index));
+}
+
+function getSectionComponentIds(sections) {
+  return sections
+    .map((section) => section?.styles?.component)
+    .filter((componentId) => componentIdSet.has(componentId));
+}
+
+function createPagePayload(form, sections = buildComponentSections()) {
   const path = form.path.trim() || "/";
-  const selectedComponents = getSelectedComponents(componentIds);
+  const activeSections = Array.isArray(sections) ? sections : [];
 
   return {
     metadata: {
-      componentLibrary: selectedComponents.map((component) => component.id),
+      componentLibrary: getSectionComponentIds(activeSections),
     },
     path: path.startsWith("/") ? path : `/${path}`,
-    sections: selectedComponents.map(createComponentSection),
+    sections: activeSections.map(cloneSectionForPayload),
     title: form.title.trim(),
   };
 }
@@ -720,8 +755,11 @@ export function WebBuilder() {
   const [lastExport, setLastExport] = useState(null);
   const [previewMode, setPreviewMode] = useState("desktop");
   const [previewRevision, setPreviewRevision] = useState(0);
-  const [selectedComponentIds, setSelectedComponentIds] =
-    useState(defaultComponentIds);
+  const [draftSections, setDraftSections] = useState(() =>
+    buildComponentSections(),
+  );
+  const [activeSectionId, setActiveSectionId] = useState("hero-1");
+  const [selectedPageId, setSelectedPageId] = useState("");
 
   const userRole = profile?.role || "user";
 
@@ -799,6 +837,46 @@ export function WebBuilder() {
     projectDetail ||
     projects.find((project) => project.id === selectedProjectId) ||
     null;
+  const selectedPage = useMemo(() => {
+    const detailPages = Array.isArray(projectDetail?.pages)
+      ? projectDetail.pages
+      : [];
+
+    if (!detailPages.length) return null;
+
+    return (
+      detailPages.find((page) => page.id === selectedPageId) ||
+      detailPages[0] ||
+      null
+    );
+  }, [projectDetail, selectedPageId]);
+
+  useEffect(() => {
+    if (!selectedProjectId) {
+      setSelectedPageId("");
+      setDraftSections(buildComponentSections());
+      setActiveSectionId("hero-1");
+      return;
+    }
+
+    if (!selectedPage) return;
+
+    if (selectedPage.id && selectedPageId !== selectedPage.id) {
+      setSelectedPageId(selectedPage.id);
+    }
+
+    const nextSections = cloneSectionsForDraft(selectedPage.sections);
+    const safeSections = nextSections.length
+      ? nextSections
+      : buildComponentSections();
+
+    setDraftSections(safeSections);
+    setActiveSectionId((currentId) =>
+      safeSections.some((section) => section.id === currentId)
+        ? currentId
+        : safeSections[0]?.id || "hero-1",
+    );
+  }, [selectedProjectId, selectedPage?.id]);
 
   const dashboardStats = useMemo(
     () => [
@@ -810,19 +888,20 @@ export function WebBuilder() {
     [exportedProjects, pages.length, projects.length],
   );
 
-  const selectedComponentSections = useMemo(
-    () => buildComponentSections(selectedComponentIds),
-    [selectedComponentIds],
-  );
-  const activePreviewPage = pages[0] || {
-    path: pageForm.path || "/",
-    sections: selectedComponentSections,
-    title: pageForm.title || "Home",
+  const activeDraftSection =
+    draftSections.find((section) => section.id === activeSectionId) ||
+    draftSections[0] ||
+    null;
+  const activePreviewPage = {
+    ...(selectedPage || {}),
+    path: pageForm.path || selectedPage?.path || "/",
+    sections: draftSections,
+    title: pageForm.title || selectedPage?.title || "Home",
   };
   const previewHtml = useMemo(
     () =>
       buildPreviewHtml({
-        componentSections: selectedComponentSections,
+        componentSections: draftSections,
         page: activePreviewPage,
         previewMode,
         project: selectedProject,
@@ -834,26 +913,107 @@ export function WebBuilder() {
       pageForm,
       previewMode,
       projectForm,
-      selectedComponentSections,
+      draftSections,
       selectedProject,
     ],
   );
   const previewFrame = previewViewports[previewMode];
 
-  function toggleComponent(componentId) {
-    if (!componentIdSet.has(componentId)) return;
+  function syncPreview() {
+    setPreviewRevision((current) => current + 1);
+  }
 
-    setSelectedComponentIds((currentIds) => {
-      if (currentIds.includes(componentId)) {
-        const nextIds = currentIds.filter((item) => item !== componentId);
+  function handleAddSection(componentId) {
+    const nextSection = createDraftSection(componentId);
 
-        return nextIds.length ? nextIds : currentIds;
+    if (!nextSection) return;
+
+    setDraftSections((currentSections) => [...currentSections, nextSection]);
+    setActiveSectionId(nextSection.id);
+    syncPreview();
+  }
+
+  function handleEditSection(field, value) {
+    if (!activeDraftSection) return;
+
+    setDraftSections((currentSections) =>
+      currentSections.map((section) =>
+        section.id === activeDraftSection.id
+          ? {
+              ...section,
+              props: {
+                ...(section.props || {}),
+                [field]: value,
+              },
+            }
+          : section,
+      ),
+    );
+    syncPreview();
+  }
+
+  function handleEditSectionItems(value) {
+    if (!activeDraftSection) return;
+
+    const items = value
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 8);
+
+    setDraftSections((currentSections) =>
+      currentSections.map((section) =>
+        section.id === activeDraftSection.id
+          ? {
+              ...section,
+              props: {
+                ...(section.props || {}),
+                items,
+              },
+            }
+          : section,
+      ),
+    );
+    syncPreview();
+  }
+
+  function handleDeleteSection(sectionId) {
+    setDraftSections((currentSections) => {
+      const nextSections = currentSections.filter(
+        (section) => section.id !== sectionId,
+      );
+
+      setActiveSectionId((currentId) =>
+        currentId === sectionId ? nextSections[0]?.id || "" : currentId,
+      );
+
+      return nextSections;
+    });
+    syncPreview();
+  }
+
+  function handleMoveSection(sectionId, direction) {
+    setDraftSections((currentSections) => {
+      const currentIndex = currentSections.findIndex(
+        (section) => section.id === sectionId,
+      );
+      const nextIndex = currentIndex + direction;
+
+      if (
+        currentIndex < 0 ||
+        nextIndex < 0 ||
+        nextIndex >= currentSections.length
+      ) {
+        return currentSections;
       }
 
-      return defaultComponentIds.filter(
-        (item) => item === componentId || currentIds.includes(item),
-      );
+      const nextSections = [...currentSections];
+      const [section] = nextSections.splice(currentIndex, 1);
+      nextSections.splice(nextIndex, 0, section);
+
+      return nextSections;
     });
+    syncPreview();
   }
 
   async function handleCreateProject(event) {
@@ -908,10 +1068,12 @@ export function WebBuilder() {
     setNotice("");
 
     try {
-      await api.createWebBuilderPage(
+      const response = await api.createWebBuilderPage(
         selectedProjectId,
-        createPagePayload(pageForm, selectedComponentIds),
+        createPagePayload(pageForm, draftSections),
       );
+      const createdPage = getResponseData(response, null);
+      setSelectedPageId(createdPage?.id || "");
       setPageForm(emptyPageForm);
       setNotice("Halaman Web Builder berhasil dibuat.");
       await loadProjectDetail(selectedProjectId);
@@ -933,13 +1095,16 @@ export function WebBuilder() {
     setNotice("");
 
     try {
-      const response = await api.exportWebBuilderProject(selectedProjectId);
-      const exported = getResponseData(response, null);
+      const exported = {
+        exportedAt: new Date().toISOString(),
+        format: "orbit-web-builder-local-v1",
+        html: previewHtml,
+        pageId: selectedPage?.id || null,
+        sectionCount: draftSections.length,
+      };
 
       setLastExport(exported);
-      setNotice("Export HTML berhasil dibuat dari backend.");
-      await loadProjects();
-      await loadProjectDetail(selectedProjectId);
+      setNotice("Export HTML berhasil dibuat dari draft lokal.");
     } catch (exportError) {
       setError(getErrorMessage(exportError, "Gagal export project."));
     } finally {
@@ -1215,43 +1380,181 @@ export function WebBuilder() {
                       </p>
                     </div>
                     <StatusPill tone="green">
-                      {selectedComponentIds.length} selected
+                      {draftSections.length} sections
                     </StatusPill>
                   </div>
 
                   <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    {componentLibrary.map((component) => {
-                      const isSelected = selectedComponentIds.includes(
-                        component.id,
-                      );
-
-                      return (
-                        <button
-                          aria-pressed={isSelected}
-                          className={`rounded-lg border p-4 text-left transition ${
-                            isSelected
-                              ? "border-amber-300/35 bg-amber-300/10"
-                              : "border-white/10 bg-black/20 hover:border-white/20"
-                          }`}
-                          key={component.id}
-                          onClick={() => toggleComponent(component.id)}
-                          type="button">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <h4 className="text-sm font-black text-white">
-                                {component.label}
-                              </h4>
-                              <p className="mt-2 text-xs leading-5 text-zinc-500">
-                                {component.summary}
-                              </p>
-                            </div>
-                            <span className="shrink-0 rounded-md border border-white/10 bg-black/25 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-zinc-500">
-                              {component.type}
-                            </span>
+                    {componentLibrary.map((component) => (
+                      <button
+                        className="rounded-lg border border-white/10 bg-black/20 p-4 text-left transition hover:border-amber-300/30 hover:bg-amber-300/10"
+                        key={component.id}
+                        onClick={() => handleAddSection(component.id)}
+                        type="button">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h4 className="text-sm font-black text-white">
+                              {component.label}
+                            </h4>
+                            <p className="mt-2 text-xs leading-5 text-zinc-500">
+                              {component.summary}
+                            </p>
                           </div>
-                        </button>
-                      );
-                    })}
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-300/20 bg-amber-300/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-amber-100">
+                            <Plus size={12} />
+                            Add
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="orbit-kicker">Section Builder</p>
+                      <h3 className="mt-2 text-lg font-black text-white">
+                        Compose page sections
+                      </h3>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
+                        Tambah, edit, hapus, dan urutkan section. Preview
+                        sinkron langsung dari draft ini.
+                      </p>
+                    </div>
+                    <StatusPill>{draftSections.length} draft</StatusPill>
+                  </div>
+
+                  <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                    <div className="grid gap-2">
+                      {draftSections.length ? (
+                        draftSections.map((section, index) => {
+                          const componentId = section.styles?.component || "";
+                          const component = componentLibrary.find(
+                            (item) => item.id === componentId,
+                          );
+                          const isActive = activeDraftSection?.id === section.id;
+
+                          return (
+                            <article
+                              className={`rounded-lg border p-3 transition ${
+                                isActive
+                                  ? "border-amber-300/35 bg-amber-300/10"
+                                  : "border-white/10 bg-black/20"
+                              }`}
+                              key={section.id}>
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <button
+                                  className="min-w-0 text-left"
+                                  onClick={() => setActiveSectionId(section.id)}
+                                  type="button">
+                                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">
+                                    {component?.label || section.type}
+                                  </p>
+                                  <h4 className="mt-1 truncate text-sm font-black text-white">
+                                    {section.props?.title || "Untitled section"}
+                                  </h4>
+                                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">
+                                    {section.props?.body ||
+                                      section.props?.content ||
+                                      "No body copy yet."}
+                                  </p>
+                                </button>
+
+                                <div className="flex shrink-0 gap-1">
+                                  <button
+                                    className="orbit-icon-button"
+                                    disabled={index === 0}
+                                    onClick={() => handleMoveSection(section.id, -1)}
+                                    title="Move section up"
+                                    type="button">
+                                    <ArrowUp size={15} />
+                                  </button>
+                                  <button
+                                    className="orbit-icon-button"
+                                    disabled={index === draftSections.length - 1}
+                                    onClick={() => handleMoveSection(section.id, 1)}
+                                    title="Move section down"
+                                    type="button">
+                                    <ArrowDown size={15} />
+                                  </button>
+                                  <button
+                                    className="orbit-icon-button text-rose-200"
+                                    onClick={() => handleDeleteSection(section.id)}
+                                    title="Delete section"
+                                    type="button">
+                                    <Trash2 size={15} />
+                                  </button>
+                                </div>
+                              </div>
+                            </article>
+                          );
+                        })
+                      ) : (
+                        <WebBuilderEmptyState title="Belum ada section">
+                          Tambahkan section dari Component Library untuk mulai
+                          membangun halaman.
+                        </WebBuilderEmptyState>
+                      )}
+                    </div>
+
+                    <article className="rounded-lg border border-white/10 bg-black/20 p-4">
+                      <p className="orbit-kicker">Section Edit</p>
+                      {activeDraftSection ? (
+                        <div className="mt-4 grid gap-3">
+                          <StatusLine
+                            label="Type"
+                            value={
+                              activeDraftSection.styles?.component ||
+                              activeDraftSection.type
+                            }
+                          />
+                          <FieldInput
+                            label="Label"
+                            maxLength={80}
+                            onChange={(value) => handleEditSection("label", value)}
+                            placeholder="Section label"
+                            value={activeDraftSection.props?.label || ""}
+                          />
+                          <FieldInput
+                            label="Title"
+                            maxLength={160}
+                            onChange={(value) => handleEditSection("title", value)}
+                            placeholder="Section title"
+                            value={activeDraftSection.props?.title || ""}
+                          />
+                          <FieldTextarea
+                            label="Body"
+                            maxLength={800}
+                            onChange={(value) => handleEditSection("body", value)}
+                            placeholder="Section body"
+                            value={activeDraftSection.props?.body || ""}
+                          />
+                          <FieldInput
+                            label="Action Label"
+                            maxLength={80}
+                            onChange={(value) =>
+                              handleEditSection("actionLabel", value)
+                            }
+                            placeholder="Button label"
+                            value={activeDraftSection.props?.actionLabel || ""}
+                          />
+                          {Array.isArray(activeDraftSection.props?.items) && (
+                            <FieldTextarea
+                              label="Items"
+                              maxLength={800}
+                              onChange={handleEditSectionItems}
+                              placeholder="One item per line"
+                              value={activeDraftSection.props.items.join("\n")}
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <WebBuilderEmptyState title="Tidak ada section aktif">
+                          Pilih atau tambahkan section untuk membuka editor.
+                        </WebBuilderEmptyState>
+                      )}
+                    </article>
                   </div>
                 </section>
 
@@ -1274,8 +1577,13 @@ export function WebBuilder() {
                     ) : pages.length ? (
                       <div className="grid gap-3">
                         {pages.map((page) => (
-                          <article
-                            className="rounded-lg border border-white/10 bg-black/20 p-4"
+                          <button
+                            className={`rounded-lg border p-4 text-left transition ${
+                              page.id === selectedPageId
+                                ? "border-amber-300/35 bg-amber-300/10"
+                                : "border-white/10 bg-black/20 hover:border-white/20"
+                            }`}
+                            onClick={() => setSelectedPageId(page.id)}
                             key={page.id}>
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                               <div className="min-w-0">
@@ -1290,7 +1598,7 @@ export function WebBuilder() {
                                 #{page.sortOrder ?? 0}
                               </span>
                             </div>
-                          </article>
+                          </button>
                         ))}
                       </div>
                     ) : (
