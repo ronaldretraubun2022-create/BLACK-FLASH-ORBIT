@@ -440,6 +440,61 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function normalizeExportFilename(pagePath) {
+  const cleanPath = String(pagePath || "").trim().toLowerCase();
+
+  if (!cleanPath || cleanPath === "/" || cleanPath === "/home" || cleanPath === "home") {
+    return "index.html";
+  }
+
+  const slug = cleanPath
+    .replace(/^\/+|\/+$/g, "")
+    .split("/")
+    .filter(Boolean)
+    .join("-")
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return `${slug || "index"}.html`;
+}
+
+function buildExportAllManifest({
+  pages = [],
+  previewMode,
+  project,
+  projectForm,
+  theme,
+  generatedAt = new Date().toISOString(),
+}) {
+  const exportPages = Array.isArray(pages) ? pages : [];
+  const files = exportPages.map((page) => {
+    const pagePath = page?.path || "/";
+    const html = buildPreviewHtml({
+      componentSections: Array.isArray(page?.sections) ? page.sections : [],
+      generatedAt,
+      page,
+      previewMode,
+      project,
+      projectForm,
+      pageForm: { path: pagePath, title: page?.title || "Home" },
+      theme,
+    });
+
+    return {
+      filename: normalizeExportFilename(pagePath),
+      html,
+      path: pagePath,
+    };
+  });
+
+  return {
+    files,
+    generatedAt,
+    projectTitle: project?.title || projectForm?.title || "Web Builder Preview",
+  };
+}
+
 function getPreviewPages(projectDetail, projectForm, pageForm, selectedProjectId) {
   if (projectDetail?.pages?.length) return projectDetail.pages;
 
@@ -979,6 +1034,7 @@ export function WebBuilder() {
   const [notice, setNotice] = useState("");
   const [lastSync, setLastSync] = useState("-");
   const [lastExport, setLastExport] = useState(null);
+  const [lastExportAll, setLastExportAll] = useState(null);
   const [draggedSectionId, setDraggedSectionId] = useState("");
   const [previewMode, setPreviewMode] = useState("desktop");
   const [previewRevision, setPreviewRevision] = useState(0);
@@ -1000,6 +1056,7 @@ export function WebBuilder() {
   const [selectedPageId, setSelectedPageId] = useState("");
   const activeAutosavePromiseRef = useRef(null);
   const autosaveTimeoutRef = useRef(null);
+  const assetUploadInputRef = useRef(null);
   const draftPageIdRef = useRef("");
   const lastPersistedPageSectionsRef = useRef({
     pageId: "",
@@ -1321,8 +1378,48 @@ export function WebBuilder() {
     setError("");
   }
 
+  function handleUploadAssetClick() {
+    assetUploadInputRef.current?.click();
+  }
+
+  function handleUploadAssetChange(event) {
+    const file = event.target.files?.[0];
+
+    event.target.value = "";
+
+    if (!file) return;
+
+    if (!String(file.type || "").startsWith("image/")) {
+      setError("File harus berupa gambar.");
+      setNotice("");
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+
+    setAssetLibrary((current) => [
+      {
+        id: `asset-${Date.now().toString(36)}`,
+        name: file.name,
+        type: "image",
+        url: objectUrl,
+      },
+      ...current,
+    ]);
+    setNotice("Image asset berhasil diunggah.");
+    setError("");
+  }
+
   function handleDeleteAsset(assetId) {
-    setAssetLibrary((current) => current.filter((asset) => asset.id !== assetId));
+    setAssetLibrary((current) => {
+      const removedAsset = current.find((asset) => asset.id === assetId);
+
+      if (removedAsset?.url?.startsWith("blob:")) {
+        URL.revokeObjectURL(removedAsset.url);
+      }
+
+      return current.filter((asset) => asset.id !== assetId);
+    });
   }
 
   function handleApplyAssetToActiveSection(assetUrl) {
@@ -1716,6 +1813,44 @@ export function WebBuilder() {
     }
   }
 
+  async function handleExportAllPages() {
+    if (!selectedProjectId) {
+      setError("Pilih project sebelum export.");
+      return;
+    }
+
+    setIsExporting(true);
+    setError("");
+    setNotice("");
+
+    try {
+      await flushPendingAutosave();
+      const generatedAt = new Date().toISOString();
+      const exportPages = pages.length
+        ? pages
+        : selectedPage
+          ? [selectedPage]
+          : [];
+      const manifest = buildExportAllManifest({
+        generatedAt,
+        pages: exportPages,
+        previewMode,
+        project: selectedProject,
+        projectForm,
+        theme: webTheme,
+      });
+
+      setLastExportAll(manifest);
+      setNotice(
+        `Export all pages berhasil dibuat untuk ${manifest.files.length} file.`,
+      );
+    } catch (exportError) {
+      setError(getErrorMessage(exportError, "Gagal export semua halaman."));
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
   function handleDownloadExport() {
     const html = lastExport?.html || previewHtml;
 
@@ -1727,6 +1862,23 @@ export function WebBuilder() {
 
     link.href = url;
     link.download = `${selectedProject?.slug || "orbit-web-builder"}.html`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleDownloadManifest() {
+    const manifest = lastExportAll;
+
+    if (!manifest) return;
+
+    const blob = new Blob([JSON.stringify(manifest, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = `${selectedProject?.slug || "orbit-web-builder"}-manifest.json`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -1949,6 +2101,26 @@ export function WebBuilder() {
                           <FileCode2 size={15} />
                         )}
                         Export
+                      </button>
+                      <button
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-zinc-200 transition hover:border-amber-300/25 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={!selectedProjectId || isExporting}
+                        onClick={handleExportAllPages}
+                        type="button">
+                        {isExporting ? (
+                          <Loader2 className="animate-spin" size={15} />
+                        ) : (
+                          <FileCode2 size={15} />
+                        )}
+                        Export All Pages
+                      </button>
+                      <button
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-zinc-200 transition hover:border-amber-300/25 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={!lastExportAll}
+                        onClick={handleDownloadManifest}
+                        type="button">
+                        <ArrowUpRight size={15} />
+                        Download Manifest
                       </button>
                       <button
                         className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-zinc-200 transition hover:border-amber-300/25 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2452,6 +2624,26 @@ export function WebBuilder() {
                   <form
                     className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
                     onSubmit={handleAddAsset}>
+                    <input
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleUploadAssetChange}
+                      ref={assetUploadInputRef}
+                      type="file"
+                    />
+                    <div className="md:col-span-3">
+                      <button
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-black/30 px-4 py-3 text-sm font-black text-white transition hover:border-amber-300/35 hover:bg-amber-300/10"
+                        onClick={handleUploadAssetClick}
+                        type="button">
+                        <ImageIcon size={16} />
+                        Upload Image
+                      </button>
+                      <p className="mt-2 text-[11px] font-medium text-zinc-500">
+                        Hanya menerima file gambar. Preview memakai object URL
+                        lokal.
+                      </p>
+                    </div>
                     <FieldInput
                       label="Name"
                       maxLength={120}
@@ -2472,7 +2664,6 @@ export function WebBuilder() {
                     />
                     <button
                       className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300/30 bg-amber-300/10 px-4 py-3 text-sm font-black text-amber-100 transition hover:bg-amber-300/15 disabled:cursor-not-allowed disabled:opacity-60"
-                      onClick={handleAddAsset}
                       type="submit">
                       <Plus size={16} />
                       Add Asset
