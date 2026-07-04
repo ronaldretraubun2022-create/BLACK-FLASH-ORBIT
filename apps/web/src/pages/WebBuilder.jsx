@@ -171,6 +171,126 @@ const componentLibrary = [
 const defaultComponentIds = componentLibrary.map((component) => component.id);
 const componentIdSet = new Set(defaultComponentIds);
 const imageSectionTypes = new Set(["hero", "gallery", "feature-grid"]);
+const webBuilderTemplates = [
+  {
+    id: "news-portal",
+    label: "News Portal",
+    pages: [
+      buildTemplatePage("Home", "/", ["navbar", "hero", "news-grid", "gallery", "cta", "footer"], {
+        hero: {
+          props: {
+            title: "Breaking news for regional coverage",
+            body: "Live updates, field reports, and editorial highlights for a modern newsroom.",
+          },
+        },
+        "news-grid": {
+          props: {
+            title: "Top stories",
+            body: "Curated headlines and newsroom updates across the latest coverage.",
+          },
+        },
+      }),
+      buildTemplatePage("Berita", "/berita", ["navbar", "news-grid", "cta", "footer"], {
+        "news-grid": {
+          props: {
+            title: "Berita terbaru",
+            body: "Sajikan paket berita utama dengan daftar artikel yang rapi.",
+          },
+        },
+      }),
+      buildTemplatePage("Profil", "/profil", ["navbar", "hero", "card", "footer"], {
+        hero: {
+          props: {
+            title: "Newsroom profile",
+            body: "Profil redaksi, kanal, dan alur kerja multimedia.",
+          },
+        },
+      }),
+    ],
+    theme: {
+      accent: "#7f1d1d",
+      background: "#050506",
+      primary: "#f5c14b",
+      radius: 18,
+      spacing: 24,
+      text: "#f4f4f5",
+    },
+  },
+  {
+    id: "company-profile",
+    label: "Company Profile",
+    pages: [
+      buildTemplatePage("Home", "/", ["navbar", "hero", "card", "gallery", "cta", "footer"], {
+        hero: {
+          props: {
+            title: "Company profile for a modern media brand",
+            body: "Build trust with a clean narrative, service blocks, and visual proof.",
+          },
+        },
+      }),
+      buildTemplatePage("Profil", "/profil", ["navbar", "hero", "card", "footer"], {
+        hero: {
+          props: {
+            title: "About the company",
+            body: "Introduce the team, mission, and operating principles.",
+          },
+        },
+      }),
+      buildTemplatePage("Tim", "/tim", ["navbar", "card", "footer"], {
+        card: {
+          props: {
+            title: "Leadership team",
+            body: "Key roles and responsibilities across the organization.",
+          },
+        },
+      }),
+    ],
+    theme: {
+      accent: "#4c1d95",
+      background: "#08070c",
+      primary: "#c4b5fd",
+      radius: 20,
+      spacing: 26,
+      text: "#f5f3ff",
+    },
+  },
+  {
+    id: "landing-page",
+    label: "Landing Page",
+    pages: [
+      buildTemplatePage("Home", "/", ["navbar", "hero", "card", "cta", "footer"], {
+        hero: {
+          props: {
+            title: "Launch-ready landing page",
+            body: "Drive one clear action with a focused hero, features, and CTA.",
+          },
+        },
+        card: {
+          props: {
+            title: "Key benefits",
+            body: "Show the strongest reasons to act now.",
+          },
+        },
+      }),
+      buildTemplatePage("Contact", "/contact", ["navbar", "cta", "footer"], {
+        cta: {
+          props: {
+            title: "Talk to the team",
+            body: "Route attention toward a single conversion action.",
+          },
+        },
+      }),
+    ],
+    theme: {
+      accent: "#9f1239",
+      background: "#060406",
+      primary: "#fb7185",
+      radius: 22,
+      spacing: 22,
+      text: "#fff1f2",
+    },
+  },
+];
 
 function getResponseData(response, fallback = null) {
   return response?.data ?? response ?? fallback;
@@ -278,6 +398,34 @@ function createComponentSection(component, index) {
 
 function buildComponentSections(componentIds = defaultComponentIds) {
   return getSelectedComponents(componentIds).map(createComponentSection);
+}
+
+function buildTemplateSections(componentIds, overrides = {}) {
+  return buildComponentSections(componentIds).map((section) => {
+    const componentId = section.styles?.component || section.type;
+    const override = overrides[componentId] || {};
+
+    return {
+      ...section,
+      props: {
+        ...section.props,
+        ...(override.props || {}),
+      },
+      styles: {
+        ...section.styles,
+        ...(override.styles || {}),
+      },
+    };
+  });
+}
+
+function buildTemplatePage(title, path, componentIds, overrides = {}) {
+  return {
+    path,
+    sections: buildTemplateSections(componentIds, overrides),
+    sortOrder: 0,
+    title,
+  };
 }
 
 function createDraftSection(componentId) {
@@ -493,6 +641,7 @@ function buildExportAllManifest({
     files,
     generatedAt,
     projectTitle: project?.title || projectForm?.title || "Web Builder Preview",
+    theme: normalizeWebTheme(theme),
   };
 }
 
@@ -1356,6 +1505,7 @@ export function WebBuilder() {
   const [previewMode, setPreviewMode] = useState("desktop");
   const [previewRevision, setPreviewRevision] = useState(0);
   const [webTheme, setWebTheme] = useState(defaultWebTheme);
+  const [templatePagesOverride, setTemplatePagesOverride] = useState(null);
   const [assetForm, setAssetForm] = useState({
     name: "",
     url: "",
@@ -1437,6 +1587,10 @@ export function WebBuilder() {
   }, [loadProjectDetail, selectedProjectId]);
 
   useEffect(() => {
+    setTemplatePagesOverride(null);
+  }, [selectedProjectId]);
+
+  useEffect(() => {
     const intervalId = window.setInterval(() => {
       loadProjects();
       if (selectedProjectId) {
@@ -1450,9 +1604,11 @@ export function WebBuilder() {
 
   const isProjectDetailCurrent = projectDetail?.id === selectedProjectId;
   const pages = useMemo(() => {
-    const detailPages = isProjectDetailCurrent && Array.isArray(projectDetail?.pages)
-      ? projectDetail.pages
-      : [];
+    const detailPages = Array.isArray(templatePagesOverride)
+      ? templatePagesOverride
+      : isProjectDetailCurrent && Array.isArray(projectDetail?.pages)
+        ? projectDetail.pages
+        : [];
 
     if (!selectedPageId || draftPageIdRef.current !== selectedPageId) {
       return detailPages;
@@ -1464,6 +1620,7 @@ export function WebBuilder() {
     isProjectDetailCurrent,
     projectDetail?.pages,
     selectedPageId,
+    templatePagesOverride,
   ]);
   const exportedProjects = projects.filter(
     (project) => project.status === "exported",
@@ -1493,6 +1650,7 @@ export function WebBuilder() {
         signature: "",
       };
       setSectionHistory({ future: [], past: [] });
+      setTemplatePagesOverride(null);
       setAutosaveStatus("saved");
       setDraftSections(buildComponentSections());
       setActiveSectionId("hero-1");
@@ -1507,6 +1665,7 @@ export function WebBuilder() {
         signature: "",
       };
       setSectionHistory({ future: [], past: [] });
+      setTemplatePagesOverride(null);
       setAutosaveStatus("saved");
       setDraftSections(buildComponentSections());
       setActiveSectionId("hero-1");
@@ -1668,6 +1827,44 @@ export function WebBuilder() {
 
   function updateWebTheme(partialTheme) {
     setWebTheme((current) => normalizeWebTheme({ ...current, ...partialTheme }));
+  }
+
+  function handleUseTemplate(template) {
+    if (!template) return;
+
+    const nextTheme = normalizeWebTheme(template.theme || defaultWebTheme);
+    const templatePages = Array.isArray(template.pages) ? template.pages : [];
+    const primaryPage = templatePages[0] || null;
+    const nextPrimaryPageId =
+      selectedPage?.id || primaryPage?.id || `template-${template.id}-home`;
+    const nextPages = templatePages.map((page, index) => ({
+      ...page,
+      id:
+        index === 0
+          ? nextPrimaryPageId
+          : page.id || `template-${template.id}-${index + 1}`,
+      sections: cloneSectionsForDraft(page.sections),
+    }));
+    const nextSections = cloneSectionsForDraft(nextPages[0]?.sections || []);
+
+    setWebTheme(nextTheme);
+    setTemplatePagesOverride(nextPages);
+    setPageForm(
+      nextPages[0]
+        ? {
+            path: nextPages[0].path || "/",
+            title: nextPages[0].title || "Home",
+          }
+        : emptyPageForm,
+    );
+    commitDraftSections(nextSections, {
+      activeSectionId: nextSections[0]?.id || "",
+    });
+    if (selectedPage?.id && selectedPageId !== nextPrimaryPageId) {
+      setSelectedPageId(nextPrimaryPageId);
+    }
+    setNotice(`Template "${template.label}" berhasil diterapkan.`);
+    setError("");
   }
 
   function handleAddAsset(event) {
@@ -2039,6 +2236,7 @@ export function WebBuilder() {
       const createdProject = getResponseData(response, null);
 
       setProjectForm(emptyProjectForm);
+      setTemplatePagesOverride(null);
       setNotice("Project Web Builder berhasil dibuat.");
       await loadProjects();
 
@@ -2078,6 +2276,7 @@ export function WebBuilder() {
       const createdPage = getResponseData(response, null);
       setSelectedPageId(createdPage?.id || "");
       setPageForm(emptyPageForm);
+      setTemplatePagesOverride(null);
       setNotice("Halaman Web Builder berhasil dibuat.");
       await loadProjectDetail(selectedProjectId);
     } catch (createError) {
@@ -2178,21 +2377,8 @@ export function WebBuilder() {
     setNotice("");
 
     try {
-      const generatedAt = new Date().toISOString();
-      const exportPages = pages.length
-        ? pages
-        : selectedPage
-          ? [selectedPage]
-          : [];
-      const exportManifest = buildExportAllManifest({
-        generatedAt,
-        pages: exportPages,
-        previewMode,
-        project: selectedProject,
-        projectForm,
-        theme: webTheme,
-      });
-      const websiteCss = buildWebsiteCss(webTheme);
+      const exportManifest = lastExportAll;
+      const websiteCss = buildWebsiteCss(exportManifest.theme || webTheme);
       const zipManifest = {
         ...exportManifest,
         files: exportManifest.files.map((file) => ({
@@ -2537,6 +2723,67 @@ export function WebBuilder() {
                       label="Last Export"
                       value={formatDateTime(selectedProject?.lastExportedAt)}
                     />
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="orbit-kicker">Template Library</p>
+                      <h3 className="mt-2 text-lg font-black text-white">
+                        Ready-made layouts
+                      </h3>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
+                        Start from a multi-page template with sections and theme
+                        already mapped for the current draft.
+                      </p>
+                    </div>
+                    <StatusPill tone="amber">
+                      {webBuilderTemplates.length} templates
+                    </StatusPill>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    {webBuilderTemplates.map((template) => {
+                      const firstPage = template.pages[0];
+                      const sectionCount = firstPage?.sections?.length || 0;
+
+                      return (
+                        <article
+                          className="rounded-lg border border-white/10 bg-black/20 p-4"
+                          key={template.id}>
+                          <div className="flex flex-col gap-3">
+                            <div>
+                              <h4 className="text-sm font-black text-white">
+                                {template.label}
+                              </h4>
+                              <p className="mt-2 text-xs leading-5 text-zinc-500">
+                                {template.pages.length} pages
+                                {sectionCount ? ` · ${sectionCount} sections` : ""}
+                              </p>
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                              {template.pages.map((page) => (
+                                <span
+                                  className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-zinc-400"
+                                  key={`${template.id}-${page.path}`}>
+                                  {page.path}
+                                </span>
+                              ))}
+                            </div>
+
+                            <button
+                              className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300/30 bg-amber-300/10 px-4 py-3 text-xs font-black text-amber-100 transition hover:bg-amber-300/15"
+                              onClick={() => handleUseTemplate(template)}
+                              type="button">
+                              <Rocket size={14} />
+                              Use Template
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
                   </div>
                 </section>
 
