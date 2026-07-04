@@ -50,22 +50,22 @@ const autosaveStatusConfig = {
 };
 const previewViewports = {
   desktop: {
+    frameWidth: "100%",
     icon: Monitor,
     label: "Desktop",
-    width: "100%",
-    maxWidth: "100%",
+    sizeLabel: "Full width",
   },
   tablet: {
+    frameWidth: "min(100%, 768px)",
     icon: Tablet,
     label: "Tablet",
-    width: "768px",
-    maxWidth: "100%",
+    sizeLabel: "768px",
   },
   mobile: {
+    frameWidth: "min(100%, 390px)",
     icon: Smartphone,
     label: "Mobile",
-    width: "390px",
-    maxWidth: "100%",
+    sizeLabel: "390px",
   },
 };
 
@@ -2107,12 +2107,13 @@ export function WebBuilder() {
                       <div
                         className="mx-auto overflow-hidden rounded-[20px] border border-white/10 bg-black shadow-2xl shadow-black/40"
                         style={{
-                          maxWidth: previewFrame.maxWidth,
-                          width: previewFrame.width,
+                          maxWidth: "100%",
+                          transition: "width 180ms ease",
+                          width: previewFrame.frameWidth,
                         }}>
                         <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-zinc-500">
                           <span>{previewFrame.label}</span>
-                          <span>auto refresh {AUTO_REFRESH_MS / 1000}s</span>
+                          <span>{previewFrame.sizeLabel}</span>
                         </div>
                         <iframe
                           className="block min-h-[640px] w-full bg-black"
