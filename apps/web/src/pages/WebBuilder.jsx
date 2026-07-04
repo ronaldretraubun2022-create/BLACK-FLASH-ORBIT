@@ -1297,25 +1297,25 @@ export function WebBuilder() {
   }
 
   function handleAddAsset(event) {
-    event.preventDefault();
+    event?.preventDefault?.();
 
     const name = assetForm.name.trim();
     const url = assetForm.url.trim();
 
     if (!name || !url) {
       setError("Name dan URL asset wajib diisi.");
+      setNotice("");
       return;
     }
 
-    setAssetLibrary((current) => [
-      {
-        id: `asset-${Date.now().toString(36)}`,
-        name,
-        type: "image",
-        url,
-      },
-      ...current,
-    ]);
+    const nextAsset = {
+      id: `asset-${Date.now().toString(36)}`,
+      name,
+      type: "image",
+      url,
+    };
+
+    setAssetLibrary((current) => [...current, nextAsset]);
     setAssetForm({ name: "", url: "" });
     setNotice("Asset image berhasil ditambahkan.");
     setError("");
@@ -2472,6 +2472,7 @@ export function WebBuilder() {
                     />
                     <button
                       className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300/30 bg-amber-300/10 px-4 py-3 text-sm font-black text-amber-100 transition hover:bg-amber-300/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      onClick={handleAddAsset}
                       type="submit">
                       <Plus size={16} />
                       Add Asset
