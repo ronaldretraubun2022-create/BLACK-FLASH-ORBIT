@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import JSZip from "jszip";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -495,6 +496,316 @@ function buildExportAllManifest({
   };
 }
 
+function buildThemeStyleTokens(theme = defaultWebTheme) {
+  const webTheme = normalizeWebTheme(theme);
+  const themeCssVars = themeToCssVariables(webTheme);
+  const themeVarsCss = Object.entries(themeCssVars)
+    .map(([key, value]) => `      ${key}: ${value};`)
+    .join("\n");
+
+  return {
+    themeAccentGallery: rgbToRgba(hexToRgb(webTheme.accent), 0.36),
+    themeAccentOverlay: rgbToRgba(hexToRgb(webTheme.primary), 0.18),
+    themeAccentPanel: rgbToRgba(hexToRgb(webTheme.accent), 0.18),
+    themeAccentSoftOverlay: rgbToRgba(hexToRgb(webTheme.accent), 0.14),
+    themePrimaryGallery: rgbToRgba(hexToRgb(webTheme.primary), 0.32),
+    themeVarsCss,
+    webTheme,
+  };
+}
+
+function buildWebsiteCss(theme = defaultWebTheme) {
+  const {
+    themeAccentGallery,
+    themeAccentOverlay,
+    themeAccentPanel,
+    themeAccentSoftOverlay,
+    themePrimaryGallery,
+    themeVarsCss,
+    webTheme,
+  } = buildThemeStyleTokens(theme);
+
+  return `
+    :root {
+      color-scheme: dark;
+      --bg: ${webTheme.background};
+      --bg-soft: #0a0a0b;
+      --panel: rgba(255,255,255,0.04);
+      --line: rgba(255,255,255,0.12);
+      --text: ${webTheme.text};
+      --muted: #a1a1aa;
+      --accent: ${webTheme.primary};
+      --accent-strong: ${webTheme.accent};
+      --maroon: ${webTheme.accent};
+      --radius: ${webTheme.radius}px;
+      --spacing: ${webTheme.spacing}px;
+${themeVarsCss}
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top, rgba(217,173,87,0.18), transparent 28%),
+        linear-gradient(180deg, #0a0a0b, var(--bg));
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    a { color: inherit; }
+    .shell {
+      width: min(100%, 1180px);
+      margin: 0 auto;
+      padding: var(--spacing);
+    }
+    .hero,
+    .page-card,
+    .component {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: var(--radius);
+      backdrop-filter: blur(14px);
+    }
+    .hero {
+      padding: clamp(22px, 4vw, 44px);
+      background:
+        linear-gradient(135deg, ${themeAccentOverlay}, ${themeAccentSoftOverlay}),
+        rgba(255,255,255,0.04);
+    }
+    .eyebrow {
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    h1 {
+      margin: 12px 0 10px;
+      max-width: 820px;
+      font-size: clamp(34px, 6vw, 72px);
+      line-height: 0.98;
+    }
+    p { margin: 0; color: var(--muted); line-height: 1.6; }
+    .meta {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: var(--text);
+      background: rgba(0,0,0,0.22);
+    }
+    .grid {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    }
+    .page-card { padding: 14px; }
+    .page-path {
+      font-size: 11px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      font-weight: 800;
+    }
+    .page-card h3 {
+      margin: 10px 0 6px;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+    .section-title {
+      margin: 18px 0 10px;
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 800;
+    }
+    .component {
+      margin-top: 12px;
+      background: rgba(255,255,255,0.035);
+      padding: calc(var(--spacing) * 0.75);
+    }
+    .component h2 {
+      margin: 8px 0 8px;
+      font-size: 24px;
+      line-height: 1.12;
+    }
+    .component span,
+    .component article span,
+    figcaption {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .component-media {
+      margin: 0 0 14px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: calc(var(--radius) - 4px);
+      background: rgba(0,0,0,0.24);
+    }
+    .component-media img {
+      display: block;
+      width: 100%;
+      height: 220px;
+      object-fit: cover;
+    }
+    .component-label,
+    .component-hero p,
+    .component-cta p {
+      margin: 0;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+    .component-nav,
+    .component-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-radius: calc(var(--radius) - 2px);
+      background: rgba(0,0,0,0.28);
+    }
+    .component-nav strong,
+    .component-footer strong {
+      color: var(--text);
+      font-size: 14px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .component-hero,
+    .component-cta {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 16px;
+      background: linear-gradient(135deg, ${themeAccentOverlay}, ${themeAccentPanel});
+    }
+    .component-hero.has-media {
+      grid-template-columns: minmax(0, 1fr) minmax(220px, 320px) auto;
+    }
+    .component-hero.has-media .component-copy {
+      min-width: 0;
+    }
+    .component-hero.has-media .component-media {
+      margin: 0;
+      align-self: stretch;
+    }
+    .component-hero.has-media .component-media img {
+      height: 100%;
+      min-height: 240px;
+    }
+    .component-hero a,
+    .component-cta a {
+      border-radius: 999px;
+      background: var(--accent);
+      color: #080808;
+      font-size: 12px;
+      font-weight: 900;
+      padding: 10px 14px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .component-gallery {
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), ${themeAccentPanel});
+    }
+    .component-gallery.has-media .component-media,
+    .component-card-grid.has-media .component-media {
+      margin-top: 0;
+    }
+    .card-grid,
+    .gallery-grid,
+    .news-grid {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+    .card-grid article,
+    .news-grid article,
+    .gallery-grid figure {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(0,0,0,0.22);
+      padding: 12px;
+    }
+    .card-grid strong,
+    .news-grid h3 {
+      display: block;
+      margin: 0 0 6px;
+      color: var(--text);
+      font-size: 15px;
+    }
+    .news-grid p {
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .gallery-grid figure div {
+      display: grid;
+      min-height: 92px;
+      place-items: center;
+      border-radius: calc(var(--radius) - 6px);
+      background: linear-gradient(135deg, ${themePrimaryGallery}, ${themeAccentGallery});
+      color: var(--text);
+      font-weight: 900;
+    }
+    .gallery-grid figcaption {
+      display: block;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    .export-meta {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    @media (max-width: 520px) {
+      .shell { padding: 14px; }
+      .component-nav,
+      .component-footer,
+      .component-hero,
+      .component-cta {
+        grid-template-columns: 1fr;
+        align-items: start;
+      }
+      .component-hero.has-media {
+        grid-template-columns: 1fr;
+      }
+      .component-nav,
+      .component-footer {
+        display: grid;
+      }
+      .component-media img {
+        height: 180px;
+      }
+      .component-hero a,
+      .component-cta a {
+        width: fit-content;
+      }
+    }`;
+}
+
+function buildWebsiteHtmlWithStylesheet(html, cssHref) {
+  return String(html || "").replace(
+    /<style>[\s\S]*?<\/style>/,
+    `<link rel="stylesheet" href="${escapeHtml(cssHref)}">`,
+  );
+}
+
 function getPreviewPages(projectDetail, projectForm, pageForm, selectedProjectId) {
   if (projectDetail?.pages?.length) return projectDetail.pages;
 
@@ -602,6 +913,8 @@ function renderPreviewSection(section) {
 function buildPreviewHtml({
   componentSections,
   generatedAt = new Date().toISOString(),
+  cssHref = "",
+  embeddedStyles = true,
   page,
   previewMode,
   project,
@@ -609,16 +922,15 @@ function buildPreviewHtml({
   pageForm,
   theme = defaultWebTheme,
 }) {
-  const webTheme = normalizeWebTheme(theme);
-  const themeCssVars = themeToCssVariables(webTheme);
-  const themeVarsCss = Object.entries(themeCssVars)
-    .map(([key, value]) => `      ${key}: ${value};`)
-    .join("\n");
-  const themeAccentOverlay = rgbToRgba(hexToRgb(webTheme.primary), 0.18);
-  const themeAccentSoftOverlay = rgbToRgba(hexToRgb(webTheme.accent), 0.14);
-  const themeAccentPanel = rgbToRgba(hexToRgb(webTheme.accent), 0.18);
-  const themePrimaryGallery = rgbToRgba(hexToRgb(webTheme.primary), 0.32);
-  const themeAccentGallery = rgbToRgba(hexToRgb(webTheme.accent), 0.36);
+  const {
+    themeAccentGallery,
+    themeAccentOverlay,
+    themeAccentPanel,
+    themeAccentSoftOverlay,
+    themePrimaryGallery,
+    themeVarsCss,
+    webTheme,
+  } = buildThemeStyleTokens(theme);
   const resolvedProjectTitle =
     project?.title || projectForm.title || "Web Builder Preview";
   const resolvedDescription =
@@ -640,6 +952,10 @@ function buildPreviewHtml({
   const activeSections = Array.isArray(page?.sections) && page.sections.length
     ? page.sections
     : componentSections;
+  const websiteCss = buildWebsiteCss(webTheme);
+  const styleMarkup = embeddedStyles
+    ? `<style>${websiteCss}</style>`
+    : `<link rel="stylesheet" href="${escapeHtml(cssHref)}">`;
   const pages = Array.isArray(project?.pages) && project.pages.length
     ? project.pages.slice(0, 4)
     : (fallbackPages.length ? fallbackPages : [page])
@@ -1030,6 +1346,7 @@ export function WebBuilder() {
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [isCreatingPage, setIsCreatingPage] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isExportingZip, setIsExportingZip] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [lastSync, setLastSync] = useState("-");
@@ -1851,6 +2168,71 @@ export function WebBuilder() {
     }
   }
 
+  async function handleDownloadWebsiteZip() {
+    if (!lastExportAll) {
+      return;
+    }
+
+    setIsExportingZip(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const generatedAt = new Date().toISOString();
+      const exportPages = pages.length
+        ? pages
+        : selectedPage
+          ? [selectedPage]
+          : [];
+      const exportManifest = buildExportAllManifest({
+        generatedAt,
+        pages: exportPages,
+        previewMode,
+        project: selectedProject,
+        projectForm,
+        theme: webTheme,
+      });
+      const websiteCss = buildWebsiteCss(webTheme);
+      const zipManifest = {
+        ...exportManifest,
+        files: exportManifest.files.map((file) => ({
+          ...file,
+          html: buildWebsiteHtmlWithStylesheet(
+            file.html,
+            "assets/css/styles.css",
+          ),
+        })),
+      };
+
+      const zip = new JSZip();
+      const websiteFolder = zip.folder("website");
+
+      websiteFolder.file("manifest.json", JSON.stringify(zipManifest, null, 2));
+      websiteFolder.folder("assets")?.folder("css")?.file("styles.css", websiteCss);
+
+      zipManifest.files.forEach((file) => {
+        websiteFolder.file(file.filename, file.html);
+      });
+
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = `${selectedProject?.slug || "orbit-web-builder"}.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
+
+      setNotice(
+        `Website ZIP berhasil dibuat untuk ${zipManifest.files.length} halaman.`,
+      );
+    } catch (zipError) {
+      setError(getErrorMessage(zipError, "Gagal download website ZIP."));
+    } finally {
+      setIsExportingZip(false);
+    }
+  }
+
   function handleDownloadExport() {
     const html = lastExport?.html || previewHtml;
 
@@ -2113,6 +2495,18 @@ export function WebBuilder() {
                           <FileCode2 size={15} />
                         )}
                         Export All Pages
+                      </button>
+                      <button
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-zinc-200 transition hover:border-amber-300/25 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={!lastExportAll || isExportingZip}
+                        onClick={handleDownloadWebsiteZip}
+                        type="button">
+                        {isExportingZip ? (
+                          <Loader2 className="animate-spin" size={15} />
+                        ) : (
+                          <FileCode2 size={15} />
+                        )}
+                        Download Website ZIP
                       </button>
                       <button
                         className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-zinc-200 transition hover:border-amber-300/25 disabled:cursor-not-allowed disabled:opacity-60"
