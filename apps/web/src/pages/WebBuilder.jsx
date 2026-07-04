@@ -8,6 +8,7 @@ import {
   Globe2,
   Layers3,
   Loader2,
+  Image as ImageIcon,
   Plus,
   GripVertical,
   RefreshCcw,
@@ -168,6 +169,7 @@ const componentLibrary = [
 
 const defaultComponentIds = componentLibrary.map((component) => component.id);
 const componentIdSet = new Set(defaultComponentIds);
+const imageSectionTypes = new Set(["hero", "gallery", "feature-grid"]);
 
 function getResponseData(response, fallback = null) {
   return response?.data ?? response ?? fallback;
@@ -462,6 +464,14 @@ function getSectionItems(props, fallbackItems = []) {
   return fallbackItems;
 }
 
+function getSectionImageUrl(section) {
+  return String(section?.props?.imageUrl || "").trim();
+}
+
+function sectionSupportsImage(section) {
+  return imageSectionTypes.has(section?.type);
+}
+
 function renderPreviewSection(section) {
   const props = section?.props || {};
   const component = section?.styles?.component || section?.id || section?.type;
@@ -469,6 +479,11 @@ function renderPreviewSection(section) {
   const title = escapeHtml(props.title || props.heading || "Untitled");
   const body = escapeHtml(props.body || props.content || props.text || "");
   const actionLabel = escapeHtml(props.actionLabel || "Open");
+  const imageUrl = escapeHtml(getSectionImageUrl(section));
+  const imageAlt = escapeHtml(props.imageAlt || props.title || props.label || title);
+  const mediaMarkup = imageUrl
+    ? `<figure class="component-media"><img src="${imageUrl}" alt="${imageAlt}" loading="lazy"></figure>`
+    : "";
 
   if (component === "navbar") {
     return `<nav class="component component-nav" aria-label="Primary navigation"><strong>${title}</strong><span>${body}</span></nav>`;
@@ -479,7 +494,7 @@ function renderPreviewSection(section) {
   }
 
   if (section?.type === "hero") {
-    return `<section class="component component-hero"><div><p>${label}</p><h2>${title}</h2><span>${body}</span></div><a href="#content">${actionLabel}</a></section>`;
+    return `<section class="component component-hero ${imageUrl ? "has-media" : ""}">${mediaMarkup}<div class="component-copy"><p>${label}</p><h2>${title}</h2><span>${body}</span></div><a href="#content">${actionLabel}</a></section>`;
   }
 
   if (section?.type === "gallery") {
@@ -491,7 +506,7 @@ function renderPreviewSection(section) {
       )
       .join("");
 
-    return `<section class="component component-gallery"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="gallery-grid">${itemMarkup}</div></section>`;
+    return `<section class="component component-gallery ${imageUrl ? "has-media" : ""}">${mediaMarkup}<p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="gallery-grid">${itemMarkup}</div></section>`;
   }
 
   if (section?.type === "article-list") {
@@ -519,7 +534,7 @@ function renderPreviewSection(section) {
       )
       .join("");
 
-    return `<section class="component component-card-grid"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="card-grid">${itemMarkup}</div></section>`;
+    return `<section class="component component-card-grid ${imageUrl ? "has-media" : ""}">${mediaMarkup}<p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="card-grid">${itemMarkup}</div></section>`;
   }
 
   if (section?.type === "cta") {
@@ -715,6 +730,19 @@ ${themeVarsCss}
       color: var(--muted);
       line-height: 1.5;
     }
+    .component-media {
+      margin: 0 0 14px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: calc(var(--radius) - 4px);
+      background: rgba(0,0,0,0.24);
+    }
+    .component-media img {
+      display: block;
+      width: 100%;
+      height: 220px;
+      object-fit: cover;
+    }
     .component-label,
     .component-hero p,
     .component-cta p {
@@ -749,6 +777,20 @@ ${themeVarsCss}
       gap: 16px;
       background: linear-gradient(135deg, ${themeAccentOverlay}, ${themeAccentPanel});
     }
+    .component-hero.has-media {
+      grid-template-columns: minmax(0, 1fr) minmax(220px, 320px) auto;
+    }
+    .component-hero.has-media .component-copy {
+      min-width: 0;
+    }
+    .component-hero.has-media .component-media {
+      margin: 0;
+      align-self: stretch;
+    }
+    .component-hero.has-media .component-media img {
+      height: 100%;
+      min-height: 240px;
+    }
     .component-hero a,
     .component-cta a {
       border-radius: 999px;
@@ -762,6 +804,10 @@ ${themeVarsCss}
     }
     .component-gallery {
       background: linear-gradient(180deg, rgba(255,255,255,0.04), ${themeAccentPanel});
+    }
+    .component-gallery.has-media .component-media,
+    .component-card-grid.has-media .component-media {
+      margin-top: 0;
     }
     .card-grid,
     .gallery-grid,
@@ -823,9 +869,15 @@ ${themeVarsCss}
         grid-template-columns: 1fr;
         align-items: start;
       }
+      .component-hero.has-media {
+        grid-template-columns: 1fr;
+      }
       .component-nav,
       .component-footer {
         display: grid;
+      }
+      .component-media img {
+        height: 180px;
       }
       .component-hero a,
       .component-cta a {
@@ -931,6 +983,11 @@ export function WebBuilder() {
   const [previewMode, setPreviewMode] = useState("desktop");
   const [previewRevision, setPreviewRevision] = useState(0);
   const [webTheme, setWebTheme] = useState(defaultWebTheme);
+  const [assetForm, setAssetForm] = useState({
+    name: "",
+    url: "",
+  });
+  const [assetLibrary, setAssetLibrary] = useState([]);
   const [draftSections, setDraftSections] = useState(() =>
     buildComponentSections(),
   );
@@ -1237,6 +1294,43 @@ export function WebBuilder() {
 
   function updateWebTheme(partialTheme) {
     setWebTheme((current) => normalizeWebTheme({ ...current, ...partialTheme }));
+  }
+
+  function handleAddAsset(event) {
+    event.preventDefault();
+
+    const name = assetForm.name.trim();
+    const url = assetForm.url.trim();
+
+    if (!name || !url) {
+      setError("Name dan URL asset wajib diisi.");
+      return;
+    }
+
+    setAssetLibrary((current) => [
+      {
+        id: `asset-${Date.now().toString(36)}`,
+        name,
+        type: "image",
+        url,
+      },
+      ...current,
+    ]);
+    setAssetForm({ name: "", url: "" });
+    setNotice("Asset image berhasil ditambahkan.");
+    setError("");
+  }
+
+  function handleDeleteAsset(assetId) {
+    setAssetLibrary((current) => current.filter((asset) => asset.id !== assetId));
+  }
+
+  function handleApplyAssetToActiveSection(assetUrl) {
+    if (!activeDraftSection || !sectionSupportsImage(activeDraftSection)) {
+      return;
+    }
+
+    handleEditSection("imageUrl", assetUrl);
   }
 
   function commitDraftSections(nextSections, options = {}) {
@@ -2096,6 +2190,17 @@ export function WebBuilder() {
                             placeholder="Button label"
                             value={activeDraftSection.props?.actionLabel || ""}
                           />
+                          {sectionSupportsImage(activeDraftSection) && (
+                            <FieldInput
+                              label="Image URL"
+                              maxLength={1000}
+                              onChange={(value) =>
+                                handleEditSection("imageUrl", value)
+                              }
+                              placeholder="https://example.com/image.jpg"
+                              value={activeDraftSection.props?.imageUrl || ""}
+                            />
+                          )}
                           {Array.isArray(activeDraftSection.props?.items) && (
                             <FieldTextarea
                               label="Items"
@@ -2323,6 +2428,113 @@ export function WebBuilder() {
                         value={webTheme.spacing}
                       />
                     </label>
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="orbit-kicker">Asset Manager</p>
+                      <h3 className="mt-2 text-lg font-black text-white">
+                        Image library
+                      </h3>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
+                        Simpan URL gambar lokal di workspace ini, lalu pakai ke
+                        Hero, Gallery, atau Card section aktif.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs font-bold text-zinc-500">
+                      <ImageIcon size={15} />
+                      {assetLibrary.length} assets
+                    </div>
+                  </div>
+
+                  <form
+                    className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                    onSubmit={handleAddAsset}>
+                    <FieldInput
+                      label="Name"
+                      maxLength={120}
+                      onChange={(value) =>
+                        setAssetForm((current) => ({ ...current, name: value }))
+                      }
+                      placeholder="Hero cover"
+                      value={assetForm.name}
+                    />
+                    <FieldInput
+                      label="URL"
+                      maxLength={1000}
+                      onChange={(value) =>
+                        setAssetForm((current) => ({ ...current, url: value }))
+                      }
+                      placeholder="https://example.com/image.jpg"
+                      value={assetForm.url}
+                    />
+                    <button
+                      className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300/30 bg-amber-300/10 px-4 py-3 text-sm font-black text-amber-100 transition hover:bg-amber-300/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      type="submit">
+                      <Plus size={16} />
+                      Add Asset
+                    </button>
+                  </form>
+
+                  <div className="mt-4 grid gap-3">
+                    {assetLibrary.length ? (
+                      assetLibrary.map((asset) => (
+                        <article
+                          className="rounded-lg border border-white/10 bg-black/20 p-3"
+                          key={asset.id}>
+                          <div className="grid gap-3 md:grid-cols-[120px_minmax(0,1fr)_auto] md:items-center">
+                            <div className="overflow-hidden rounded-md border border-white/10 bg-black/30">
+                              <img
+                                alt={asset.name}
+                                className="h-24 w-full object-cover"
+                                src={asset.url}
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="truncate text-sm font-black text-white">
+                                  {asset.name}
+                                </h4>
+                                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-zinc-500">
+                                  {asset.type}
+                                </span>
+                              </div>
+                              <p className="mt-1 break-all text-xs text-zinc-500">
+                                {asset.url}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-black text-white transition hover:border-amber-300/35 hover:bg-amber-300/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={
+                                  !activeDraftSection ||
+                                  !sectionSupportsImage(activeDraftSection)
+                                }
+                                onClick={() =>
+                                  handleApplyAssetToActiveSection(asset.url)
+                                }
+                                type="button">
+                                Use in section
+                              </button>
+                              <button
+                                className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs font-black text-zinc-300 transition hover:border-rose-300/35 hover:bg-rose-300/10 hover:text-rose-100"
+                                onClick={() => handleDeleteAsset(asset.id)}
+                                type="button">
+                                <Trash2 size={14} />
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        </article>
+                      ))
+                    ) : (
+                      <WebBuilderEmptyState title="Belum ada asset">
+                        Tambahkan URL gambar pertama untuk dipakai di section
+                        aktif.
+                      </WebBuilderEmptyState>
+                    )}
                   </div>
                 </section>
 
