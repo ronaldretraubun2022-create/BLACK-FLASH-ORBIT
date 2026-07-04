@@ -10,6 +10,7 @@ const TOKEN_REFRESH_WINDOW_MS = 60000;
 const LOCAL_DEV_API_PORT = "5000";
 const LOCAL_DEV_API_BASE_URL = "http://localhost:5000/api";
 const API_BASE_URL = normalizeApiBaseUrl(getConfiguredApiBaseUrl());
+const AUTH_PROVIDER_UNAVAILABLE_CODE = "AUTH_PROVIDER_UNAVAILABLE";
 
 const AUTH_FAILURE_CODES = new Set([
   "missing_authorization",
@@ -152,9 +153,27 @@ function formatErrorValue(value) {
 }
 
 function isAuthFailureResponse(errorBody, status) {
-  const code = String(errorBody?.code || "").toLowerCase();
+  const code = getApiErrorCode(errorBody).toLowerCase();
 
   return status === 401 && AUTH_FAILURE_CODES.has(code);
+}
+
+function getApiErrorCode(errorBody) {
+  return String(errorBody?.code || "").trim();
+}
+
+export function isAuthProviderUnavailableResponse(errorBody, status) {
+  return (
+    status === 503 &&
+    getApiErrorCode(errorBody).toUpperCase() === AUTH_PROVIDER_UNAVAILABLE_CODE
+  );
+}
+
+export function isAuthProviderUnavailableError(error) {
+  return (
+    error?.code === AUTH_PROVIDER_UNAVAILABLE_CODE ||
+    isAuthProviderUnavailableResponse(error?.body, error?.status)
+  );
 }
 
 async function request(path, options = {}) {
@@ -385,6 +404,7 @@ class ApiRequestError extends Error {
     super(message);
     this.name = "ApiRequestError";
     this.body = body;
+    this.code = getApiErrorCode(body);
     this.status = status;
   }
 }

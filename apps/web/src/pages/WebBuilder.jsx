@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -40,6 +40,14 @@ const emptyPageForm = {
 };
 
 const AUTO_REFRESH_MS = 30000;
+const SECTION_AUTOSAVE_DELAY_MS = 700;
+const SECTION_HISTORY_LIMIT = 60;
+const autosaveStatusConfig = {
+  failed: { label: "Save failed", tone: "red" },
+  saved: { label: "Saved", tone: "green" },
+  saving: { label: "Saving...", tone: "amber" },
+  unsaved: { label: "Unsaved changes", tone: "amber" },
+};
 const previewViewports = {
   desktop: {
     icon: Monitor,
@@ -291,6 +299,51 @@ function getSectionComponentIds(sections) {
   return sections
     .map((section) => section?.styles?.component)
     .filter((componentId) => componentIdSet.has(componentId));
+}
+
+function getSectionsSignature(sections) {
+  try {
+    return JSON.stringify(cloneSectionsForDraft(sections));
+  } catch {
+    return "[]";
+  }
+}
+
+function getAutosaveStatusConfig(status) {
+  return autosaveStatusConfig[status] || autosaveStatusConfig.saved;
+}
+
+function limitSectionHistory(items) {
+  return items.slice(-SECTION_HISTORY_LIMIT);
+}
+
+function syncPageSections(pages, pageId, sections) {
+  const nextSections = cloneSectionsForDraft(sections);
+
+  return pages.map((page) =>
+    page.id === pageId
+      ? {
+          ...page,
+          metadata: {
+            ...(page.metadata || {}),
+            componentLibrary: getSectionComponentIds(nextSections),
+          },
+          sections: nextSections,
+        }
+      : page,
+  );
+}
+
+function createPageSectionsPatch(page, sections) {
+  const nextSections = cloneSectionsForDraft(sections);
+
+  return {
+    metadata: {
+      ...(page?.metadata || {}),
+      componentLibrary: getSectionComponentIds(nextSections),
+    },
+    sections: nextSections,
+  };
 }
 
 function createPagePayload(form, sections = buildComponentSections()) {
@@ -704,7 +757,9 @@ function WebBuilderStat({ label, value }) {
 
 function StatusPill({ children, tone = "amber" }) {
   const toneClass =
-    tone === "green"
+    tone === "red"
+      ? "border-rose-300/25 bg-rose-300/10 text-rose-200"
+      : tone === "green"
       ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-200"
       : "border-amber-300/25 bg-amber-300/10 text-amber-200";
 
@@ -760,8 +815,20 @@ export function WebBuilder() {
   const [draftSections, setDraftSections] = useState(() =>
     buildComponentSections(),
   );
+  const [sectionHistory, setSectionHistory] = useState({
+    future: [],
+    past: [],
+  });
+  const [autosaveStatus, setAutosaveStatus] = useState("saved");
   const [activeSectionId, setActiveSectionId] = useState("hero-1");
   const [selectedPageId, setSelectedPageId] = useState("");
+  const activeAutosavePromiseRef = useRef(null);
+  const autosaveTimeoutRef = useRef(null);
+  const draftPageIdRef = useRef("");
+  const lastPersistedPageSectionsRef = useRef({
+    pageId: "",
+    signature: "",
+  });
 
   const userRole = profile?.role || "user";
 
@@ -831,18 +898,32 @@ export function WebBuilder() {
     return () => window.clearInterval(intervalId);
   }, [loadProjectDetail, loadProjects, selectedProjectId]);
 
-  const pages = Array.isArray(projectDetail?.pages) ? projectDetail.pages : [];
+  const isProjectDetailCurrent = projectDetail?.id === selectedProjectId;
+  const pages = useMemo(() => {
+    const detailPages = isProjectDetailCurrent && Array.isArray(projectDetail?.pages)
+      ? projectDetail.pages
+      : [];
+
+    if (!selectedPageId || draftPageIdRef.current !== selectedPageId) {
+      return detailPages;
+    }
+
+    return syncPageSections(detailPages, selectedPageId, draftSections);
+  }, [
+    draftSections,
+    isProjectDetailCurrent,
+    projectDetail?.pages,
+    selectedPageId,
+  ]);
   const exportedProjects = projects.filter(
     (project) => project.status === "exported",
   ).length;
   const selectedProject =
-    projectDetail ||
+    (isProjectDetailCurrent ? { ...projectDetail, pages } : null) ||
     projects.find((project) => project.id === selectedProjectId) ||
     null;
   const selectedPage = useMemo(() => {
-    const detailPages = Array.isArray(projectDetail?.pages)
-      ? projectDetail.pages
-      : [];
+    const detailPages = pages;
 
     if (!detailPages.length) return null;
 
@@ -851,27 +932,58 @@ export function WebBuilder() {
       detailPages[0] ||
       null
     );
-  }, [projectDetail, selectedPageId]);
+  }, [pages, selectedPageId]);
 
   useEffect(() => {
     if (!selectedProjectId) {
       setSelectedPageId("");
+      draftPageIdRef.current = "";
+      lastPersistedPageSectionsRef.current = {
+        pageId: "",
+        signature: "",
+      };
+      setSectionHistory({ future: [], past: [] });
+      setAutosaveStatus("saved");
       setDraftSections(buildComponentSections());
       setActiveSectionId("hero-1");
       return;
     }
 
-    if (!selectedPage) return;
+    if (!selectedPage) {
+      setSelectedPageId("");
+      draftPageIdRef.current = "";
+      lastPersistedPageSectionsRef.current = {
+        pageId: "",
+        signature: "",
+      };
+      setSectionHistory({ future: [], past: [] });
+      setAutosaveStatus("saved");
+      setDraftSections(buildComponentSections());
+      setActiveSectionId("hero-1");
+      return;
+    }
 
     if (selectedPage.id && selectedPageId !== selectedPage.id) {
       setSelectedPageId(selectedPage.id);
     }
 
-    const nextSections = cloneSectionsForDraft(selectedPage.sections);
+    const persistedSections = cloneSectionsForDraft(selectedPage.sections);
+    const nextSections = persistedSections;
     const safeSections = nextSections.length
       ? nextSections
       : buildComponentSections();
 
+    draftPageIdRef.current = selectedPage.id || "";
+    lastPersistedPageSectionsRef.current = {
+      pageId: selectedPage.id || "",
+      signature: getSectionsSignature(persistedSections),
+    };
+    setSectionHistory({ future: [], past: [] });
+    setAutosaveStatus(
+      getSectionsSignature(safeSections) === getSectionsSignature(persistedSections)
+        ? "saved"
+        : "unsaved",
+    );
     setDraftSections(safeSections);
     setActiveSectionId((currentId) =>
       safeSections.some((section) => section.id === currentId)
@@ -879,6 +991,83 @@ export function WebBuilder() {
         : safeSections[0]?.id || "hero-1",
     );
   }, [selectedProjectId, selectedPage?.id]);
+
+  useEffect(() => {
+    if (
+      !selectedProjectId ||
+      !selectedPageId ||
+      !selectedPage?.id ||
+      draftPageIdRef.current !== selectedPageId
+    ) {
+      setAutosaveStatus("saved");
+      return undefined;
+    }
+
+    const nextSections = cloneSectionsForDraft(draftSections);
+    const nextSignature = getSectionsSignature(nextSections);
+    const persisted = lastPersistedPageSectionsRef.current;
+
+    if (
+      persisted.pageId === selectedPageId &&
+      persisted.signature === nextSignature
+    ) {
+      setAutosaveStatus("saved");
+      return undefined;
+    }
+
+    setAutosaveStatus("unsaved");
+
+    const timeoutId = window.setTimeout(async () => {
+      autosaveTimeoutRef.current = null;
+      saveCurrentPageSections().catch(() => {});
+    }, SECTION_AUTOSAVE_DELAY_MS);
+
+    autosaveTimeoutRef.current = timeoutId;
+
+    return () => {
+      if (autosaveTimeoutRef.current === timeoutId) {
+        autosaveTimeoutRef.current = null;
+      }
+
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    draftSections,
+    selectedPage?.id,
+    selectedPage?.metadata,
+    selectedPageId,
+    selectedProjectId,
+  ]);
+
+  const canUndoSections = sectionHistory.past.length > 0;
+  const canRedoSections = sectionHistory.future.length > 0;
+  const autosaveStatusMeta = getAutosaveStatusConfig(autosaveStatus);
+
+  useEffect(() => {
+    function handleSectionHistoryShortcut(event) {
+      const key = String(event.key || "").toLowerCase();
+      const hasCommandKey = event.ctrlKey || event.metaKey;
+
+      if (!hasCommandKey || event.altKey || event.defaultPrevented) return;
+
+      const isUndo = key === "z" && !event.shiftKey;
+      const isRedo =
+        (key === "z" && event.shiftKey) || (key === "y" && !event.shiftKey);
+
+      if (isUndo && canUndoSections) {
+        event.preventDefault();
+        handleUndoSections();
+      } else if (isRedo && canRedoSections) {
+        event.preventDefault();
+        handleRedoSections();
+      }
+    }
+
+    window.addEventListener("keydown", handleSectionHistoryShortcut);
+
+    return () =>
+      window.removeEventListener("keydown", handleSectionHistoryShortcut);
+  }, [canRedoSections, canUndoSections, draftSections, sectionHistory]);
 
   const dashboardStats = useMemo(
     () => [
@@ -896,9 +1085,9 @@ export function WebBuilder() {
     null;
   const activePreviewPage = {
     ...(selectedPage || {}),
-    path: pageForm.path || selectedPage?.path || "/",
+    path: selectedPage?.path || pageForm.path || "/",
     sections: draftSections,
-    title: pageForm.title || selectedPage?.title || "Home",
+    title: selectedPage?.title || pageForm.title || "Home",
   };
   const previewHtml = useMemo(
     () =>
@@ -925,21 +1114,162 @@ export function WebBuilder() {
     setPreviewRevision((current) => current + 1);
   }
 
+  function commitDraftSections(nextSections, options = {}) {
+    const currentSnapshot = cloneSectionsForDraft(draftSections);
+    const nextSnapshot = cloneSectionsForDraft(nextSections);
+
+    if (getSectionsSignature(currentSnapshot) === getSectionsSignature(nextSnapshot)) {
+      return false;
+    }
+
+    setSectionHistory((currentHistory) => ({
+      future: [],
+      past: limitSectionHistory([...currentHistory.past, currentSnapshot]),
+    }));
+    setDraftSections(nextSnapshot);
+
+    if (options.activeSectionId !== undefined) {
+      setActiveSectionId(options.activeSectionId);
+    }
+
+    setAutosaveStatus("unsaved");
+    syncPreview();
+    return true;
+  }
+
+  async function saveCurrentPageSections() {
+    if (
+      !selectedProjectId ||
+      !selectedPageId ||
+      !selectedPage?.id ||
+      draftPageIdRef.current !== selectedPageId
+    ) {
+      setAutosaveStatus("saved");
+      return false;
+    }
+
+    const activeSave = activeAutosavePromiseRef.current;
+
+    if (activeSave) {
+      await activeSave.catch(() => null);
+    }
+
+    const nextSections = cloneSectionsForDraft(draftSections);
+    const nextSignature = getSectionsSignature(nextSections);
+    const persisted = lastPersistedPageSectionsRef.current;
+
+    if (
+      persisted.pageId === selectedPageId &&
+      persisted.signature === nextSignature
+    ) {
+      setAutosaveStatus("saved");
+      return true;
+    }
+
+    setAutosaveStatus("saving");
+
+    const savePromise = api.updateWebBuilderPage(
+      selectedPageId,
+      createPageSectionsPatch(selectedPage, nextSections),
+    );
+
+    activeAutosavePromiseRef.current = savePromise;
+
+    try {
+      await savePromise;
+      lastPersistedPageSectionsRef.current = {
+        pageId: selectedPageId,
+        signature: nextSignature,
+      };
+      setLastSync(new Date().toLocaleTimeString("id-ID"));
+      setAutosaveStatus("saved");
+      return true;
+    } catch (saveError) {
+      setAutosaveStatus("failed");
+      setError(getErrorMessage(saveError, "Gagal menyimpan section halaman."));
+      throw saveError;
+    } finally {
+      if (activeAutosavePromiseRef.current === savePromise) {
+        activeAutosavePromiseRef.current = null;
+      }
+    }
+  }
+
+  async function flushPendingAutosave() {
+    if (autosaveTimeoutRef.current) {
+      window.clearTimeout(autosaveTimeoutRef.current);
+      autosaveTimeoutRef.current = null;
+    }
+
+    const activeSave = activeAutosavePromiseRef.current;
+
+    if (activeSave) {
+      await activeSave.catch(() => null);
+    }
+
+    return saveCurrentPageSections();
+  }
+
+  function handleUndoSections() {
+    if (!sectionHistory.past.length) return;
+
+    const currentSnapshot = cloneSectionsForDraft(draftSections);
+    const previousSections =
+      sectionHistory.past[sectionHistory.past.length - 1] || [];
+    const nextSections = cloneSectionsForDraft(previousSections);
+
+    setSectionHistory((currentHistory) => ({
+      future: [currentSnapshot, ...currentHistory.future].slice(
+        0,
+        SECTION_HISTORY_LIMIT,
+      ),
+      past: currentHistory.past.slice(0, -1),
+    }));
+    setDraftSections(nextSections);
+    setActiveSectionId((currentId) =>
+      nextSections.some((section) => section.id === currentId)
+        ? currentId
+        : nextSections[0]?.id || "",
+    );
+    setAutosaveStatus("unsaved");
+    syncPreview();
+  }
+
+  function handleRedoSections() {
+    if (!sectionHistory.future.length) return;
+
+    const currentSnapshot = cloneSectionsForDraft(draftSections);
+    const nextSections = cloneSectionsForDraft(sectionHistory.future[0] || []);
+
+    setSectionHistory((currentHistory) => ({
+      future: currentHistory.future.slice(1),
+      past: limitSectionHistory([...currentHistory.past, currentSnapshot]),
+    }));
+    setDraftSections(nextSections);
+    setActiveSectionId((currentId) =>
+      nextSections.some((section) => section.id === currentId)
+        ? currentId
+        : nextSections[0]?.id || "",
+    );
+    setAutosaveStatus("unsaved");
+    syncPreview();
+  }
+
   function handleAddSection(componentId) {
     const nextSection = createDraftSection(componentId);
 
     if (!nextSection) return;
 
-    setDraftSections((currentSections) => [...currentSections, nextSection]);
-    setActiveSectionId(nextSection.id);
-    syncPreview();
+    commitDraftSections([...draftSections, nextSection], {
+      activeSectionId: nextSection.id,
+    });
   }
 
   function handleEditSection(field, value) {
     if (!activeDraftSection) return;
 
-    setDraftSections((currentSections) =>
-      currentSections.map((section) =>
+    commitDraftSections(
+      draftSections.map((section) =>
         section.id === activeDraftSection.id
           ? {
               ...section,
@@ -951,7 +1281,6 @@ export function WebBuilder() {
           : section,
       ),
     );
-    syncPreview();
   }
 
   function handleEditSectionItems(value) {
@@ -963,8 +1292,8 @@ export function WebBuilder() {
       .filter(Boolean)
       .slice(0, 8);
 
-    setDraftSections((currentSections) =>
-      currentSections.map((section) =>
+    commitDraftSections(
+      draftSections.map((section) =>
         section.id === activeDraftSection.id
           ? {
               ...section,
@@ -976,46 +1305,39 @@ export function WebBuilder() {
           : section,
       ),
     );
-    syncPreview();
   }
 
   function handleDeleteSection(sectionId) {
-    setDraftSections((currentSections) => {
-      const nextSections = currentSections.filter(
-        (section) => section.id !== sectionId,
-      );
+    const nextSections = draftSections.filter(
+      (section) => section.id !== sectionId,
+    );
+    const nextActiveSectionId =
+      activeSectionId === sectionId ? nextSections[0]?.id || "" : activeSectionId;
 
-      setActiveSectionId((currentId) =>
-        currentId === sectionId ? nextSections[0]?.id || "" : currentId,
-      );
-
-      return nextSections;
+    commitDraftSections(nextSections, {
+      activeSectionId: nextActiveSectionId,
     });
-    syncPreview();
   }
 
   function handleMoveSection(sectionId, direction) {
-    setDraftSections((currentSections) => {
-      const currentIndex = currentSections.findIndex(
-        (section) => section.id === sectionId,
-      );
-      const nextIndex = currentIndex + direction;
+    const currentIndex = draftSections.findIndex(
+      (section) => section.id === sectionId,
+    );
+    const nextIndex = currentIndex + direction;
 
-      if (
-        currentIndex < 0 ||
-        nextIndex < 0 ||
-        nextIndex >= currentSections.length
-      ) {
-        return currentSections;
-      }
+    if (
+      currentIndex < 0 ||
+      nextIndex < 0 ||
+      nextIndex >= draftSections.length
+    ) {
+      return;
+    }
 
-      const nextSections = [...currentSections];
-      const [section] = nextSections.splice(currentIndex, 1);
-      nextSections.splice(nextIndex, 0, section);
+    const nextSections = [...draftSections];
+    const [section] = nextSections.splice(currentIndex, 1);
+    nextSections.splice(nextIndex, 0, section);
 
-      return nextSections;
-    });
-    syncPreview();
+    commitDraftSections(nextSections);
   }
 
   function handleDragStartSection(sectionId, event) {
@@ -1029,53 +1351,39 @@ export function WebBuilder() {
   }
 
   function handleDropSection(targetSectionId) {
-    setDraftSections((currentSections) => {
-      const draggedIndex = currentSections.findIndex(
-        (section) => section.id === draggedSectionId,
-      );
-      const targetIndex = currentSections.findIndex(
-        (section) => section.id === targetSectionId,
-      );
+    const draggedIndex = draftSections.findIndex(
+      (section) => section.id === draggedSectionId,
+    );
+    const targetIndex = draftSections.findIndex(
+      (section) => section.id === targetSectionId,
+    );
 
-      if (
-        draggedIndex < 0 ||
-        targetIndex < 0 ||
-        draggedIndex === targetIndex
-      ) {
-        return currentSections;
-      }
-
-      const nextSections = [...currentSections];
+    if (draggedIndex >= 0 && targetIndex >= 0 && draggedIndex !== targetIndex) {
+      const nextSections = [...draftSections];
       const [draggedSection] = nextSections.splice(draggedIndex, 1);
       const insertIndex =
         draggedIndex < targetIndex ? targetIndex - 1 : targetIndex;
 
       nextSections.splice(insertIndex, 0, draggedSection);
-      return nextSections;
-    });
+      commitDraftSections(nextSections);
+    }
 
     setDraggedSectionId("");
-    syncPreview();
   }
 
   function handleDropSectionToEnd() {
-    setDraftSections((currentSections) => {
-      const draggedIndex = currentSections.findIndex(
-        (section) => section.id === draggedSectionId,
-      );
+    const draggedIndex = draftSections.findIndex(
+      (section) => section.id === draggedSectionId,
+    );
 
-      if (draggedIndex < 0 || draggedIndex === currentSections.length - 1) {
-        return currentSections;
-      }
-
-      const nextSections = [...currentSections];
+    if (draggedIndex >= 0 && draggedIndex !== draftSections.length - 1) {
+      const nextSections = [...draftSections];
       const [draggedSection] = nextSections.splice(draggedIndex, 1);
       nextSections.push(draggedSection);
-      return nextSections;
-    });
+      commitDraftSections(nextSections);
+    }
 
     setDraggedSectionId("");
-    syncPreview();
   }
 
   async function handleCreateProject(event) {
@@ -1157,6 +1465,8 @@ export function WebBuilder() {
     setNotice("");
 
     try {
+      await flushPendingAutosave();
+
       const exported = {
         exportedAt: new Date().toISOString(),
         format: "orbit-web-builder-local-v1",
@@ -1175,9 +1485,11 @@ export function WebBuilder() {
   }
 
   function handleDownloadExport() {
-    if (!lastExport?.html) return;
+    const html = previewHtml || lastExport?.html;
 
-    const blob = new Blob([lastExport.html], { type: "text/html" });
+    if (!html) return;
+
+    const blob = new Blob([html], { type: "text/html" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
 
@@ -1484,7 +1796,26 @@ export function WebBuilder() {
                         sinkron langsung dari draft ini.
                       </p>
                     </div>
-                    <StatusPill>{draftSections.length} draft</StatusPill>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusPill tone={autosaveStatusMeta.tone}>
+                        {autosaveStatusMeta.label}
+                      </StatusPill>
+                      <button
+                        className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs font-black text-zinc-200 transition hover:border-amber-300/30 disabled:cursor-not-allowed disabled:opacity-45"
+                        disabled={!canUndoSections}
+                        onClick={handleUndoSections}
+                        type="button">
+                        Undo
+                      </button>
+                      <button
+                        className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs font-black text-zinc-200 transition hover:border-amber-300/30 disabled:cursor-not-allowed disabled:opacity-45"
+                        disabled={!canRedoSections}
+                        onClick={handleRedoSections}
+                        type="button">
+                        Redo
+                      </button>
+                      <StatusPill>{draftSections.length} draft</StatusPill>
+                    </div>
                   </div>
 
                   <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">

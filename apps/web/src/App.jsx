@@ -35,7 +35,10 @@ import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 import { Login } from "./pages/Login.jsx";
 import { Register } from "./pages/Register.jsx";
 import { WebBuilder } from "./pages/WebBuilder.jsx";
-import { getAuthenticatedHeaders } from "./services/api.js";
+import {
+  getAuthenticatedHeaders,
+  isAuthProviderUnavailableResponse,
+} from "./services/api.js";
 
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
 
@@ -199,13 +202,29 @@ function CommandCenterDashboard() {
           headers: { Accept: "application/json", ...authHeaders },
           signal: controller.signal,
         });
+        const payload = await response.json().catch(() => null);
 
-        if (!response.ok) {
-          throw new Error(`Telemetry request failed: ${response.status}`);
+        if (isAuthProviderUnavailableResponse(payload, response.status)) {
+          setTelemetryError(
+            payload?.message ||
+              "Limited connectivity: auth provider temporarily unavailable.",
+          );
+          setDashboardData(null);
+          return;
         }
 
-        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(
+            payload?.message || `Telemetry request failed: ${response.status}`,
+          );
+        }
+
         setDashboardData(payload?.data ?? null);
+        setTelemetryError(
+          payload?.degraded
+            ? payload?.message || "Dashboard telemetry degraded."
+            : "",
+        );
       } catch (error) {
         if (error?.name === "AbortError") return;
 

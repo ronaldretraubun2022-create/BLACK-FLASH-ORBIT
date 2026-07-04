@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { api } from "../services/api";
+import { api, isAuthProviderUnavailableError } from "../services/api";
 
 const POLL_INTERVAL_MS = 15000;
 
@@ -141,6 +141,22 @@ function isTelemetryEndpointFailure(result, endpoint) {
   return false;
 }
 
+function hasAuthProviderUnavailableFailure(results) {
+  return results.some(
+    (result) =>
+      result.status === "rejected" &&
+      isAuthProviderUnavailableError(result.reason),
+  );
+}
+
+function hasDegradedTelemetry(results) {
+  return results.some(
+    (result) =>
+      result.status === "fulfilled" &&
+      (result.value?.degraded || result.value?.data?.metrics?.degraded),
+  );
+}
+
 function getFailedTelemetryEndpoints(results, endpoints) {
   return results
     .map((result, index) =>
@@ -151,7 +167,18 @@ function getFailedTelemetryEndpoints(results, endpoints) {
     .filter(Boolean);
 }
 
-function getTelemetryWarning(failedEndpoints) {
+function getTelemetryWarning(
+  failedEndpoints,
+  { isDegradedTelemetry, isLimitedConnectivity },
+) {
+  if (isLimitedConnectivity) {
+    return "Limited connectivity: auth provider temporarily unavailable. Data terakhir atau fallback tetap ditampilkan.";
+  }
+
+  if (isDegradedTelemetry) {
+    return "Dashboard telemetry degraded. Data fallback tetap ditampilkan.";
+  }
+
   if (failedEndpoints.length === 0) return "";
 
   return `${failedEndpoints.length} endpoint belum merespons. Data lain tetap ditampilkan.`;
@@ -191,6 +218,8 @@ export function Dashboard() {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState("");
+  const [isDegradedTelemetry, setIsDegradedTelemetry] = useState(false);
+  const [isLimitedConnectivity, setIsLimitedConnectivity] = useState(false);
   const [failedTelemetryEndpoints, setFailedTelemetryEndpoints] = useState([]);
 
   const loadTelemetry = useCallback(async () => {
@@ -200,6 +229,21 @@ export function Dashboard() {
       dashboardStatusEndpoint.load(),
     ]);
     const [dashboardStatusResult] = dashboardResults;
+    const isDashboardAuthUnavailable =
+      hasAuthProviderUnavailableFailure(dashboardResults);
+
+    if (isDashboardAuthUnavailable) {
+      const failedEndpoints = [dashboardStatusEndpoint.path];
+
+      logTelemetryDebug([dashboardStatusEndpoint], dashboardResults, failedEndpoints);
+      setFailedTelemetryEndpoints(failedEndpoints);
+      setIsDegradedTelemetry(false);
+      setIsLimitedConnectivity(true);
+      setLastUpdated(formatTime(new Date().toISOString()));
+      setIsLoading(false);
+      return;
+    }
+
     const dashboardStatus =
       dashboardStatusResult.status === "fulfilled" &&
       isObjectData(dashboardStatusResult.value?.data)
@@ -222,6 +266,8 @@ export function Dashboard() {
 
       logTelemetryDebug([dashboardStatusEndpoint], dashboardResults, failedEndpoints);
       setFailedTelemetryEndpoints(failedEndpoints);
+      setIsDegradedTelemetry(hasDegradedTelemetry(dashboardResults));
+      setIsLimitedConnectivity(false);
     } else {
       const telemetryResults = await Promise.allSettled(
         telemetryEndpoints.map((endpoint) => endpoint.load()),
@@ -241,6 +287,8 @@ export function Dashboard() {
       }));
       logTelemetryDebug(endpoints, results, failedEndpoints);
       setFailedTelemetryEndpoints(failedEndpoints);
+      setIsDegradedTelemetry(hasDegradedTelemetry(results));
+      setIsLimitedConnectivity(hasAuthProviderUnavailableFailure(results));
     }
 
     setLastUpdated(formatTime(new Date().toISOString()));
@@ -271,7 +319,10 @@ export function Dashboard() {
   const memoryUsed = formatBytes(telemetry.metrics?.memory?.heapUsed);
   const memoryRss = formatBytes(telemetry.metrics?.memory?.rss);
   const securityScore = telemetry.security?.securityScore || 0;
-  const telemetryWarning = getTelemetryWarning(failedTelemetryEndpoints);
+  const telemetryWarning = getTelemetryWarning(failedTelemetryEndpoints, {
+    isDegradedTelemetry,
+    isLimitedConnectivity,
+  });
 
   return (
     <div className="orbit-command mx-auto grid max-w-7xl gap-5">

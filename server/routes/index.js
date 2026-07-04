@@ -1120,32 +1120,67 @@ router.get("/system", (req, res) => {
 });
 
 router.get("/dashboard/status", async (req, res) => {
-  const [projects, reports, activity] = await Promise.all([
-    getProjects(),
-    getReports(),
-    getActivity(20),
-  ]);
+  let activity = [];
+  let degradedReason = "";
+  let projects = fallbackProjects;
+  let reports = fallbackReports;
+
+  try {
+    [projects, reports, activity] = await Promise.all([
+      getProjects(),
+      getReports(),
+      getActivity(20),
+    ]);
+  } catch (error) {
+    degradedReason = "dashboard_status_provider_failed";
+    activity = [
+      {
+        type: "system",
+        message: "Dashboard telemetry degraded. Fallback data returned.",
+        time: new Date().toISOString(),
+      },
+    ];
+    console.error(
+      "Dashboard status provider error:",
+      error?.message || "Unknown provider error",
+    );
+  }
+
+  const isDegraded = Boolean(degradedReason);
+  const dashboardStatus = isDegraded ? "degraded" : "ready";
+  const timestamp = new Date().toISOString();
 
   return res.json({
     success: true,
-    status: "ready",
+    status: dashboardStatus,
     module: "dashboard",
-    message: "Module ready for staging.",
+    message: isDegraded
+      ? "Dashboard telemetry degraded. Fallback data returned."
+      : "Module ready for staging.",
+    ...(isDegraded
+      ? {
+          code: "DASHBOARD_STATUS_DEGRADED",
+          degraded: true,
+          degradedReason,
+        }
+      : {}),
     data: {
       activity,
       automation: getAutomationEngines(),
       health: {
         success: true,
         service: "BLACK FLASH ORBIT API",
-        status: "healthy",
+        status: isDegraded ? "degraded" : "healthy",
         uptime: process.uptime(),
-        timestamp: new Date().toISOString(),
+        timestamp,
       },
       metrics: {
+        degraded: isDegraded,
+        memory: process.memoryUsage(),
         projects: projects.length,
         reports: reports.length,
+        timestamp,
         uptime: process.uptime(),
-        memory: process.memoryUsage(),
       },
       projects,
       security: {
@@ -1157,13 +1192,14 @@ router.get("/dashboard/status", async (req, res) => {
         issues: [],
       },
       system: {
-        status: "online",
+        status: isDegraded ? "degraded" : "online",
         apiVersion: "v1",
         environment: process.env.NODE_ENV || "development",
-        timestamp: new Date().toISOString(),
+        timestamp,
       },
     },
     metrics: {
+      degraded: isDegraded,
       projects: projects.length,
       reports: reports.length,
       uptime: process.uptime(),
