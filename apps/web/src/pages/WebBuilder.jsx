@@ -955,6 +955,42 @@ function buildWebsiteHtmlWithStylesheet(html, cssHref) {
   );
 }
 
+function getWebBuilderPublishChecklist({
+  assetLibrary = [],
+  draftSections = [],
+  lastExportAll = null,
+  lastWebsiteZipGeneratedAt = "",
+  pages = [],
+  templatePagesOverride = null,
+  webTheme = defaultWebTheme,
+}) {
+  const theme = normalizeWebTheme(webTheme);
+  const hasTheme =
+    Boolean(theme.primary && theme.accent && theme.background && theme.text) &&
+    theme.radius >= 8 &&
+    theme.spacing >= 12;
+  const hasTemplate = Array.isArray(templatePagesOverride)
+    ? templatePagesOverride.length > 0
+    : false;
+  const hasPages = Array.isArray(pages) && pages.length > 0;
+  const hasSections = Array.isArray(draftSections) && draftSections.length > 0;
+  const hasExportAll = Boolean(lastExportAll?.files?.length);
+  const hasZip = Boolean(lastWebsiteZipGeneratedAt);
+
+  return {
+    complete:
+      hasTemplate && hasPages && hasSections && hasTheme && hasExportAll && hasZip,
+    items: [
+      { key: "template", label: "template selected", done: hasTemplate },
+      { key: "pages", label: "pages available", done: hasPages },
+      { key: "sections", label: "sections available", done: hasSections },
+      { key: "theme", label: "theme configured", done: hasTheme },
+      { key: "export", label: "export all pages completed", done: hasExportAll },
+      { key: "zip", label: "ZIP generated", done: hasZip },
+    ],
+  };
+}
+
 function getPreviewPages(projectDetail, projectForm, pageForm, selectedProjectId) {
   if (projectDetail?.pages?.length) return projectDetail.pages;
 
@@ -1501,11 +1537,15 @@ export function WebBuilder() {
   const [lastSync, setLastSync] = useState("-");
   const [lastExport, setLastExport] = useState(null);
   const [lastExportAll, setLastExportAll] = useState(null);
+  const [lastWebsiteZipGeneratedAt, setLastWebsiteZipGeneratedAt] = useState("");
+  const [lastPublishedAt, setLastPublishedAt] = useState("");
+  const [publishStatus, setPublishStatus] = useState("draft");
   const [draggedSectionId, setDraggedSectionId] = useState("");
   const [previewMode, setPreviewMode] = useState("desktop");
   const [previewRevision, setPreviewRevision] = useState(0);
   const [webTheme, setWebTheme] = useState(defaultWebTheme);
   const [templatePagesOverride, setTemplatePagesOverride] = useState(null);
+  const [activeTemplateLabel, setActiveTemplateLabel] = useState("");
   const [assetForm, setAssetForm] = useState({
     name: "",
     url: "",
@@ -1525,6 +1565,7 @@ export function WebBuilder() {
   const autosaveTimeoutRef = useRef(null);
   const assetUploadInputRef = useRef(null);
   const draftPageIdRef = useRef("");
+  const publishSnapshotRef = useRef("");
   const lastPersistedPageSectionsRef = useRef({
     pageId: "",
     signature: "",
@@ -1588,6 +1629,13 @@ export function WebBuilder() {
 
   useEffect(() => {
     setTemplatePagesOverride(null);
+    setActiveTemplateLabel("");
+    publishSnapshotRef.current = "";
+    setLastExport(null);
+    setLastExportAll(null);
+    setLastWebsiteZipGeneratedAt("");
+    setLastPublishedAt("");
+    setPublishStatus("draft");
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -1640,6 +1688,76 @@ export function WebBuilder() {
       null
     );
   }, [pages, selectedPageId]);
+
+  const publishChecklist = useMemo(
+    () =>
+      getWebBuilderPublishChecklist({
+        draftSections,
+        lastExportAll,
+        lastWebsiteZipGeneratedAt,
+        pages,
+        templatePagesOverride,
+        webTheme,
+      }),
+    [
+      draftSections,
+      lastExportAll,
+      lastWebsiteZipGeneratedAt,
+      pages,
+      templatePagesOverride,
+      webTheme,
+    ],
+  );
+  const publishStatusTone =
+    publishStatus === "published"
+      ? "green"
+      : publishStatus === "ready"
+        ? "green"
+        : "amber";
+  const publishChecklistComplete = publishChecklist.complete;
+  const currentExportTime =
+    lastExportAll?.generatedAt || lastExport?.exportedAt || "";
+  const publishProductionUrl = selectedProject?.slug
+    ? `https://production.example.com/${selectedProject.slug}`
+    : "https://production.example.com/your-site";
+  const publishPreviewUrl = selectedProject?.slug
+    ? `https://preview.example.com/${selectedProject.slug}`
+    : "https://preview.example.com/your-site";
+
+  useEffect(() => {
+    const currentSignature = JSON.stringify({
+      assetCount: assetLibrary.length,
+      draftSections: getSectionsSignature(draftSections),
+      selectedPageId,
+      templatePagesOverride: Array.isArray(templatePagesOverride)
+        ? templatePagesOverride.map((page) => ({
+            path: page.path || "/",
+            sections: page.sections?.length || 0,
+            title: page.title || "Home",
+          }))
+        : [],
+      webTheme,
+    });
+
+    if (!publishSnapshotRef.current) {
+      publishSnapshotRef.current = currentSignature;
+      return;
+    }
+
+    if (publishSnapshotRef.current !== currentSignature) {
+      publishSnapshotRef.current = currentSignature;
+      setLastExport(null);
+      setLastExportAll(null);
+      setLastWebsiteZipGeneratedAt("");
+      setPublishStatus("draft");
+    }
+  }, [
+    assetLibrary.length,
+    draftSections,
+    selectedPageId,
+    templatePagesOverride,
+    webTheme,
+  ]);
 
   useEffect(() => {
     if (!selectedProjectId) {
@@ -1849,6 +1967,7 @@ export function WebBuilder() {
 
     setWebTheme(nextTheme);
     setTemplatePagesOverride(nextPages);
+    setActiveTemplateLabel(template.label || "");
     setPageForm(
       nextPages[0]
         ? {
@@ -2408,6 +2527,7 @@ export function WebBuilder() {
       link.download = `${selectedProject?.slug || "orbit-web-builder"}.zip`;
       link.click();
       URL.revokeObjectURL(url);
+      setLastWebsiteZipGeneratedAt(new Date().toISOString());
 
       setNotice(
         `Website ZIP berhasil dibuat untuk ${zipManifest.files.length} halaman.`,
@@ -2723,6 +2843,90 @@ export function WebBuilder() {
                       label="Last Export"
                       value={formatDateTime(selectedProject?.lastExportedAt)}
                     />
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="orbit-kicker">Publish Manager</p>
+                      <h3 className="mt-2 text-lg font-black text-white">
+                        Publish status
+                      </h3>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
+                        Status ini hanya mengatur readiness lokal sebelum integrasi
+                        deployment dibuat.
+                      </p>
+                    </div>
+                    <StatusPill tone={publishStatusTone}>{publishStatus}</StatusPill>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <StatusLine label="Current Status" value={publishStatus} />
+                    <StatusLine
+                      label="Last Export"
+                      value={formatDateTime(currentExportTime)}
+                    />
+                    <StatusLine
+                      label="Last Publish"
+                      value={formatDateTime(lastPublishedAt)}
+                    />
+                    <StatusLine
+                      label="Production URL"
+                      value={publishProductionUrl}
+                    />
+                    <StatusLine label="Preview URL" value={publishPreviewUrl} />
+                    <StatusLine
+                      label="Template"
+                      value={activeTemplateLabel || "-"}
+                    />
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-zinc-200 transition hover:border-amber-300/25 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={!selectedProjectId}
+                      onClick={() => setPublishStatus("ready")}
+                      type="button">
+                      Mark as Ready
+                    </button>
+                    <button
+                      className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-black text-zinc-200 transition hover:border-amber-300/25 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={!selectedProjectId || !publishChecklistComplete}
+                      onClick={() => {
+                        setPublishStatus("published");
+                        setLastPublishedAt(new Date().toISOString());
+                      }}
+                      type="button">
+                      Mark as Published
+                    </button>
+                    <button
+                      className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs font-black text-zinc-200 transition hover:border-amber-300/25 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={!selectedProjectId}
+                      onClick={() => setPublishStatus("draft")}
+                      type="button">
+                      Reset to Draft
+                    </button>
+                  </div>
+
+                  <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-zinc-500">
+                      Publish Checklist
+                    </p>
+                    <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                      {publishChecklist.items.map((item) => (
+                        <div
+                          className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2"
+                          key={item.key}>
+                          <span className="min-w-0 truncate text-xs font-bold text-zinc-300">
+                            {item.label}
+                          </span>
+                          <StatusPill tone={item.done ? "green" : "amber"}>
+                            {item.done ? "OK" : "Pending"}
+                          </StatusPill>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </section>
 
