@@ -22,6 +22,13 @@ function normalizeUserEmail(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
+function normalizeModel(model) {
+  if (typeof model !== "string") return DEFAULT_MODEL;
+
+  const trimmedModel = model.trim();
+  return trimmedModel || DEFAULT_MODEL;
+}
+
 async function getCurrentUserEmail() {
   const client = requireSupabase();
 
@@ -98,9 +105,7 @@ function normalizeSession(session) {
 }
 
 function isModelSchemaError(error) {
-  const message = `${error?.message || ""} ${error?.details || ""} ${
-    error?.hint || ""
-  }`;
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`;
 
   return (
     error?.code === "PGRST204" &&
@@ -147,13 +152,15 @@ export async function createChatSession({ model, title, userEmail }) {
     throw new Error("Email user wajib tersedia untuk membuat chat session.");
   }
 
+  const nextModel = normalizeModel(model);
+
   const { data, error } = await client
     .from("orbit_chat_sessions")
     .insert([
       {
         user_email: ownerEmail,
         title: title || DEFAULT_SESSION_TITLE,
-        model: model || DEFAULT_MODEL,
+        model: nextModel,
         pinned: false,
         updated_at: new Date().toISOString(),
       },
@@ -255,8 +262,7 @@ export async function togglePinChatSession({ pinned, sessionId }) {
 export async function updateChatSessionModel({ model, sessionId }) {
   const client = requireSupabase();
   const userEmail = await getCurrentUserEmail();
-  const nextModel =
-    typeof model === "string" && model.trim() ? model.trim() : DEFAULT_MODEL;
+  const nextModel = normalizeModel(model);
 
   const { data, error } = await client
     .from("orbit_chat_sessions")
@@ -308,10 +314,14 @@ export async function saveChatMessage({
   const ownerEmail = normalizeUserEmail(userEmail);
 
   if (!PERSISTED_MESSAGE_ROLES.has(cleanRole)) {
-    throw new Error("Chat persistence hanya menerima role user atau assistant.");
+    throw new Error(
+      "Chat persistence hanya menerima role user atau assistant.",
+    );
   }
 
   await getOwnedSession(sessionId, ownerEmail);
+
+  const nextModel = normalizeModel(model);
 
   const { data, error } = await client
     .from("orbit_chat_messages")
@@ -321,7 +331,7 @@ export async function saveChatMessage({
         user_email: ownerEmail,
         role: cleanRole,
         content,
-        model: model || DEFAULT_MODEL,
+        model: nextModel,
       },
     ])
     .select(MESSAGE_COLUMNS)
