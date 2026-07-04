@@ -48,6 +48,14 @@ const autosaveStatusConfig = {
   saving: { label: "Saving...", tone: "amber" },
   unsaved: { label: "Unsaved changes", tone: "amber" },
 };
+const defaultWebTheme = {
+  accent: "#7f1d1d",
+  background: "#050506",
+  primary: "#f5c14b",
+  radius: 18,
+  spacing: 24,
+  text: "#f4f4f5",
+};
 const previewViewports = {
   desktop: {
     frameWidth: "100%",
@@ -317,6 +325,67 @@ function limitSectionHistory(items) {
   return items.slice(-SECTION_HISTORY_LIMIT);
 }
 
+function normalizeThemeHex(value, fallback) {
+  const cleanValue = String(value || "").trim();
+  return /^#[0-9a-f]{6}$/i.test(cleanValue) ? cleanValue : fallback;
+}
+
+function hexToRgb(hex) {
+  const cleanHex = normalizeThemeHex(hex, defaultWebTheme.primary).slice(1);
+  const value = Number.parseInt(cleanHex, 16);
+
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255,
+  };
+}
+
+function rgbToRgba(value, alpha) {
+  return `rgba(${value.r}, ${value.g}, ${value.b}, ${alpha})`;
+}
+
+function normalizeThemeNumber(value, fallback, { min, max }) {
+  const nextValue = Number(value);
+
+  if (!Number.isFinite(nextValue)) return fallback;
+  return Math.min(max, Math.max(min, nextValue));
+}
+
+function normalizeWebTheme(theme = {}) {
+  return {
+    accent: normalizeThemeHex(theme.accent, defaultWebTheme.accent),
+    background: normalizeThemeHex(theme.background, defaultWebTheme.background),
+    primary: normalizeThemeHex(theme.primary, defaultWebTheme.primary),
+    radius: normalizeThemeNumber(theme.radius, defaultWebTheme.radius, {
+      min: 8,
+      max: 28,
+    }),
+    spacing: normalizeThemeNumber(theme.spacing, defaultWebTheme.spacing, {
+      min: 12,
+      max: 40,
+    }),
+    text: normalizeThemeHex(theme.text, defaultWebTheme.text),
+  };
+}
+
+function themeToCssVariables(theme) {
+  const nextTheme = normalizeWebTheme(theme);
+  const primaryRgb = hexToRgb(nextTheme.primary);
+  const accentRgb = hexToRgb(nextTheme.accent);
+
+  return {
+    "--orbit-accent": nextTheme.primary,
+    "--orbit-accent-strong": nextTheme.accent,
+    "--orbit-accent-rgb": `${primaryRgb.r}, ${primaryRgb.g}, ${primaryRgb.b}`,
+    "--orbit-accent-strong-rgb": `${accentRgb.r}, ${accentRgb.g}, ${accentRgb.b}`,
+    "--orbit-bg": nextTheme.background,
+    "--orbit-card-radius": `${nextTheme.radius}px`,
+    "--orbit-page-spacing": `${nextTheme.spacing}px`,
+    "--orbit-text": nextTheme.text,
+  };
+}
+
 function syncPageSections(pages, pageId, sections) {
   const nextSections = cloneSectionsForDraft(sections);
 
@@ -402,7 +471,7 @@ function renderPreviewSection(section) {
   const actionLabel = escapeHtml(props.actionLabel || "Open");
 
   if (component === "navbar") {
-    return `<nav class="component component-nav"><strong>${title}</strong><span>${body}</span></nav>`;
+    return `<nav class="component component-nav" aria-label="Primary navigation"><strong>${title}</strong><span>${body}</span></nav>`;
   }
 
   if (component === "footer") {
@@ -410,7 +479,7 @@ function renderPreviewSection(section) {
   }
 
   if (section?.type === "hero") {
-    return `<section class="component component-hero"><div><p>${label}</p><h2>${title}</h2><span>${body}</span></div><a>${actionLabel}</a></section>`;
+    return `<section class="component component-hero"><div><p>${label}</p><h2>${title}</h2><span>${body}</span></div><a href="#content">${actionLabel}</a></section>`;
   }
 
   if (section?.type === "gallery") {
@@ -422,7 +491,7 @@ function renderPreviewSection(section) {
       )
       .join("");
 
-    return `<section class="component"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="gallery-grid">${itemMarkup}</div></section>`;
+    return `<section class="component component-gallery"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="gallery-grid">${itemMarkup}</div></section>`;
   }
 
   if (section?.type === "article-list") {
@@ -438,7 +507,7 @@ function renderPreviewSection(section) {
       )
       .join("");
 
-    return `<section class="component"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="news-grid">${itemMarkup}</div></section>`;
+    return `<section class="component component-news-grid"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="news-grid">${itemMarkup}</div></section>`;
   }
 
   if (section?.type === "feature-grid") {
@@ -450,11 +519,11 @@ function renderPreviewSection(section) {
       )
       .join("");
 
-    return `<section class="component"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="card-grid">${itemMarkup}</div></section>`;
+    return `<section class="component component-card-grid"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span><div class="card-grid">${itemMarkup}</div></section>`;
   }
 
   if (section?.type === "cta") {
-    return `<section class="component component-cta"><div><p>${label}</p><h2>${title}</h2><span>${body}</span></div><a>${actionLabel}</a></section>`;
+    return `<section class="component component-cta"><div><p>${label}</p><h2>${title}</h2><span>${body}</span></div><a href="#content">${actionLabel}</a></section>`;
   }
 
   return `<section class="component"><p class="component-label">${label}</p><h2>${title}</h2><span>${body}</span></section>`;
@@ -462,18 +531,36 @@ function renderPreviewSection(section) {
 
 function buildPreviewHtml({
   componentSections,
+  generatedAt = new Date().toISOString(),
   page,
   previewMode,
   project,
   projectForm,
   pageForm,
+  theme = defaultWebTheme,
 }) {
-  const resolvedTitle =
+  const webTheme = normalizeWebTheme(theme);
+  const themeCssVars = themeToCssVariables(webTheme);
+  const themeVarsCss = Object.entries(themeCssVars)
+    .map(([key, value]) => `      ${key}: ${value};`)
+    .join("\n");
+  const themeAccentOverlay = rgbToRgba(hexToRgb(webTheme.primary), 0.18);
+  const themeAccentSoftOverlay = rgbToRgba(hexToRgb(webTheme.accent), 0.14);
+  const themeAccentPanel = rgbToRgba(hexToRgb(webTheme.accent), 0.18);
+  const themePrimaryGallery = rgbToRgba(hexToRgb(webTheme.primary), 0.32);
+  const themeAccentGallery = rgbToRgba(hexToRgb(webTheme.accent), 0.36);
+  const resolvedProjectTitle =
     project?.title || projectForm.title || "Web Builder Preview";
   const resolvedDescription =
     project?.description ||
     projectForm.description ||
     "Realtime preview from existing Web Builder state.";
+  const resolvedPageTitle = page?.title || pageForm.title || "Home";
+  const resolvedPagePath = page?.path || pageForm.path || "/";
+  const documentTitle =
+    resolvedPageTitle === resolvedProjectTitle
+      ? resolvedPageTitle
+      : `${resolvedPageTitle} - ${resolvedProjectTitle}`;
   const fallbackPages = getPreviewPages(
     project,
     projectForm,
@@ -503,22 +590,31 @@ function buildPreviewHtml({
     .join("");
 
   return `<!doctype html>
+<!-- Generated by BLACK FLASH ORBIT Web Builder at ${escapeHtml(generatedAt)} -->
 <html lang="id">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="${escapeHtml(resolvedDescription)}">
+  <title>${escapeHtml(documentTitle)}</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #050506;
+      --bg: ${webTheme.background};
+      --bg-soft: #0a0a0b;
       --panel: rgba(255,255,255,0.04);
       --line: rgba(255,255,255,0.12);
-      --text: #f4f4f5;
+      --text: ${webTheme.text};
       --muted: #a1a1aa;
-      --accent: #f5c14b;
-      --accent-strong: #d9ad57;
+      --accent: ${webTheme.primary};
+      --accent-strong: ${webTheme.accent};
+      --maroon: ${webTheme.accent};
+      --radius: ${webTheme.radius}px;
+      --spacing: ${webTheme.spacing}px;
+${themeVarsCss}
     }
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
       min-height: 100vh;
@@ -528,18 +624,26 @@ function buildPreviewHtml({
       color: var(--text);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     }
+    a { color: inherit; }
     .shell {
-      padding: 20px;
-      max-width: ${previewMode === "mobile" ? "390px" : previewMode === "tablet" ? "768px" : "1200px"};
+      width: min(100%, 1180px);
       margin: 0 auto;
+      padding: var(--spacing);
     }
-    .hero, .page-card {
+    .hero,
+    .page-card,
+    .component {
       border: 1px solid var(--line);
       background: var(--panel);
-      border-radius: 18px;
+      border-radius: var(--radius);
       backdrop-filter: blur(14px);
     }
-    .hero { padding: 20px; }
+    .hero {
+      padding: clamp(22px, 4vw, 44px);
+      background:
+        linear-gradient(135deg, ${themeAccentOverlay}, ${themeAccentSoftOverlay}),
+        rgba(255,255,255,0.04);
+    }
     .eyebrow {
       color: var(--accent);
       text-transform: uppercase;
@@ -547,7 +651,12 @@ function buildPreviewHtml({
       font-size: 11px;
       font-weight: 800;
     }
-    h1 { margin: 12px 0 8px; font-size: 32px; line-height: 1.05; }
+    h1 {
+      margin: 12px 0 10px;
+      max-width: 820px;
+      font-size: clamp(34px, 6vw, 72px);
+      line-height: 0.98;
+    }
     p { margin: 0; color: var(--muted); line-height: 1.6; }
     .meta {
       margin-top: 14px;
@@ -592,10 +701,8 @@ function buildPreviewHtml({
     }
     .component {
       margin-top: 12px;
-      border: 1px solid var(--line);
-      border-radius: 18px;
       background: rgba(255,255,255,0.035);
-      padding: 16px;
+      padding: calc(var(--spacing) * 0.75);
     }
     .component h2 {
       margin: 8px 0 8px;
@@ -624,7 +731,8 @@ function buildPreviewHtml({
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      border-radius: 16px;
+      border-radius: calc(var(--radius) - 2px);
+      background: rgba(0,0,0,0.28);
     }
     .component-nav strong,
     .component-footer strong {
@@ -639,7 +747,7 @@ function buildPreviewHtml({
       grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
       gap: 16px;
-      background: linear-gradient(135deg, rgba(245,193,75,0.16), rgba(255,255,255,0.04));
+      background: linear-gradient(135deg, ${themeAccentOverlay}, ${themeAccentPanel});
     }
     .component-hero a,
     .component-cta a {
@@ -651,6 +759,9 @@ function buildPreviewHtml({
       padding: 10px 14px;
       text-decoration: none;
       white-space: nowrap;
+    }
+    .component-gallery {
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), ${themeAccentPanel});
     }
     .card-grid,
     .gallery-grid,
@@ -688,8 +799,8 @@ function buildPreviewHtml({
       display: grid;
       min-height: 92px;
       place-items: center;
-      border-radius: 12px;
-      background: linear-gradient(135deg, rgba(217,173,87,0.32), rgba(128,0,32,0.34));
+      border-radius: calc(var(--radius) - 6px);
+      background: linear-gradient(135deg, ${themePrimaryGallery}, ${themeAccentGallery});
       color: var(--text);
       font-weight: 900;
     }
@@ -698,7 +809,13 @@ function buildPreviewHtml({
       margin-top: 10px;
       font-size: 13px;
     }
+    .export-meta {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 11px;
+    }
     @media (max-width: 520px) {
+      .shell { padding: 14px; }
       .component-nav,
       .component-footer,
       .component-hero,
@@ -718,19 +835,20 @@ function buildPreviewHtml({
   </style>
 </head>
 <body>
-  <main class="shell">
+  <main class="shell" data-page-path="${escapeHtml(resolvedPagePath)}">
     <section class="hero">
-      <div class="eyebrow">Live Preview</div>
-      <h1>${escapeHtml(resolvedTitle)}</h1>
+      <div class="eyebrow">${escapeHtml(resolvedPagePath)}</div>
+      <h1>${escapeHtml(resolvedPageTitle)}</h1>
       <p>${escapeHtml(resolvedDescription)}</p>
       <div class="meta">
-        <span class="chip">Selected: ${escapeHtml(project?.slug || projectForm.slug || "draft")}</span>
-        <span class="chip">Path: ${escapeHtml(page?.path || pageForm.path || "/")}</span>
+        <span class="chip">Project: ${escapeHtml(resolvedProjectTitle)}</span>
+        <span class="chip">Path: ${escapeHtml(resolvedPagePath)}</span>
         <span class="chip">Mode: ${escapeHtml(previewMode)}</span>
       </div>
+      <div class="export-meta">Generated ${escapeHtml(generatedAt)}</div>
     </section>
 
-    <div class="section-title">Components</div>
+    <div class="section-title" id="content">Components</div>
     ${sectionMarkup || '<section class="component"><h2>No components selected</h2><span>Select a component from the library.</span></section>'}
 
     <div class="section-title">Pages</div>
@@ -812,6 +930,7 @@ export function WebBuilder() {
   const [draggedSectionId, setDraggedSectionId] = useState("");
   const [previewMode, setPreviewMode] = useState("desktop");
   const [previewRevision, setPreviewRevision] = useState(0);
+  const [webTheme, setWebTheme] = useState(defaultWebTheme);
   const [draftSections, setDraftSections] = useState(() =>
     buildComponentSections(),
   );
@@ -1098,6 +1217,7 @@ export function WebBuilder() {
         project: selectedProject,
         projectForm,
         pageForm,
+        theme: webTheme,
       }),
     [
       activePreviewPage,
@@ -1106,12 +1226,17 @@ export function WebBuilder() {
       projectForm,
       draftSections,
       selectedProject,
+      webTheme,
     ],
   );
   const previewFrame = previewViewports[previewMode];
 
   function syncPreview() {
     setPreviewRevision((current) => current + 1);
+  }
+
+  function updateWebTheme(partialTheme) {
+    setWebTheme((current) => normalizeWebTheme({ ...current, ...partialTheme }));
   }
 
   function commitDraftSections(nextSections, options = {}) {
@@ -1466,12 +1591,25 @@ export function WebBuilder() {
 
     try {
       await flushPendingAutosave();
+      const exportedAt = new Date().toISOString();
+      const exportHtml = buildPreviewHtml({
+        componentSections: draftSections,
+        generatedAt: exportedAt,
+        page: activePreviewPage,
+        previewMode,
+        project: selectedProject,
+        projectForm,
+        pageForm,
+        theme: webTheme,
+      });
 
       const exported = {
-        exportedAt: new Date().toISOString(),
+        exportedAt,
         format: "orbit-web-builder-local-v1",
-        html: previewHtml,
+        html: exportHtml,
         pageId: selectedPage?.id || null,
+        pagePath: activePreviewPage.path || "/",
+        pageTitle: activePreviewPage.title || "Home",
         sectionCount: draftSections.length,
       };
 
@@ -1485,7 +1623,7 @@ export function WebBuilder() {
   }
 
   function handleDownloadExport() {
-    const html = previewHtml || lastExport?.html;
+    const html = lastExport?.html || previewHtml;
 
     if (!html) return;
 
@@ -2064,6 +2202,128 @@ export function WebBuilder() {
                       </button>
                     </form>
                   </article>
+                </section>
+
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="orbit-kicker">Theme Builder</p>
+                      <h3 className="mt-2 text-lg font-black text-white">
+                        Visual identity
+                      </h3>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
+                        Ubah warna utama, latar, radius, dan spacing. Preview
+                        serta export HTML akan ikut memakai theme ini.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-[0.16em] text-zinc-500">
+                      <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
+                        Radius {webTheme.radius}px
+                      </span>
+                      <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
+                        Spacing {webTheme.spacing}px
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {[
+                      {
+                        key: "primary",
+                        label: "Primary",
+                        description: "Warna aksi utama dan highlight.",
+                      },
+                      {
+                        key: "accent",
+                        label: "Accent",
+                        description: "Warna pendukung untuk overlay dan depth.",
+                      },
+                      {
+                        key: "background",
+                        label: "Background",
+                        description: "Latar utama halaman preview.",
+                      },
+                      {
+                        key: "text",
+                        label: "Text",
+                        description: "Warna teks utama.",
+                      },
+                    ].map((field) => (
+                      <label
+                        className="grid gap-2 rounded-lg border border-white/10 bg-black/20 p-3"
+                        key={field.key}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <span className="block text-[10px] font-black uppercase tracking-[0.18em] text-zinc-500">
+                              {field.label}
+                            </span>
+                            <span className="mt-1 block text-xs text-zinc-500">
+                              {field.description}
+                            </span>
+                          </div>
+                          <span
+                            className="h-9 w-9 rounded-md border border-white/10 shadow-inner shadow-black/30"
+                            style={{ backgroundColor: webTheme[field.key] }}
+                          />
+                        </div>
+                        <input
+                          aria-label={field.label}
+                          className="h-11 w-full cursor-pointer rounded-lg border border-white/10 bg-black/30 p-1"
+                          onChange={(event) =>
+                            updateWebTheme({ [field.key]: event.target.value })
+                          }
+                          type="color"
+                          value={webTheme[field.key]}
+                        />
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <label className="grid gap-2 rounded-lg border border-white/10 bg-black/20 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-500">
+                          Radius
+                        </span>
+                        <span className="text-xs font-bold text-white">
+                          {webTheme.radius}px
+                        </span>
+                      </div>
+                      <input
+                        aria-label="Radius"
+                        className="w-full accent-amber-300"
+                        min="8"
+                        max="28"
+                        onChange={(event) =>
+                          updateWebTheme({ radius: Number(event.target.value) })
+                        }
+                        type="range"
+                        value={webTheme.radius}
+                      />
+                    </label>
+
+                    <label className="grid gap-2 rounded-lg border border-white/10 bg-black/20 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-500">
+                          Spacing
+                        </span>
+                        <span className="text-xs font-bold text-white">
+                          {webTheme.spacing}px
+                        </span>
+                      </div>
+                      <input
+                        aria-label="Spacing"
+                        className="w-full accent-amber-300"
+                        min="12"
+                        max="40"
+                        onChange={(event) =>
+                          updateWebTheme({ spacing: Number(event.target.value) })
+                        }
+                        type="range"
+                        value={webTheme.spacing}
+                      />
+                    </label>
+                  </div>
                 </section>
 
                 <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
