@@ -2764,8 +2764,8 @@ export function WebBuilder() {
                 </section>
               </aside>
 
-              <section className="grid gap-4">
-                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+              <section className="grid gap-4 xl:grid-cols-3 xl:items-start">
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5 xl:col-start-3">
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="orbit-kicker">Project Detail</p>
@@ -2846,7 +2846,7 @@ export function WebBuilder() {
                   </div>
                 </section>
 
-                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5 xl:col-start-3">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="orbit-kicker">Publish Manager</p>
@@ -2930,7 +2930,76 @@ export function WebBuilder() {
                   </div>
                 </section>
 
-                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                <article className="rounded-lg border border-white/10 bg-black/20 p-4 xl:col-start-3">
+                  <p className="orbit-kicker">Section Edit</p>
+                  {activeDraftSection ? (
+                    <div className="mt-4 grid gap-3">
+                      <StatusLine
+                        label="Type"
+                        value={
+                          activeDraftSection.styles?.component ||
+                          activeDraftSection.type
+                        }
+                      />
+                      <FieldInput
+                        label="Label"
+                        maxLength={80}
+                        onChange={(value) => handleEditSection("label", value)}
+                        placeholder="Section label"
+                        value={activeDraftSection.props?.label || ""}
+                      />
+                      <FieldInput
+                        label="Title"
+                        maxLength={160}
+                        onChange={(value) => handleEditSection("title", value)}
+                        placeholder="Section title"
+                        value={activeDraftSection.props?.title || ""}
+                      />
+                      <FieldTextarea
+                        label="Body"
+                        maxLength={800}
+                        onChange={(value) => handleEditSection("body", value)}
+                        placeholder="Section body"
+                        value={activeDraftSection.props?.body || ""}
+                      />
+                      <FieldInput
+                        label="Action Label"
+                        maxLength={80}
+                        onChange={(value) =>
+                          handleEditSection("actionLabel", value)
+                        }
+                        placeholder="Button label"
+                        value={activeDraftSection.props?.actionLabel || ""}
+                      />
+                      {sectionSupportsImage(activeDraftSection) && (
+                        <FieldInput
+                          label="Image URL"
+                          maxLength={1000}
+                          onChange={(value) =>
+                            handleEditSection("imageUrl", value)
+                          }
+                          placeholder="https://example.com/image.jpg"
+                          value={activeDraftSection.props?.imageUrl || ""}
+                        />
+                      )}
+                      {Array.isArray(activeDraftSection.props?.items) && (
+                        <FieldTextarea
+                          label="Items"
+                          maxLength={800}
+                          onChange={handleEditSectionItems}
+                          placeholder="One item per line"
+                          value={activeDraftSection.props.items.join("\n")}
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <WebBuilderEmptyState title="Tidak ada section aktif">
+                      Pilih atau tambahkan section untuk membuka editor.
+                    </WebBuilderEmptyState>
+                  )}
+                </article>
+
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5 xl:col-start-1">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="orbit-kicker">Template Library</p>
@@ -2991,7 +3060,7 @@ export function WebBuilder() {
                   </div>
                 </section>
 
-                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5 xl:col-start-1">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="orbit-kicker">Component Library</p>
@@ -3033,7 +3102,7 @@ export function WebBuilder() {
                   </div>
                 </section>
 
-                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5 xl:col-start-2">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="orbit-kicker">Section Builder</p>
@@ -3067,7 +3136,7 @@ export function WebBuilder() {
                     </div>
                   </div>
 
-                  <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                  <div className="mt-4 grid gap-2">
                     <div className="grid gap-2">
                       {draftSections.length ? (
                         draftSections.map((section, index) => {
@@ -3166,7 +3235,7 @@ export function WebBuilder() {
                       ) : null}
                     </div>
 
-                    <article className="rounded-lg border border-white/10 bg-black/20 p-4">
+                    <article className="hidden rounded-lg border border-white/10 bg-black/20 p-4">
                       <p className="orbit-kicker">Section Edit</p>
                       {activeDraftSection ? (
                         <div className="mt-4 grid gap-3">
@@ -3237,7 +3306,7 @@ export function WebBuilder() {
                   </div>
                 </section>
 
-                <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] xl:col-start-1">
                   <article className="rounded-lg border border-white/10 bg-white/[0.035] p-4">
                     <div className="mb-4 flex items-center justify-between gap-3">
                       <div>
@@ -3326,7 +3395,7 @@ export function WebBuilder() {
                   </article>
                 </section>
 
-                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5 xl:col-start-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                     <div>
                       <p className="orbit-kicker">Theme Builder</p>
@@ -3448,7 +3517,7 @@ export function WebBuilder() {
                   </div>
                 </section>
 
-                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5 xl:col-start-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                     <div>
                       <p className="orbit-kicker">Asset Manager</p>
@@ -3575,7 +3644,7 @@ export function WebBuilder() {
                   </div>
                 </section>
 
-                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5">
+                <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4 md:p-5 xl:col-start-2">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                       <p className="orbit-kicker">Live Preview</p>
