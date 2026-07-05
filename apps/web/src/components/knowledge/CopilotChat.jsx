@@ -1,10 +1,15 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Send, Sparkles } from "lucide-react";
 import { CopilotMessage } from "./CopilotMessage.jsx";
 
 export function CopilotChat({ isLoading, messages = [], onSubmitQuestion }) {
   const [draft, setDraft] = useState("");
+  const bottomRef = useRef(null);
   const canSubmit = draft.trim().length > 0 && !isLoading;
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [isLoading, messages]);
 
   function handleSubmit(event) {
     event.preventDefault();
@@ -24,6 +29,7 @@ export function CopilotChat({ isLoading, messages = [], onSubmitQuestion }) {
               <CopilotMessage key={message.id} message={message} />
             ))}
             {isLoading ? <LoadingMessage /> : null}
+            <span aria-hidden="true" ref={bottomRef} />
           </div>
         ) : (
           <div className="grid min-h-[12rem] place-items-center rounded-lg border border-dashed border-white/10 bg-white/[0.025] p-4 text-center">

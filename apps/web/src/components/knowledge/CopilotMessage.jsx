@@ -3,6 +3,7 @@ import { Bot, Gauge, Link2, UserRound } from "lucide-react";
 export function CopilotMessage({ message }) {
   const isAssistant = message.role === "assistant";
   const Icon = isAssistant ? Bot : UserRound;
+  const isStreaming = Boolean(message.isStreaming);
 
   return (
     <article
@@ -41,6 +42,7 @@ export function CopilotMessage({ message }) {
 
       <p className="mt-3 whitespace-pre-line text-sm leading-6 text-zinc-200">
         {message.content}
+        {isStreaming ? <span className="ml-1 inline-block animate-pulse">|</span> : null}
       </p>
 
       {isAssistant ? (
@@ -50,7 +52,7 @@ export function CopilotMessage({ message }) {
             {message.citationCount || 0} citation(s)
           </span>
           <span className="rounded-md border border-white/10 bg-black/20 px-2 py-1">
-            Local mock
+            {isStreaming ? "Typing" : "Local mock"}
           </span>
         </div>
       ) : null}

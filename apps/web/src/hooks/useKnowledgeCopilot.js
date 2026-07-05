@@ -44,16 +44,38 @@ export function useKnowledgeCopilot({
   const [citations, setCitations] = useState([]);
   const [confidence, setConfidence] = useState(0);
   const timeoutRef = useRef(null);
+  const streamRef = useRef(null);
 
   useEffect(
     () => () => {
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+      if (streamRef.current) window.clearInterval(streamRef.current);
     },
     [],
   );
 
   const quickPrompts = useMemo(() => copilotQuickPrompts, []);
   const commandActions = useMemo(() => knowledgeCommandActions, []);
+  const selectionContext = useMemo(() => {
+    if (!activeDocument) return [];
+
+    return retrieveContext(activeDocument.title, [activeDocument]);
+  }, [activeDocument]);
+
+  useEffect(() => {
+    if (!activeDocument) {
+      setSelectedContext([]);
+      setCitations([]);
+      setConfidence(0);
+      return;
+    }
+
+    const nextCitations = buildCitations(selectionContext);
+
+    setSelectedContext(selectionContext);
+    setCitations(nextCitations);
+    setConfidence(calculateConfidence(selectionContext));
+  }, [activeDocument, selectionContext]);
 
   const executeQuery = useCallback(
     (rawQuery, options = {}) => {
@@ -72,25 +94,64 @@ export function useKnowledgeCopilot({
       ]);
 
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+      if (streamRef.current) window.clearInterval(streamRef.current);
 
       timeoutRef.current = window.setTimeout(() => {
         const context = retrieveContext(query, scopedDocuments);
         const nextCitations = buildCitations(context);
         const nextConfidence = calculateConfidence(context);
         const answer = generateMockAnswer(query, context);
+        const answerTokens = answer.split(" ");
+        const streamMessageId = `assistant-${Date.now()}-${Math.random()
+          .toString(16)
+          .slice(2)}`;
 
         setSelectedContext(context);
         setCitations(nextCitations);
         setConfidence(nextConfidence);
         setMessages((currentMessages) => [
           ...currentMessages,
-          createMessage("assistant", answer, {
+          {
+            id: streamMessageId,
+            role: "assistant",
+            content: "",
+            timestamp: new Date().toLocaleTimeString("id-ID", {
+              hour: "2-digit",
+              minute: "2-digit",
+              timeZone: "Asia/Jayapura",
+            }),
             actionId: options.actionId || null,
             citationCount: nextCitations.length,
             confidence: nextConfidence,
-          }),
+            isStreaming: true,
+          },
         ]);
-        setIsLoading(false);
+
+        let index = 0;
+        streamRef.current = window.setInterval(() => {
+          index += 1;
+
+          setMessages((currentMessages) =>
+            currentMessages.map((message) => {
+              if (message.id !== streamMessageId) return message;
+
+              const nextContent = answerTokens.slice(0, index).join(" ");
+              const isComplete = index >= answerTokens.length;
+
+              return {
+                ...message,
+                content: nextContent,
+                isStreaming: !isComplete,
+              };
+            }),
+          );
+
+          if (index >= answerTokens.length) {
+            if (streamRef.current) window.clearInterval(streamRef.current);
+            streamRef.current = null;
+            setIsLoading(false);
+          }
+        }, 28);
 
         onActivity?.(
           options.activityTitle || "AI question asked",

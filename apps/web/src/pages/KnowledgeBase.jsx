@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bell,
@@ -46,8 +46,8 @@ export function KnowledgeBase() {
   const userRole = profile?.role || "user";
   const [activeCollectionId, setActiveCollectionId] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedDocumentId, setSelectedDocumentId] = useState(
-    knowledgeDocuments[0].id,
+  const [selectedDocument, setSelectedDocument] = useState(
+    knowledgeDocuments[0],
   );
   const [favoriteIds, setFavoriteIds] = useState(
     () =>
@@ -58,8 +58,13 @@ export function KnowledgeBase() {
       ),
   );
   const [activityLog, setActivityLog] = useState(initialKnowledgeActivityLog);
-  const [mockUploadState, setMockUploadState] = useState("Ready");
+  const [mockUploadState, setMockUploadState] = useState({
+    phase: "Ready",
+    indexedCount: 0,
+    queueCount: mockUploadQueue.length,
+  });
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
+  const searchInputRef = useRef(null);
 
   const filteredDocuments = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -85,12 +90,6 @@ export function KnowledgeBase() {
         .includes(query);
     });
   }, [activeCollectionId, searchQuery]);
-
-  const selectedDocument =
-    filteredDocuments.find((document) => document.id === selectedDocumentId) ||
-    knowledgeDocuments.find((document) => document.id === selectedDocumentId) ||
-    filteredDocuments[0] ||
-    knowledgeDocuments[0];
 
   const addActivity = useCallback((action, detail, tone = "gold") => {
     setActivityLog((currentLog) => [
@@ -120,6 +119,15 @@ export function KnowledgeBase() {
     () => knowledgeDocuments.filter((document) => favoriteIds.has(document.id)),
     [favoriteIds],
   );
+
+  useEffect(() => {
+    if (!filteredDocuments.length) return;
+    if (filteredDocuments.some((document) => document.id === selectedDocument.id)) {
+      return;
+    }
+
+    setSelectedDocument(filteredDocuments[0]);
+  }, [filteredDocuments, selectedDocument.id]);
 
   const metrics = useMemo(
     () => [
@@ -180,6 +188,16 @@ export function KnowledgeBase() {
     return () => window.removeEventListener("hashchange", syncHashTarget);
   }, []);
 
+  useKnowledgeKeyboardShortcuts({
+    onFocusSearch: () => searchInputRef.current?.focus(),
+    onOpenCopilot: () => setIsCopilotOpen(true),
+    onCloseCopilot: () => setIsCopilotOpen(false),
+    onToggleFavorite: toggleFavorite,
+    onToggleUpload: handleMockUpload,
+    setActiveCollectionId,
+    selectedDocument,
+  });
+
   const copilotProps = {
     activeDocument: selectedDocument,
     citations: copilot.citations,
@@ -193,16 +211,16 @@ export function KnowledgeBase() {
     selectedContext: copilot.selectedContext,
   };
 
-  function handleSelectDocument(document) {
-    setSelectedDocumentId(document.id);
+  const handleSelectDocument = useCallback((document) => {
+    setSelectedDocument(document);
     addActivity(
       "Document preview opened",
       `${document.title} loaded in preview panel.`,
       "green",
     );
-  }
+  }, [addActivity]);
 
-  function toggleFavorite(document) {
+  const toggleFavorite = useCallback((document) => {
     const isFavorite = favoriteIds.has(document.id);
 
     setFavoriteIds((currentIds) => {
@@ -221,20 +239,29 @@ export function KnowledgeBase() {
       document.title,
       isFavorite ? "maroon" : "gold",
     );
-  }
+  }, [addActivity, favoriteIds]);
 
-  function handleMockUpload() {
-    const nextState = mockUploadState === "Ready" ? "Validated" : "Ready";
+  const handleMockUpload = useCallback(() => {
+    const nextPhase =
+      mockUploadState.phase === "Ready" ? "Validated" : "Ready";
+    const nextIndexedCount =
+      nextPhase === "Validated"
+        ? filteredDocuments.length
+        : Math.max(0, mockUploadState.indexedCount - 1);
 
-    setMockUploadState(nextState);
+    setMockUploadState({
+      phase: nextPhase,
+      indexedCount: nextIndexedCount,
+      queueCount: mockUploadQueue.length,
+    });
     addActivity(
       "Mock upload checked",
-      nextState === "Validated"
-        ? "Upload panel validated local files without backend traffic."
+      nextPhase === "Validated"
+        ? `Upload panel indexed ${nextIndexedCount} local document(s) without backend traffic.`
         : "Upload panel reset to ready state.",
-      nextState === "Validated" ? "green" : "gold",
+      nextPhase === "Validated" ? "green" : "gold",
     );
-  }
+  }, [addActivity, filteredDocuments.length, mockUploadState.indexedCount, mockUploadState.phase]);
 
   return (
     <main className="min-h-screen bg-[#050506] text-zinc-100">
@@ -284,6 +311,7 @@ export function KnowledgeBase() {
                   onSearchChange={setSearchQuery}
                   onSelectDocument={handleSelectDocument}
                   query={searchQuery}
+                  inputRef={searchInputRef}
                   results={semanticResults}
                 />
                 <DocumentLibrary
@@ -315,6 +343,8 @@ export function KnowledgeBase() {
                   mockUploadState={mockUploadState}
                   onMockUpload={handleMockUpload}
                   uploadQueue={mockUploadQueue}
+                  indexedCount={mockUploadState.indexedCount}
+                  queueCount={mockUploadState.queueCount}
                 />
                 <FavoritesPanel
                   documents={favoriteDocuments}
@@ -346,6 +376,100 @@ export function KnowledgeBase() {
       ) : null}
     </main>
   );
+}
+
+function useKnowledgeKeyboardShortcuts({
+  onFocusSearch,
+  onOpenCopilot,
+  onCloseCopilot,
+  onToggleFavorite,
+  onToggleUpload,
+  setActiveCollectionId,
+  selectedDocument,
+}) {
+  useEffect(() => {
+    function handleKeyDown(event) {
+      const target = event.target;
+      const isTypingField =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target?.isContentEditable;
+      const key = event.key.toLowerCase();
+      const hasMod = event.ctrlKey || event.metaKey;
+
+      if (event.ctrlKey && event.shiftKey && key === "k") {
+        event.preventDefault();
+        onOpenCopilot();
+        return;
+      }
+
+      if (hasMod && event.shiftKey && key === "f") {
+        event.preventDefault();
+        onToggleFavorite(selectedDocument);
+        return;
+      }
+
+      if (hasMod && event.shiftKey && key === "u") {
+        event.preventDefault();
+        onToggleUpload();
+        return;
+      }
+
+      if (!hasMod && key === "/" && !isTypingField) {
+        event.preventDefault();
+        onFocusSearch();
+        return;
+      }
+
+      if (key === "escape") {
+        onCloseCopilot();
+        return;
+      }
+
+      if (isTypingField) return;
+
+      if (key === "1") {
+        event.preventDefault();
+        setActiveCollectionId("all");
+        return;
+      }
+
+      if (key === "2") {
+        event.preventDefault();
+        setActiveCollectionId("papua-selatan");
+        return;
+      }
+
+      if (key === "3") {
+        event.preventDefault();
+        setActiveCollectionId("interview");
+        return;
+      }
+
+      if (key === "4") {
+        event.preventDefault();
+        setActiveCollectionId("verification");
+        return;
+      }
+
+      if (key === "5") {
+        event.preventDefault();
+        setActiveCollectionId("multimedia");
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    onCloseCopilot,
+    onFocusSearch,
+    onOpenCopilot,
+    onToggleFavorite,
+    onToggleUpload,
+    selectedDocument,
+    setActiveCollectionId,
+  ]);
 }
 
 function KnowledgeHero({ metrics, onOpenCopilot, selectedDocument }) {
@@ -476,6 +600,7 @@ function CollectionSidebar({
 
 function SemanticSearchPanel({
   id,
+  inputRef,
   onSearchChange,
   onSelectDocument,
   query,
@@ -498,6 +623,7 @@ function SemanticSearchPanel({
         <input
           aria-label="Search knowledge documents"
           className="h-full min-w-0 flex-1 border-0 bg-transparent px-0 text-sm font-bold text-white outline-none placeholder:text-zinc-600 focus:shadow-none"
+          ref={inputRef}
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder="Cari sumber, kutipan, isu, atau konteks RAG..."
           type="search"
@@ -645,7 +771,15 @@ function DocumentLibrary({
   );
 }
 
-function UploadPanel({ mockUploadState, onMockUpload, uploadQueue }) {
+function UploadPanel({
+  indexedCount,
+  mockUploadState,
+  onMockUpload,
+  queueCount,
+  uploadQueue,
+}) {
+  const isReady = mockUploadState.phase === "Ready";
+
   return (
     <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4">
       <div className="flex items-center justify-between gap-3">
@@ -662,6 +796,15 @@ function UploadPanel({ mockUploadState, onMockUpload, uploadQueue }) {
         <p className="mt-2 text-xs leading-5 text-zinc-500">
           Local mock state only. No file leaves the browser.
         </p>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          <StatusLine label="Upload phase" value={mockUploadState.phase} />
+          <StatusLine label="Indexed docs" value={String(indexedCount)} />
+          <StatusLine label="Queue size" value={String(queueCount)} />
+          <StatusLine
+            label="Mode"
+            value={isReady ? "Awaiting files" : "Mock indexing active"}
+          />
+        </div>
       </div>
 
       <div className="mt-4 grid gap-2">
@@ -692,7 +835,7 @@ function UploadPanel({ mockUploadState, onMockUpload, uploadQueue }) {
         onClick={onMockUpload}
         type="button">
         <CheckCircle2 size={16} />
-        {mockUploadState === "Ready" ? "Validate Mock Queue" : "Reset Mock Queue"}
+        {isReady ? "Validate Mock Queue" : "Reset Mock Queue"}
       </button>
     </section>
   );
