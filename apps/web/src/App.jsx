@@ -7,12 +7,14 @@ import {
   Archive,
   Bell,
   Bot,
+  BrainCircuit,
   CheckCircle2,
   FileText,
   Gauge,
   Image,
   Globe2,
   Lock,
+  Layers3,
   Mic2,
   Newspaper,
   LayoutDashboard,
@@ -20,6 +22,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Star,
   Workflow,
   UploadCloud,
   Zap,
@@ -38,6 +41,7 @@ import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 import { CommandPalette } from "./components/CommandPalette.jsx";
 import { Login } from "./pages/Login.jsx";
 import { AIWorkspace } from "./pages/AIWorkspace.jsx";
+import { KnowledgeBase } from "./pages/KnowledgeBase.jsx";
 import { Register } from "./pages/Register.jsx";
 import { WorkflowAutomation } from "./pages/WorkflowAutomation.jsx";
 import { WebBuilder } from "./pages/WebBuilder.jsx";
@@ -583,6 +587,46 @@ function AppShell() {
         to: "/web-builder",
       },
       {
+        id: "open-knowledge-base",
+        label: "Open Knowledge Base",
+        description: "Open the protected newsroom knowledge dashboard.",
+        icon: BrainCircuit,
+        keywords: ["knowledge", "rag", "document", "source", "citation"],
+        to: "/knowledge-base",
+      },
+      {
+        id: "ai-knowledge-copilot",
+        label: "AI Knowledge Copilot",
+        description: "Open the local mock RAG copilot panel.",
+        icon: BrainCircuit,
+        keywords: ["knowledge", "copilot", "rag", "ai", "context"],
+        to: "/knowledge-base#copilot",
+      },
+      {
+        id: "search-knowledge",
+        label: "Search Knowledge",
+        description: "Jump to knowledge semantic search.",
+        icon: Search,
+        keywords: ["knowledge", "search", "documents", "sources"],
+        to: "/knowledge-base#knowledge-search",
+      },
+      {
+        id: "open-knowledge-favorites",
+        label: "Open Favorites",
+        description: "Jump to pinned knowledge source cards.",
+        icon: Star,
+        keywords: ["knowledge", "favorites", "pinned", "sources"],
+        to: "/knowledge-base#knowledge-favorites",
+      },
+      {
+        id: "view-rag-context",
+        label: "View RAG Context",
+        description: "Jump to the retrieved context preview.",
+        icon: Layers3,
+        keywords: ["knowledge", "rag", "context", "retrieval"],
+        to: "/knowledge-base#knowledge-rag-preview",
+      },
+      {
         id: "open-workflow-automation",
         label: "Open Workflow Automation",
         description: "Open the automation dashboard.",
@@ -689,6 +733,8 @@ function AppShell() {
           />
           <Route path="/ai-workspace" element={<AIWorkspace />} />
           <Route path="/ai-newsroom" element={<AINewsroom />} />
+          <Route path="/knowledge-base" element={<KnowledgeBase />} />
+          <Route path="/knowledge" element={<Navigate replace to="/knowledge-base" />} />
           <Route path="/web-builder" element={<WebBuilder />} />
           <Route path="/workflow-automation" element={<WorkflowAutomation />} />
           <Route

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Archive,
+  BrainCircuit,
   Bot,
   CloudLightning,
   Command,
@@ -17,6 +18,7 @@ const adminRoles = new Set(["admin", "owner", "super_admin"]);
 const navigationItems = [
   ["Command", LayoutDashboard, "all", "#command"],
   ["AI Newsroom", Bot, "all", "/ai-newsroom"],
+  ["Knowledge", BrainCircuit, "all", "/knowledge-base"],
   ["Web Builder", Globe2, "all", "/web-builder"],
   ["Media Intel", CloudLightning, "all", "#media-intel"],
   ["Security", ShieldCheck, "admin", "#security"],
