@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import JSZip from "jszip";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -44,6 +43,12 @@ const emptyPageForm = {
 const AUTO_REFRESH_MS = 30000;
 const SECTION_AUTOSAVE_DELAY_MS = 700;
 const SECTION_HISTORY_LIMIT = 60;
+
+async function loadJSZip() {
+  const mod = await import("jszip");
+  return mod.default || mod;
+}
+
 const autosaveStatusConfig = {
   failed: { label: "Save failed", tone: "red" },
   saved: { label: "Saved", tone: "green" },
@@ -2509,6 +2514,7 @@ export function WebBuilder() {
         })),
       };
 
+      const JSZip = await loadJSZip();
       const zip = new JSZip();
       const websiteFolder = zip.folder("website");
 
