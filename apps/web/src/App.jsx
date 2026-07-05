@@ -46,9 +46,9 @@ import {
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
 
 const releaseState = [
-  { label: "Branch", value: "feature/security-center-v0.6", tone: "text-amber-300" },
-  { label: "Tag", value: "Security Center v0.6", tone: "text-white" },
-  { label: "Status", value: "role-guarded", tone: "text-emerald-300" },
+  { label: "Branch", value: "feature/project-health-v0.7", tone: "text-amber-300" },
+  { label: "Tag", value: "Project Health Monitor v0.7", tone: "text-white" },
+  { label: "Status", value: "deployment-aware", tone: "text-emerald-300" },
 ];
 
 const commandStats = [
