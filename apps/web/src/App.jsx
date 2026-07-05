@@ -36,6 +36,7 @@ import { CommandCenterSecurityPanel } from "./components/CommandCenterSecurityPa
 import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 import { CommandPalette } from "./components/CommandPalette.jsx";
 import { Login } from "./pages/Login.jsx";
+import { AIWorkspace } from "./pages/AIWorkspace.jsx";
 import { Register } from "./pages/Register.jsx";
 import { WebBuilder } from "./pages/WebBuilder.jsx";
 import {
@@ -676,6 +677,7 @@ function AppShell() {
               />
             }
           />
+          <Route path="/ai-workspace" element={<AIWorkspace />} />
           <Route path="/ai-newsroom" element={<AINewsroom />} />
           <Route path="/web-builder" element={<WebBuilder />} />
           <Route
