@@ -20,6 +20,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Workflow,
   UploadCloud,
   Zap,
 } from "lucide-react";
@@ -38,6 +39,7 @@ import { CommandPalette } from "./components/CommandPalette.jsx";
 import { Login } from "./pages/Login.jsx";
 import { AIWorkspace } from "./pages/AIWorkspace.jsx";
 import { Register } from "./pages/Register.jsx";
+import { WorkflowAutomation } from "./pages/WorkflowAutomation.jsx";
 import { WebBuilder } from "./pages/WebBuilder.jsx";
 import {
   getAuthenticatedHeaders,
@@ -581,6 +583,14 @@ function AppShell() {
         to: "/web-builder",
       },
       {
+        id: "open-workflow-automation",
+        label: "Open Workflow Automation",
+        description: "Open the automation dashboard.",
+        icon: Workflow,
+        keywords: ["workflow", "automation", "pipeline", "scheduler"],
+        to: "/workflow-automation",
+      },
+      {
         id: "open-media-intel",
         label: "Open Media Intel",
         description: "Open the media intelligence workspace.",
@@ -680,6 +690,7 @@ function AppShell() {
           <Route path="/ai-workspace" element={<AIWorkspace />} />
           <Route path="/ai-newsroom" element={<AINewsroom />} />
           <Route path="/web-builder" element={<WebBuilder />} />
+          <Route path="/workflow-automation" element={<WorkflowAutomation />} />
           <Route
             path="/media-intel"
             element={
