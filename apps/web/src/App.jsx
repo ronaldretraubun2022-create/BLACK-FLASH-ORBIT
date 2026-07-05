@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { UserMenu } from "./components/auth/UserMenu.jsx";
 import { useProfile } from "./hooks/useProfile.js";
 import { AINewsroom } from "./pages/AINewsroom.jsx";
@@ -32,6 +32,7 @@ import { CommandCenterOperationsPanel } from "./components/CommandCenterOperatio
 import { CommandCenterReleasePanel } from "./components/CommandCenterReleasePanel.jsx";
 import { CommandCenterSecurityPanel } from "./components/CommandCenterSecurityPanel.jsx";
 import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
+import { CommandPalette } from "./components/CommandPalette.jsx";
 import { Login } from "./pages/Login.jsx";
 import { Register } from "./pages/Register.jsx";
 import { WebBuilder } from "./pages/WebBuilder.jsx";
@@ -180,7 +181,7 @@ function getObjectValues(value) {
   return Object.values(value);
 }
 
-function CommandCenterDashboard() {
+function CommandCenterDashboard({ onOpenCommandPalette }) {
   const [dashboardData, setDashboardData] = useState(null);
   const [isTelemetryLoading, setIsTelemetryLoading] = useState(true);
   const [telemetryError, setTelemetryError] = useState("");
@@ -427,7 +428,11 @@ function CommandCenterDashboard() {
             </div>
 
             <div className="flex items-center gap-2">
-              <button aria-label="Search" className="orbit-icon-button">
+              <button
+                aria-label="Open command palette"
+                className="orbit-icon-button"
+                onClick={onOpenCommandPalette}
+                type="button">
                 <Search size={18} />
               </button>
 
@@ -481,23 +486,167 @@ function CommandCenterDashboard() {
   );
 }
 
-function App() {
-  return (
-    <Routes>
-      <Route element={<PublicOnlyRoute />}>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-      </Route>
+function AppShell() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 
-      <Route element={<ProtectedRoute />}>
-        <Route path="/" element={<CommandCenterDashboard />} />
-        <Route path="/ai-newsroom" element={<AINewsroom />} />
-        <Route path="/web-builder" element={<WebBuilder />} />
-      </Route>
-
-      <Route path="*" element={<Navigate replace to="/" />} />
-    </Routes>
+  const commands = useMemo(
+    () => [
+      {
+        id: "go-command-center",
+        label: "Go to Command Center",
+        description: "Open the main BLACK FLASH ORBIT dashboard.",
+        icon: LayoutDashboard,
+        keywords: ["dashboard", "home", "command center", "main"],
+        to: "/",
+      },
+      {
+        id: "open-ai-newsroom",
+        label: "Open AI Newsroom",
+        description: "Jump into newsroom drafting and editorial tools.",
+        icon: Bot,
+        keywords: ["newsroom", "editorial", "ai", "draft"],
+        to: "/ai-newsroom",
+      },
+      {
+        id: "open-web-builder",
+        label: "Open Web Builder",
+        description: "Build protected newsroom web projects.",
+        icon: Globe2,
+        keywords: ["web", "builder", "site", "pages"],
+        to: "/web-builder",
+      },
+      {
+        id: "open-media-intel",
+        label: "Open Media Intel",
+        description: "Open the media intelligence workspace.",
+        icon: Sparkles,
+        keywords: ["media", "intel", "intelligence"],
+        to: "/media-intel",
+      },
+      {
+        id: "open-archive",
+        label: "Open Archive",
+        description: "Open the archive and history workspace.",
+        icon: Archive,
+        keywords: ["archive", "history", "records"],
+        to: "/archive",
+      },
+      {
+        id: "start-editorial-pulse",
+        label: "Start Editorial Pulse",
+        description: "Jump into the newsroom production flow.",
+        icon: FileText,
+        keywords: ["editorial", "pulse", "newsroom", "start"],
+        to: "/ai-newsroom",
+        hotkey: "action",
+      },
+      {
+        id: "view-system-report",
+        label: "View System Report",
+        description: "Return to the system command view.",
+        icon: Gauge,
+        keywords: ["system", "report", "status", "dashboard"],
+        to: "/",
+        hotkey: "report",
+      },
+    ],
+    [],
   );
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      const isShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k";
+      if (!isShortcut) return;
+
+      const target = event.target;
+      const isTypingField =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target?.isContentEditable;
+
+      if (isTypingField) return;
+
+      event.preventDefault();
+      setIsCommandPaletteOpen((current) => !current);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    setIsCommandPaletteOpen(false);
+  }, [location.pathname]);
+
+  function handleCommandSelect(command) {
+    setIsCommandPaletteOpen(false);
+
+    if (command.to) {
+      navigate(command.to);
+    }
+
+    if (command.id === "view-system-report") {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ behavior: "smooth", top: 0 });
+      });
+    }
+  }
+
+  return (
+    <>
+      <Routes>
+        <Route element={<PublicOnlyRoute />}>
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+        </Route>
+
+        <Route element={<ProtectedRoute />}>
+          <Route
+            path="/"
+            element={
+              <CommandCenterDashboard
+                onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+              />
+            }
+          />
+          <Route path="/ai-newsroom" element={<AINewsroom />} />
+          <Route path="/web-builder" element={<WebBuilder />} />
+          <Route
+            path="/media-intel"
+            element={
+              <CommandCenterDashboard
+                onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+              />
+            }
+          />
+          <Route
+            path="/archive"
+            element={
+              <CommandCenterDashboard
+                onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+              />
+            }
+          />
+        </Route>
+
+        <Route path="*" element={<Navigate replace to="/" />} />
+      </Routes>
+
+      <CommandPalette
+        commands={commands}
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        onSelect={handleCommandSelect}
+      />
+    </>
+  );
+}
+
+function App() {
+  return <AppShell />;
 }
 
 export default App;
