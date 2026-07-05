@@ -14,6 +14,7 @@ import {
   Lock,
   Mic2,
   Newspaper,
+  LayoutDashboard,
   Radio,
   Search,
   ShieldCheck,
