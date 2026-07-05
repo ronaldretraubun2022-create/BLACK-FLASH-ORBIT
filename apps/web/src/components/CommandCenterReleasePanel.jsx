@@ -2,8 +2,8 @@ import { CheckCircle2, GitBranch, Rocket, ShieldCheck } from "lucide-react";
 
 const releases = [
   {
-    tag: "v0.4.9-command-center-stable",
-    label: "Stable Command Center checkpoint",
+    tag: "feature/security-center-v0.6",
+    label: "Security Center v0.6 checkpoint",
   },
   {
     tag: "v0.4.8-extended-telemetry-meta",
@@ -89,13 +89,13 @@ export function CommandCenterReleasePanel() {
 
         <div className="mt-6 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4">
           <p className="text-xs uppercase tracking-[0.25em] text-cyan-300">
-            Next Sprint
+            Security Center v0.6
           </p>
           <p className="mt-2 text-sm font-bold text-white">
-            v0.5.x Security Center
+            feature/security-center-v0.6
           </p>
           <p className="mt-2 text-xs leading-5 text-zinc-400">
-            Next focus: visualize audit routes, auth protection, rate limits,
+            Current focus: visualize audit routes, auth protection, rate limits,
             and defensive security status.
           </p>
         </div>
