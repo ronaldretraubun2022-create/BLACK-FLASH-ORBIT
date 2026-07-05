@@ -11,6 +11,7 @@ import {
   FileText,
   Gauge,
   Image,
+  Globe2,
   Lock,
   Mic2,
   Newspaper,
