@@ -496,6 +496,66 @@ function AppShell() {
   const commands = useMemo(
     () => [
       {
+        id: "slash-build",
+        label: "/build",
+        description: "Mock build check for the current release workspace.",
+        icon: LayoutDashboard,
+        keywords: ["build", "release", "workspace", "command"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock build completed. No deployment was triggered.",
+      },
+      {
+        id: "slash-scan",
+        label: "/scan",
+        description: "Mock scan for runtime and module health.",
+        icon: Search,
+        keywords: ["scan", "health", "runtime", "audit"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock scan completed. Runtime checks returned healthy.",
+      },
+      {
+        id: "slash-security",
+        label: "/security",
+        description: "Mock security review summary for the dashboard.",
+        icon: ShieldCheck,
+        keywords: ["security", "audit", "policy", "protection"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock security summary prepared. No live changes were made.",
+      },
+      {
+        id: "slash-report",
+        label: "/report",
+        description: "Mock project health report for the command center.",
+        icon: FileText,
+        keywords: ["report", "system", "summary", "status"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock report generated. Dashboard telemetry remains unchanged.",
+      },
+      {
+        id: "slash-release",
+        label: "/release",
+        description: "Mock release snapshot for the active branch.",
+        icon: Archive,
+        keywords: ["release", "branch", "snapshot", "version"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock release snapshot saved. No repository state changed.",
+      },
+      {
+        id: "slash-health",
+        label: "/health",
+        description: "Mock health summary for runtime and modules.",
+        icon: Gauge,
+        keywords: ["health", "runtime", "monitor", "status"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock health check passed. All indicators are read-only.",
+      },
+      {
         id: "go-command-center",
         label: "Go to Command Center",
         description: "Open the main BLACK FLASH ORBIT dashboard.",
@@ -584,6 +644,8 @@ function AppShell() {
   }, [location.pathname]);
 
   function handleCommandSelect(command) {
+    if (command?.closeOnExecute === false) return;
+
     setIsCommandPaletteOpen(false);
 
     if (command.to) {
