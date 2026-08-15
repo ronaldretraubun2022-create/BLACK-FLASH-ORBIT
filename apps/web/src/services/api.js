@@ -7,6 +7,13 @@ import {
 import { normalizePromptCategory } from "../data/promptCategories";
 import apiUrlUtils from "./apiUrlUtils.cjs";
 
+const {
+  getApiPathSuffix,
+  joinApiUrl,
+  normalizeApiBaseUrl,
+  normalizeApiPath,
+} = apiUrlUtils;
+
 const DEFAULT_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_WINDOW_MS = 60000;
 const LOCAL_DEV_API_PORT = "5000";
@@ -24,8 +31,6 @@ const AUTH_FAILURE_CODES = new Set([
 ]);
 const PUBLIC_API_PATHS = new Set(["/api/health", "/api/v1/health"]);
 const KNOWLEDGE_API_PREFIX = "/api/v1/knowledge";
-const { getApiPathSuffix, joinApiUrl, normalizeApiBaseUrl, normalizeApiPath } =
-  apiUrlUtils;
 
 function createQueryString(params = {}) {
   const searchParams = new URLSearchParams();
