@@ -7,6 +7,7 @@ const { AI_USE_CASES } = require("../services/ai/modelRegistry");
 const { generateNewsroomCompletion } = require("../services/openrouter");
 const { createPromptContract } = require("../services/newsroom/promptContract");
 const { buildNewsroomPromptV2 } = require("../services/newsroom/prompts");
+const { verifyNewsroomDraft } = require("../services/newsroom/verification");
 
 const router = express.Router();
 const MAX_TOPIC_LENGTH = 3000;
@@ -1197,6 +1198,25 @@ router.post("/", requireAuth, async (req, res) => {
       confidenceScore + verificationBonus - verificationPenalty,
     );
     const publicationReadiness = getPublicationReadiness(finalConfidenceScore);
+    const verification = verifyNewsroomDraft({
+      draft: normalizedDraft,
+      legacyConfidenceScore: finalConfidenceScore,
+      sourceText: promptContract.sourceText,
+      sources: Array.isArray(sources) ? sources : [],
+    });
+    const editorial = {
+      confidence: verification.review.editorialConfidence,
+      requiresHumanApproval: verification.review.requiresHumanApproval,
+      reviewReasons: verification.review.reviewReasons,
+      reviewStatus: verification.review.reviewStatus,
+    };
+
+    logNewsroomDebug("[AI Newsroom Route] verification completed", {
+      claims: verification.claims.length,
+      citationCoverage: verification.citationGuard.coverage,
+      reviewStatus: editorial.reviewStatus,
+      unsupported: verification.factGuard.unsupportedCount,
+    });
 
     return res.status(200).json({
       success: true,
@@ -1208,11 +1228,22 @@ router.post("/", requireAuth, async (req, res) => {
       confidence: {
         score: finalConfidenceScore,
         publicationReadiness,
+        editorial_score: editorial.confidence.score,
+        editorial_level: editorial.confidence.level,
         confidence_score: confidenceAnalysis.confidence_score,
         confidence_level: confidenceAnalysis.confidence_level,
         confidence_breakdown: confidenceAnalysis.confidence_breakdown,
         confidence_explanation: confidenceAnalysis.confidence_explanation,
       },
+      verification: {
+        claims: verification.claims,
+        factGuard: verification.factGuard,
+        citationGuard: verification.citationGuard,
+        sourceConfidence: verification.sourceConfidence,
+        publicationReady: verification.publicationReady,
+        publicationBlockers: verification.publicationBlockers,
+      },
+      editorial,
       metadata: {
         ...promptPayload,
         assessment: assessment || null,
@@ -1230,6 +1261,11 @@ router.post("/", requireAuth, async (req, res) => {
         model: aiResult.model || null,
         fallbackUsed: Boolean(aiResult.metadata?.fallbackUsed),
         durationMs: aiResult.metadata?.durationMs || null,
+        claimCount: verification.claims.length,
+        unsupportedClaimCount: verification.factGuard.unsupportedCount,
+        citationCoverage: verification.citationGuard.coverage,
+        reviewStatus: editorial.reviewStatus,
+        publicationReady: verification.publicationReady,
         providerCapability: {
           fallbackEligibleModels:
             providerCapability.fallbackEligibleModels.length,

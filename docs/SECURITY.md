@@ -149,6 +149,8 @@ Target tambahan:
 - Tandai knowledge content sebagai untrusted context.
 - Newsroom Prompt Engine v2 wajib memperlakukan source text sebagai data tidak tepercaya; instruksi di dalam source material tidak boleh mengubah system/editorial rules.
 - Newsroom audience/channel/complexity harus lewat prompt contract terverifikasi, bukan konfigurasi bebas dari client.
+- Newsroom Fact Guard v2 dan Source Confidence adalah automated review aid, bukan approval manusia atau verifikasi absolut.
+- Direct quote, tanggal spesifik, angka/statistik, dan allegation yang tidak didukung sumber harus menjadi blocker review editorial.
 - Batasi retrieved chunks dan ukuran prompt.
 - Jangan mengirim secret atau data lain milik user ke prompt.
 - Catat provider/model dan status tanpa full sensitive prompt.

@@ -2,6 +2,25 @@
 
 Keputusan baru ditambahkan di bagian paling atas. Jangan menghapus keputusan lama; tandai `Superseded` dan tautkan penggantinya.
 
+## ADR-012 — Fact Guard v2 adds automated editorial review, not approval
+
+- Status: Accepted
+- Date: 2026-08-15
+
+### Context
+
+Newsroom output membutuhkan verifikasi quote, tanggal, angka, tuduhan, citation coverage, dan confidence sumber sebelum dinilai layak review editor. Automated checks tidak boleh diposisikan sebagai pengganti fact-checking manusia.
+
+### Decision
+
+Tambahkan verification layer deterministik setelah AI Router v2: claim extraction, Fact Guard, Citation Guard, Source Confidence, Editorial Confidence, Review Status, dan Publication Blockers. AI hanya boleh memberi status `AI_REVIEWED`, `NEEDS_REVIEW`, atau `READY_FOR_EDITOR`; status `APPROVED` tetap reserved untuk aksi manusia.
+
+### Consequences
+
+- Response Newsroom bertambah field `verification` dan `editorial` secara backward-compatible.
+- Draft tidak otomatis dihapus saat blocker ditemukan; editor tetap melihat konten dan alasan blocker.
+- P4 dapat membangun Intelligence Summary dari hasil verification tanpa membuat klaim kepastian absolut.
+
 ## ADR-011 — Newsroom Prompt Engine v2 is audience-aware and versioned
 
 - Status: Accepted

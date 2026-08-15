@@ -2,6 +2,7 @@
 import { AudienceSelector } from "../components/newsroom/AudienceSelector.jsx";
 import { ChannelSelector } from "../components/newsroom/ChannelSelector.jsx";
 import { IntelligenceSummary } from "../components/newsroom/IntelligenceSummary.jsx";
+import { VerificationPanel } from "../components/newsroom/verification/VerificationPanel.jsx";
 import {
   generateIntelligenceDraft,
   isNewsroomLocalFallbackEnabled,
@@ -980,6 +981,8 @@ export function AINewsroom() {
     score: 0,
     publicationReadiness: "Verification Required",
   });
+  const [verification, setVerification] = useState(null);
+  const [editorial, setEditorial] = useState(null);
 
   const modes = INTELLIGENCE_LAYERS[layer] || [];
   const expectedOutput = useMemo(
@@ -1166,6 +1169,8 @@ export function AINewsroom() {
             response.confidence?.publicationReadiness ||
             "Verification Required",
         });
+        setVerification(response.verification || null);
+        setEditorial(response.editorial || null);
       } else {
         throw new Error("AI response missing draft");
       }
@@ -1191,6 +1196,8 @@ export function AINewsroom() {
         score: 0,
         publicationReadiness: "Verification Required",
       });
+      setVerification(null);
+      setEditorial(null);
     } finally {
       setIsGenerating(false);
     }
@@ -1247,6 +1254,8 @@ export function AINewsroom() {
         score: confidence.score,
         publicationReadiness: confidence.publicationReadiness,
       },
+      editorial,
+      verification,
       draft,
     };
 
@@ -1660,6 +1669,11 @@ export function AINewsroom() {
                 {generationError}
               </div>
             )}
+
+            <VerificationPanel
+              editorial={editorial}
+              verification={verification}
+            />
 
             <div className="min-h-[500px] rounded-3xl border border-white/10 bg-[#070d1a] p-5">
               {draft ? (
