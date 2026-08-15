@@ -75,32 +75,8 @@ export default defineConfig(({ command }) => {
       chunkSizeWarningLimit: 900,
       reportCompressedSize: true,
 
-      rollupOptions: {
+      rolldownOptions: {
         output: {
-          manualChunks(id) {
-            if (!id.includes("node_modules")) {
-              return undefined;
-            }
-
-            if (id.includes("react") || id.includes("react-dom")) {
-              return "react-vendor";
-            }
-
-            if (id.includes("react-router")) {
-              return "router-vendor";
-            }
-
-            if (id.includes("lucide-react")) {
-              return "icons-vendor";
-            }
-
-            if (id.includes("@supabase")) {
-              return "supabase-vendor";
-            }
-
-            return "vendor";
-          },
-
           chunkFileNames: "assets/js/[name]-[hash].js",
           entryFileNames: "assets/js/[name]-[hash].js",
 
