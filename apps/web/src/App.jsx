@@ -1,60 +1,768 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { Activity } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { UserMenu } from "./components/auth/UserMenu.jsx";
+import { useProfile } from "./hooks/useProfile.js";
+import { AINewsroom } from "./pages/AINewsroom.jsx";
 import {
-  PublicOnlyRoute,
+  Archive,
+  Bell,
+  Bot,
+  BrainCircuit,
+  CheckCircle2,
+  FileText,
+  Gauge,
+  Image,
+  Globe2,
+  Lock,
+  Layers3,
+  Mic2,
+  Newspaper,
+  LayoutDashboard,
+  Radio,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Star,
+  Workflow,
+  UploadCloud,
+  Zap,
+} from "lucide-react";
+import {
   ProtectedRoute,
-} from "./components/auth/ProtectedRoute";
-import { DashboardLayout } from "./components/layout/DashboardLayout";
-import { ModulePlaceholder } from "./components/pages/ModulePlaceholder";
-import { AIWorkspace } from "./pages/AIWorkspace";
-import { AutomationHub } from "./pages/AutomationHub";
-import { Dashboard } from "./pages/Dashboard";
-import { Login } from "./pages/Login";
-import { ModelControl } from "./pages/ModelControl";
-import { OSINTWorkspace } from "./pages/OSINTWorkspace";
-import { Register } from "./pages/Register";
-import { ReportsArchive } from "./pages/ReportsArchive";
-import { SecurityCenter } from "./pages/SecurityCenter";
-import { Settings } from "./pages/Settings";
+  PublicOnlyRoute,
+} from "./components/auth/ProtectedRoute.jsx";
+import { CommandCenterHero } from "./components/CommandCenterHero.jsx";
+import { CommandCenterActivityPanel } from "./components/CommandCenterActivityPanel.jsx";
+import { CommandCenterMetricGrid } from "./components/CommandCenterMetricGrid.jsx";
+import { CommandCenterOperationsPanel } from "./components/CommandCenterOperationsPanel.jsx";
+import { CommandCenterReleasePanel } from "./components/CommandCenterReleasePanel.jsx";
+import { CommandCenterSecurityPanel } from "./components/CommandCenterSecurityPanel.jsx";
+import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
+import { CommandPalette } from "./components/CommandPalette.jsx";
+import { Login } from "./pages/Login.jsx";
+import { AIWorkspace } from "./pages/AIWorkspace.jsx";
+import { KnowledgeBase } from "./pages/KnowledgeBase.jsx";
+import { Register } from "./pages/Register.jsx";
+import { WorkflowAutomation } from "./pages/WorkflowAutomation.jsx";
+import { WebBuilder } from "./pages/WebBuilder.jsx";
+import {
+  api,
+  isAuthProviderUnavailableError,
+} from "./services/api.js";
 
-function App() {
+const adminRoles = new Set(["admin", "owner", "super_admin"]);
+
+const releaseState = [
+  { label: "Branch", value: "feature/project-health-v0.7", tone: "text-amber-300" },
+  { label: "Tag", value: "Project Health Monitor v0.7", tone: "text-white" },
+  { label: "Status", value: "deployment-aware", tone: "text-emerald-300" },
+];
+
+const commandStats = [
+  {
+    label: "AI Drafts",
+    value: "248",
+    detail: "generated articles",
+    icon: Newspaper,
+  },
+  {
+    label: "Transcripts",
+    value: "91.8%",
+    detail: "avg confidence",
+    icon: Mic2,
+  },
+  {
+    label: "Media Assets",
+    value: "1.7K",
+    detail: "indexed files",
+    icon: Image,
+  },
+  {
+    label: "Ops Health",
+    value: "99.9",
+    detail: "uptime score",
+    icon: Gauge,
+  },
+];
+
+const newsroomFlow = [
+  {
+    title: "Capture",
+    body: "Audio lapangan, foto, catatan, dan metadata lokasi masuk ke intake desk.",
+    icon: UploadCloud,
+    progress: "92%",
+  },
+  {
+    title: "Transcribe",
+    body: "Speech-to-text diproses untuk membuat kutipan, ringkasan, dan kronologi.",
+    icon: Radio,
+    progress: "88%",
+  },
+  {
+    title: "Compose",
+    body: "AI newsroom menyusun lead, isi berita, kutipan, dan penutup jurnalistik.",
+    icon: Bot,
+    progress: "76%",
+  },
+  {
+    title: "Archive",
+    body: "Draft, sumber, PDF, dan riwayat editorial diamankan ke arsip terstruktur.",
+    icon: Archive,
+    progress: "100%",
+  },
+];
+
+const aiModules = [
+  { name: "News Generator", icon: FileText, state: "Ready" },
+  { name: "Audio Transcript", icon: Mic2, state: "Online" },
+  { name: "Image Prompt Studio", icon: Sparkles, state: "Active" },
+  { name: "Admin Control", icon: ShieldCheck, state: "Secured" },
+];
+
+const liveBriefs = [
+  {
+    desk: "Papua Selatan Desk",
+    title: "Pemantauan isu publik dan agenda pemerintahan daerah",
+    time: "09:42 WIT",
+  },
+  {
+    desk: "Multimedia Desk",
+    title: "Kurasi visual lapangan untuk paket berita sore",
+    time: "10:18 WIT",
+  },
+  {
+    desk: "Editorial Desk",
+    title: "Validasi narasumber, kutipan, dan konteks publikasi",
+    time: "10:55 WIT",
+  },
+];
+
+const securitySignals = [
+  { label: "Role Admin", value: "validated", icon: Lock },
+  { label: "Firestore Reads", value: "optimized", icon: Zap },
+  { label: "Audit Trail", value: "enabled", icon: CheckCircle2 },
+];
+
+function isAdminRole(role) {
+  return adminRoles.has(String(role || "").toLowerCase());
+}
+
+function formatMetric(value, fallback) {
+  if (value === null || value === undefined || value === "") return fallback;
+
+  if (typeof value === "number") {
+    return new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: value % 1 === 0 ? 0 : 1,
+    }).format(value);
+  }
+
+  return String(value);
+}
+
+function formatUptime(seconds, fallback = "live") {
+  if (!Number.isFinite(seconds)) return fallback;
+
+  const totalMinutes = Math.max(0, Math.floor(seconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+
+  return `${Math.max(0, Math.floor(seconds))}s`;
+}
+
+function formatTime(value, fallback) {
+  if (!value) return fallback;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+
+  return date.toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Jayapura",
+  });
+}
+
+function getObjectValues(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.values(value);
+}
+
+function CommandCenterDashboard({ onOpenCommandPalette }) {
+  const [dashboardData, setDashboardData] = useState(null);
+  const [isTelemetryLoading, setIsTelemetryLoading] = useState(true);
+  const [telemetryError, setTelemetryError] = useState("");
+  const { profile } = useProfile();
+
+  const userRole = profile?.role || "user";
+  const canAccessSecurity = isAdminRole(userRole);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadDashboardTelemetry() {
+      setIsTelemetryLoading(true);
+      setTelemetryError("");
+
+      try {
+        // Use the shared API client so dashboard fallbacks and auth handling
+        // stay aligned with the rest of the app.
+        const payload = await api.getDashboardStatus({
+          signal: controller.signal,
+        });
+
+        setDashboardData(payload?.data ?? null);
+        setTelemetryError(
+          payload?.degraded
+            ? payload?.message || "Dashboard telemetry degraded."
+            : "",
+        );
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+
+        if (isAuthProviderUnavailableError(error)) {
+          setTelemetryError(
+            error?.message ||
+              "Limited connectivity: auth provider temporarily unavailable.",
+          );
+          setDashboardData(null);
+          return;
+        }
+
+        setTelemetryError(error?.message || "Telemetry unavailable");
+        setDashboardData(null);
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsTelemetryLoading(false);
+        }
+      }
+    }
+
+    loadDashboardTelemetry();
+
+    return () => controller.abort();
+  }, []);
+
+  const hasTelemetryData = Boolean(dashboardData);
+  const hasActivity =
+    Array.isArray(dashboardData?.activity) && dashboardData.activity.length > 0;
+  const hasProjects =
+    Array.isArray(dashboardData?.projects) && dashboardData.projects.length > 0;
+  const hasAutomation = getObjectValues(dashboardData?.automation).length > 0;
+  const isTelemetryConnected =
+    hasTelemetryData && !isTelemetryLoading && !telemetryError;
+  const isUsingFallback =
+    isTelemetryLoading ||
+    Boolean(telemetryError) ||
+    !hasTelemetryData ||
+    (isTelemetryConnected && (!hasActivity || !hasProjects || !hasAutomation));
+
+  const telemetryStatusText = isTelemetryLoading
+    ? "Syncing backend telemetry..."
+    : telemetryError
+      ? `Telemetry fallback active: ${telemetryError}`
+      : isTelemetryConnected && !hasActivity && !hasProjects && !hasAutomation
+        ? "Telemetry connected, waiting for records."
+        : "Backend telemetry live.";
+
+  const telemetryLabels = [
+    {
+      label: "Runtime",
+      value: dashboardData?.system?.runtime || "not reported",
+    },
+    {
+      label: "Health Module",
+      value: dashboardData?.health?.module || "not reported",
+    },
+    {
+      label: "Metrics Timestamp",
+      value: dashboardData?.metrics?.timestamp
+        ? formatTime(dashboardData.metrics.timestamp, "not reported")
+        : "not reported",
+    },
+  ];
+
+  const {
+    automationItems,
+    dashboardStats,
+    healthStatus,
+    liveBriefItems,
+    projectFlow,
+    securityItems,
+    uptimeLabel,
+  } = useMemo(() => {
+    const metrics = dashboardData?.metrics ?? {};
+    const health = dashboardData?.health ?? {};
+    const projects = Array.isArray(dashboardData?.projects)
+      ? dashboardData.projects
+      : [];
+    const security = dashboardData?.security ?? {};
+    const activity = Array.isArray(dashboardData?.activity)
+      ? dashboardData.activity
+      : [];
+    const automation = getObjectValues(dashboardData?.automation);
+    const projectCount = metrics?.projects ?? projects.length;
+    const reportCount = metrics?.reports;
+    const uptime = metrics?.uptime ?? health?.uptime;
+    const computedUptime = formatUptime(uptime, commandStats[3].value);
+    const computedHealth = health?.status || commandStats[3].value;
+
+    return {
+      automationItems: automation,
+      dashboardStats: [
+        {
+          ...commandStats[0],
+          value: formatMetric(reportCount, commandStats[0].value),
+          detail:
+            reportCount === null || reportCount === undefined
+              ? commandStats[0].detail
+              : "reports tracked",
+        },
+        {
+          ...commandStats[1],
+          value: formatMetric(projectCount, commandStats[1].value),
+          detail:
+            projectCount === null || projectCount === undefined
+              ? commandStats[1].detail
+              : "projects synced",
+        },
+        {
+          ...commandStats[2],
+          value: formatMetric(activity.length || null, commandStats[2].value),
+          detail: activity.length ? "activity signals" : commandStats[2].detail,
+        },
+        {
+          ...commandStats[3],
+          value: formatMetric(computedHealth, commandStats[3].value),
+          detail: `uptime ${computedUptime}`,
+        },
+      ],
+      healthStatus: computedHealth,
+      liveBriefItems: hasActivity
+        ? activity.slice(0, 3).map((item, index) => ({
+            desk: `${item?.type || "system"} desk`,
+            title:
+              item?.message || liveBriefs[index]?.title || "Telemetry event",
+            time: formatTime(item?.time, liveBriefs[index]?.time || "live"),
+          }))
+        : isTelemetryConnected
+          ? [
+              {
+                desk: "Telemetry",
+                title: "No live activity yet.",
+                time: "live",
+              },
+            ]
+          : liveBriefs,
+      projectFlow: hasProjects
+        ? projects.slice(0, 4).map((project, index) => ({
+            title:
+              project?.name || newsroomFlow[index]?.title || "ORBIT Module",
+            body: `${project?.type || "workspace"} status ${project?.status || "READY"} - last scan ${project?.lastScan || "live"}`,
+            icon: newsroomFlow[index]?.icon || Archive,
+            progress: `${formatMetric(project?.score, newsroomFlow[index]?.progress?.replace("%", "") || "100")}%`,
+          }))
+        : isTelemetryConnected
+          ? [
+              {
+                title: "No synced projects yet.",
+                body: "Backend telemetry connected. Project records belum tersedia.",
+                icon: Archive,
+                progress: "0%",
+              },
+            ]
+          : newsroomFlow,
+      securityItems: [
+        {
+          ...securitySignals[0],
+          value: security?.helmet || securitySignals[0].value,
+        },
+        {
+          ...securitySignals[1],
+          value: security?.rateLimit || securitySignals[1].value,
+        },
+        {
+          ...securitySignals[2],
+          value:
+            security?.securityScore !== null &&
+            security?.securityScore !== undefined
+              ? `${security.securityScore}/100`
+              : securitySignals[2].value,
+        },
+      ],
+      uptimeLabel: computedUptime,
+    };
+  }, [dashboardData, hasActivity, hasProjects, isTelemetryConnected]);
+
+  const moduleItems = useMemo(() => {
+    if (!automationItems.length) return aiModules;
+
+    return automationItems.slice(0, 4).map((engine, index) => ({
+      name: engine?.name || aiModules[index]?.name || "Automation Engine",
+      icon: aiModules[index]?.icon || Bot,
+      state: engine?.status || aiModules[index]?.state || "Ready",
+    }));
+  }, [automationItems]);
+
+  const displayedModuleItems = useMemo(() => {
+    if (hasAutomation) return moduleItems;
+
+    return moduleItems.map((module) => ({
+      ...module,
+      state: isTelemetryConnected ? "fallback-ready" : module.state,
+    }));
+  }, [hasAutomation, isTelemetryConnected, moduleItems]);
+
   return (
-    <BrowserRouter>
+    <main className="min-h-screen bg-[#050506] text-zinc-100">
+      <div className="orbit-shell">
+        <CommandCenterSidebar releaseState={releaseState} userRole={userRole} />
+
+        <section className="min-w-0 flex-1">
+          <header className="orbit-topbar">
+            <div>
+              <p className="orbit-kicker">Command Center</p>
+              <h2 className="text-xl font-black text-white md:text-2xl">
+                Newsroom Intelligence Dashboard
+              </h2>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                aria-label="Open command palette"
+                className="orbit-icon-button"
+                onClick={onOpenCommandPalette}
+                type="button">
+                <Search size={18} />
+              </button>
+
+              <button aria-label="Notifications" className="orbit-icon-button">
+                <Bell size={18} />
+              </button>
+
+              <UserMenu />
+            </div>
+          </header>
+
+          <div className="grid gap-4 p-4 md:p-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <section className="grid gap-4">
+              <CommandCenterHero
+                healthStatus={formatMetric(healthStatus, "Live Signal")}
+                isTelemetryLoading={isTelemetryLoading}
+                isUsingFallback={isUsingFallback}
+                releaseState={releaseState}
+                telemetryError={telemetryError}
+                telemetryLabels={telemetryLabels}
+                telemetryStatusText={telemetryStatusText}
+                uptimeLabel={uptimeLabel}
+              />
+
+              <CommandCenterMetricGrid dashboardStats={dashboardStats} />
+              <CommandCenterReleasePanel />
+
+              <CommandCenterOperationsPanel
+                displayedModuleItems={displayedModuleItems}
+                projectFlow={projectFlow}
+              />
+            </section>
+
+            <aside className="grid gap-4">
+              <CommandCenterActivityPanel
+                liveBriefItems={liveBriefItems}
+                securityItems={securityItems}
+              />
+
+              {canAccessSecurity && (
+                <CommandCenterSecurityPanel
+                  securityItems={securityItems}
+                  healthStatus={formatMetric(healthStatus, "READY")}
+                />
+              )}
+            </aside>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function AppShell() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+
+  const commands = useMemo(
+    () => [
+      {
+        id: "slash-build",
+        label: "/build",
+        description: "Mock build check for the current release workspace.",
+        icon: LayoutDashboard,
+        keywords: ["build", "release", "workspace", "command"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock build completed. No deployment was triggered.",
+      },
+      {
+        id: "slash-scan",
+        label: "/scan",
+        description: "Mock scan for runtime and module health.",
+        icon: Search,
+        keywords: ["scan", "health", "runtime", "audit"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock scan completed. Runtime checks returned healthy.",
+      },
+      {
+        id: "slash-security",
+        label: "/security",
+        description: "Mock security review summary for the dashboard.",
+        icon: ShieldCheck,
+        keywords: ["security", "audit", "policy", "protection"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock security summary prepared. No live changes were made.",
+      },
+      {
+        id: "slash-report",
+        label: "/report",
+        description: "Mock project health report for the command center.",
+        icon: FileText,
+        keywords: ["report", "system", "summary", "status"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock report generated. Dashboard telemetry remains unchanged.",
+      },
+      {
+        id: "slash-release",
+        label: "/release",
+        description: "Mock release snapshot for the active branch.",
+        icon: Archive,
+        keywords: ["release", "branch", "snapshot", "version"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock release snapshot saved. No repository state changed.",
+      },
+      {
+        id: "slash-health",
+        label: "/health",
+        description: "Mock health summary for runtime and modules.",
+        icon: Gauge,
+        keywords: ["health", "runtime", "monitor", "status"],
+        kind: "slash",
+        closeOnExecute: false,
+        mockResult: "Mock health check passed. All indicators are read-only.",
+      },
+      {
+        id: "go-command-center",
+        label: "Go to Command Center",
+        description: "Open the main BLACK FLASH ORBIT dashboard.",
+        icon: LayoutDashboard,
+        keywords: ["dashboard", "home", "command center", "main"],
+        to: "/",
+      },
+      {
+        id: "open-ai-newsroom",
+        label: "Open AI Newsroom",
+        description: "Jump into newsroom drafting and editorial tools.",
+        icon: Bot,
+        keywords: ["newsroom", "editorial", "ai", "draft"],
+        to: "/ai-newsroom",
+      },
+      {
+        id: "open-web-builder",
+        label: "Open Web Builder",
+        description: "Build protected newsroom web projects.",
+        icon: Globe2,
+        keywords: ["web", "builder", "site", "pages"],
+        to: "/web-builder",
+      },
+      {
+        id: "open-knowledge-base",
+        label: "Open Knowledge Base",
+        description: "Open the protected newsroom knowledge dashboard.",
+        icon: BrainCircuit,
+        keywords: ["knowledge", "rag", "document", "source", "citation"],
+        to: "/knowledge-base",
+      },
+      {
+        id: "ai-knowledge-copilot",
+        label: "AI Knowledge Copilot",
+        description: "Open the source-aware Knowledge RAG copilot panel.",
+        icon: BrainCircuit,
+        keywords: ["knowledge", "copilot", "rag", "ai", "context"],
+        to: "/knowledge-base#copilot",
+      },
+      {
+        id: "search-knowledge",
+        label: "Search Knowledge",
+        description: "Jump to knowledge semantic search.",
+        icon: Search,
+        keywords: ["knowledge", "search", "documents", "sources"],
+        to: "/knowledge-base#knowledge-search",
+      },
+      {
+        id: "open-knowledge-favorites",
+        label: "Open Favorites",
+        description: "Jump to pinned knowledge source cards.",
+        icon: Star,
+        keywords: ["knowledge", "favorites", "pinned", "sources"],
+        to: "/knowledge-base#knowledge-favorites",
+      },
+      {
+        id: "view-rag-context",
+        label: "View RAG Context",
+        description: "Jump to the retrieved context preview.",
+        icon: Layers3,
+        keywords: ["knowledge", "rag", "context", "retrieval"],
+        to: "/knowledge-base#knowledge-rag-preview",
+      },
+      {
+        id: "open-workflow-automation",
+        label: "Open Workflow Automation",
+        description: "Open the automation dashboard.",
+        icon: Workflow,
+        keywords: ["workflow", "automation", "pipeline", "scheduler"],
+        to: "/workflow-automation",
+      },
+      {
+        id: "open-media-intel",
+        label: "Open Media Intel",
+        description: "Open the media intelligence workspace.",
+        icon: Sparkles,
+        keywords: ["media", "intel", "intelligence"],
+        to: "/media-intel",
+      },
+      {
+        id: "open-archive",
+        label: "Open Archive",
+        description: "Open the archive and history workspace.",
+        icon: Archive,
+        keywords: ["archive", "history", "records"],
+        to: "/archive",
+      },
+      {
+        id: "start-editorial-pulse",
+        label: "Start Editorial Pulse",
+        description: "Jump into the newsroom production flow.",
+        icon: FileText,
+        keywords: ["editorial", "pulse", "newsroom", "start"],
+        to: "/ai-newsroom",
+        hotkey: "action",
+      },
+      {
+        id: "view-system-report",
+        label: "View System Report",
+        description: "Return to the system command view.",
+        icon: Gauge,
+        keywords: ["system", "report", "status", "dashboard"],
+        to: "/",
+        hotkey: "report",
+      },
+    ],
+    [],
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      const isShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k";
+      if (!isShortcut) return;
+
+      const target = event.target;
+      const isTypingField =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target?.isContentEditable;
+
+      if (isTypingField) return;
+
+      event.preventDefault();
+      setIsCommandPaletteOpen((current) => !current);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    setIsCommandPaletteOpen(false);
+  }, [location.pathname]);
+
+  function handleCommandSelect(command) {
+    if (command?.closeOnExecute === false) return;
+
+    setIsCommandPaletteOpen(false);
+
+    if (command.to) {
+      navigate(command.to);
+    }
+
+    if (command.id === "view-system-report") {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ behavior: "smooth", top: 0 });
+      });
+    }
+  }
+
+  return (
+    <>
       <Routes>
         <Route element={<PublicOnlyRoute />}>
-          <Route element={<Login />} path="/login" />
-          <Route element={<Register />} path="/register" />
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
         </Route>
 
         <Route element={<ProtectedRoute />}>
-          <Route element={<DashboardLayout />}>
-            <Route element={<Dashboard />} index />
-            <Route element={<AIWorkspace />} path="ai-workspace" />
-
-            <Route
-              element={
-                <ModulePlaceholder
-                  description="Pantau kesehatan layanan, aktivitas operasional, dan kesiapan backend secara real-time."
-                  eyebrow="LIVE TELEMETRY"
-                  icon={Activity}
-                  title="System Monitoring"
-                />
-              }
-              path="monitoring"
-            />
-
-            <Route element={<SecurityCenter />} path="security" />
-            <Route element={<OSINTWorkspace />} path="osint" />
-            <Route element={<AutomationHub />} path="automation" />
-            <Route element={<ReportsArchive />} path="reports" />
-            <Route element={<ModelControl />} path="models" />
-
-            <Route element={<Settings />} path="settings" />
-          </Route>
+          <Route
+            path="/"
+            element={
+              <CommandCenterDashboard
+                onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+              />
+            }
+          />
+          <Route path="/ai-workspace" element={<AIWorkspace />} />
+          <Route path="/ai-newsroom" element={<AINewsroom />} />
+          <Route path="/knowledge-base" element={<KnowledgeBase />} />
+          <Route path="/knowledge" element={<Navigate replace to="/knowledge-base" />} />
+          <Route path="/web-builder" element={<WebBuilder />} />
+          <Route path="/workflow-automation" element={<WorkflowAutomation />} />
+          <Route
+            path="/media-intel"
+            element={
+              <CommandCenterDashboard
+                onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+              />
+            }
+          />
+          <Route
+            path="/archive"
+            element={
+              <CommandCenterDashboard
+                onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+              />
+            }
+          />
         </Route>
+
+        <Route path="*" element={<Navigate replace to="/" />} />
       </Routes>
-    </BrowserRouter>
+
+      <CommandPalette
+        commands={commands}
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        onSelect={handleCommandSelect}
+      />
+    </>
   );
+}
+
+function App() {
+  return <AppShell />;
 }
 
 export default App;

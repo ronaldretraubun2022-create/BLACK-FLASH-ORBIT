@@ -1,0 +1,452 @@
+const assert = require("assert");
+const {
+  normalizeNewsroomDraft,
+  hasTemporalReference,
+  classifyNewsroomFact,
+  buildEvidenceEngine,
+  buildSourceQualityEngine,
+  buildConfidenceEngine,
+  formatEvidenceMatrix,
+  formatFactClassificationTable,
+  formatSourceQualityMatrix,
+  formatConfidenceAnalysis,
+} = require("../server/routes/newsroom.js");
+const {
+  normalizeOpenRouterModel,
+  getOpenRouterModels,
+  isValidOpenRouterModel,
+} = require("../server/services/openrouter.js");
+const { buildNewsroomPrompt } = require("../server/services/promptBuilder.js");
+
+function runTest(name, fn) {
+  try {
+    fn();
+    console.log(`PASS: ${name}`);
+  } catch (error) {
+    console.error(`FAIL: ${name}`);
+    console.error(error.stack);
+    process.exitCode = 1;
+  }
+}
+
+runTest(
+  "normalizeNewsroomDraft blocks Q1/Q2/Q3/Q4 when no topic time info",
+  () => {
+    const draft = "Rencana dimulai pada Q1 dan Q2 dengan laporan kuartal.";
+    const normalized = normalizeNewsroomDraft(draft, false);
+    assert(!/\bQ[1-4]\b/.test(normalized), "Q1/Q2/Q3/Q4 should be removed");
+    assert(!/\bkuartal\b/i.test(normalized), "kuartal should be removed");
+    assert(!/\btriwulan\b/i.test(normalized), "triwulan should be removed");
+    assert(
+      !/\b2025\b/.test(normalized),
+      "year 2025 should be removed where topic has no time info",
+    );
+    assert(
+      /Catatan: Rincian waktu/.test(normalized),
+      "should append timeline validation note",
+    );
+  },
+);
+
+runTest(
+  "normalizeNewsroomDraft keeps year/quarter if topic includes time info",
+  () => {
+    const draft = "Target akan dicapai pada Q3 2025.";
+    const normalized = normalizeNewsroomDraft(draft, true);
+    assert(
+      /\bQ3\b/.test(normalized),
+      "Q3 should be kept when user topic includes time info",
+    );
+    assert(
+      /\b2025\b/.test(normalized),
+      "year should be kept when user topic includes time info",
+    );
+    assert(
+      !/Catatan: Rincian waktu/.test(normalized),
+      "should not append validation note when time info is provided",
+    );
+  },
+);
+
+runTest(
+  "normalizeNewsroomDraft rewrites specific citations to generic forms",
+  () => {
+    const draft = `Analisis didasarkan pada RKPD 2025 Papua Selatan dan RPJMD 2024 Papua Selatan.
+  Sumber lain: Diskominfo Papua Selatan, BPS Papua Selatan.`;
+    const normalized = normalizeNewsroomDraft(draft, false);
+    assert(
+      /Dokumen RPJMD\/RKPD/.test(normalized),
+      "RKPD/RPJMD citations should normalize to Dokumen RPJMD/RKPD",
+    );
+    assert(
+      /\bDiskominfo\b/.test(normalized),
+      "Diskominfo citation should normalize to Diskominfo",
+    );
+    assert(/\bBPS\b/.test(normalized), "BPS citation should normalize to BPS");
+  },
+);
+
+runTest(
+  "normalizeNewsroomDraft blocks province suffixes and planning document titles",
+  () => {
+    const draft = `Sumber: Diskominfo Provinsi, Dokumen perencanaan daerah (RPJMD, Renstra OPD), RPJMD, Renstra OPD.
+  Referensi tambahan: Pemerintah Provinsi Papua Selatan dan Laporan Statistik 2025.`;
+    const normalized = normalizeNewsroomDraft(draft, false);
+
+    assert(
+      !/Diskominfo\s+Provinsi/i.test(normalized),
+      "Diskominfo province suffix should be removed",
+    );
+    assert(
+      !/Dokumen perencanaan daerah/i.test(normalized),
+      "planning document title should be removed",
+    );
+    assert(
+      !/\bRPJMD,\s*Renstra OPD\b/i.test(normalized),
+      "RPJMD/Renstra list should be replaced",
+    );
+    assert(
+      !/Papua\s+Selatan/i.test(normalized),
+      "region suffix should be removed from citation labels",
+    );
+    assert(
+      /Dokumen RPJMD\/RKPD/.test(normalized),
+      "RPJMD/RKPD should map to the allowed generic label",
+    );
+    assert(
+      /Dokumen Resmi OPD/.test(normalized),
+      "Renstra OPD should map to the allowed generic OPD label",
+    );
+    assert(/\bDiskominfo\b/.test(normalized), "Diskominfo should remain");
+    assert(
+      /Pemerintah Provinsi/.test(normalized),
+      "government province source should be generic",
+    );
+    assert(
+      /Laporan Statistik Resmi/.test(normalized),
+      "statistics source should be generic",
+    );
+  },
+);
+
+runTest("classifyNewsroomFact marks user-provided topic as USER_INPUT", () => {
+  const statement = "Papua Selatan menyiapkan program layanan publik terpadu";
+  const result = classifyNewsroomFact(statement, {
+    topic: statement,
+    userInput: true,
+  });
+
+  assert.strictEqual(result.classification, "USER_INPUT");
+  assert.strictEqual(result.verification_needed, true);
+  assert(Array.isArray(result.recommended_sources));
+});
+
+runTest("classifyNewsroomFact marks unsourced numbers as UNVERIFIED", () => {
+  const result = classifyNewsroomFact(
+    "Papua Selatan memperoleh penghargaan Rp3 miliar",
+    { userInput: true },
+  );
+
+  assert.strictEqual(result.classification, "UNVERIFIED");
+  assert.strictEqual(result.verification_needed, true);
+  assert(result.confidence < 60);
+});
+
+runTest("classifyNewsroomFact marks recommendations as INFERENCE", () => {
+  const result = classifyNewsroomFact(
+    "Pemerintah perlu memperkuat kanal layanan publik digital",
+  );
+
+  assert.strictEqual(result.classification, "INFERENCE");
+  assert.strictEqual(result.verification_needed, true);
+});
+
+runTest(
+  "classifyNewsroomFact marks predicted impacts as ASSUMPTION or INFERENCE",
+  () => {
+    const result = classifyNewsroomFact(
+      "Program ini diprediksi akan meningkatkan ekonomi daerah",
+    );
+
+    assert(
+      ["ASSUMPTION", "INFERENCE"].includes(result.classification),
+      "predicted impact should not be FACT",
+    );
+    assert.strictEqual(result.verification_needed, true);
+  },
+);
+
+runTest("classifyNewsroomFact marks official institution claims as OFFICIAL_CLAIM", () => {
+  const result = classifyNewsroomFact(
+    "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+
+  assert.strictEqual(result.classification, "OFFICIAL_CLAIM");
+  assert.strictEqual(result.verification_needed, true);
+  assert(result.recommended_sources.includes("Kemendagri"));
+});
+
+runTest("formatFactClassificationTable renders required output section", () => {
+  const result = classifyNewsroomFact(
+    "Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+  const table = formatFactClassificationTable([result]);
+
+  assert(table.includes("## Fact Classification Table"));
+  assert(table.includes("| Statement | Type | Confidence | Verification | Sources |"));
+  assert(table.includes("| Papua Selatan memperoleh penghargaan Rp3 miliar |"));
+});
+
+runTest("formatEvidenceMatrix renders Evidence Matrix", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const matrix = formatEvidenceMatrix(evidence);
+
+  assert(matrix.includes("## Evidence Matrix"));
+  assert(
+    matrix.includes(
+      "| Statement | evidence_found | evidence_missing | evidence_strength | Evidence Score |",
+    ),
+  );
+  assert(matrix.includes("Official Statement"));
+});
+
+runTest("formatEvidenceMatrix renders Evidence Score", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut BPS, angka kemiskinan turun 2 persen berdasarkan data statistik",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const matrix = formatEvidenceMatrix(evidence);
+
+  assert(matrix.includes("## Evidence Score"));
+  assert(/Overall Evidence Score: \d+%/.test(matrix));
+});
+
+runTest("formatEvidenceMatrix renders Missing Evidence recommendations", () => {
+  const fact = classifyNewsroomFact(
+    "Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const matrix = formatEvidenceMatrix(evidence);
+
+  assert(matrix.includes("## Missing Evidence Recommendations"));
+  assert(evidence.evidence_missing.includes("Official Document"));
+  assert(evidence.evidence_missing.includes("Statistical Data"));
+  assert(matrix.includes("Tambahkan dokumen resmi"));
+});
+
+runTest(
+  "buildNewsroomPrompt starts AI output at Executive Summary only",
+  () => {
+    const prompt = buildNewsroomPrompt({
+      topic: "Papua Selatan memperoleh penghargaan Rp3 miliar",
+      layer: "Strategic",
+      mode: "Analysis",
+      audience: "Editor",
+      complexity: "High",
+      evidenceMatrix: "## Evidence Matrix\nbackend-rendered",
+      factClassificationTable: "## Fact Classification Table\nbackend-rendered",
+    });
+
+    assert(
+      prompt.includes("1. Executive Summary"),
+      "prompt output format must start from Executive Summary",
+    );
+    assert(
+      !prompt.includes("1. Evidence Matrix"),
+      "prompt must not ask AI to regenerate Evidence Matrix",
+    );
+    assert(
+      !prompt.includes("Evidence Matrix awal:"),
+      "prompt must not include backend Evidence Matrix for regeneration",
+    );
+    assert(
+      !prompt.includes("Fact Classification Table awal:"),
+      "prompt must not include backend Fact Classification Table for regeneration",
+    );
+    assert(
+      prompt.includes("Jangan tulis ulang section Source Quality Matrix."),
+      "prompt must forbid duplicated Source Quality Matrix output",
+    );
+    assert(
+      prompt.includes("Jangan tulis ulang section Confidence Analysis."),
+      "prompt must forbid duplicated Confidence Analysis output",
+    );
+  },
+);
+
+runTest("formatSourceQualityMatrix renders Source Quality Matrix", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+  const matrix = formatSourceQualityMatrix(sourceQuality);
+
+  assert(matrix.includes("## Source Quality Matrix"));
+  assert(matrix.includes("| Source | Trust Level | Source Quality Score |"));
+  assert(/Overall Source Quality Score: \d+%/.test(matrix));
+});
+
+runTest("buildSourceQualityEngine scores official source high", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+
+  assert(sourceQuality.source_quality_score >= 90);
+  assert.strictEqual(sourceQuality.source_quality_level, "HIGH");
+});
+
+runTest("buildSourceQualityEngine scores user input only low", () => {
+  const fact = classifyNewsroomFact("Warga menyebut layanan publik membaik", {
+    topic: "Warga menyebut layanan publik membaik",
+    userInput: true,
+  });
+  const evidence = buildEvidenceEngine([fact], { userInput: true });
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+
+  assert(sourceQuality.source_quality_score <= 20);
+  assert.strictEqual(sourceQuality.source_quality_level, "LOW");
+});
+
+runTest("buildSourceQualityEngine scores social media low", () => {
+  const fact = classifyNewsroomFact("Unggahan Facebook menyebut antrean layanan panjang");
+  const evidence = buildEvidenceEngine([fact]);
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+
+  assert(sourceQuality.source_quality_score <= 35);
+  assert.strictEqual(sourceQuality.source_quality_level, "LOW");
+});
+
+runTest("formatConfidenceAnalysis renders Confidence Analysis", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut BPS dan Kemendagri, angka kemiskinan turun 2 persen berdasarkan data statistik pada portal bps.go.id",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+  const confidence = buildConfidenceEngine({
+    evidence,
+    sourceQuality,
+    factClassifications: [fact],
+  });
+  const section = formatConfidenceAnalysis(confidence);
+
+  assert(section.includes("## Confidence Analysis"));
+  assert(section.includes("Overall Confidence Score:"));
+  assert(section.includes("Confidence Level:"));
+  assert(section.includes("### Confidence Explanation"));
+});
+
+runTest("buildConfidenceEngine scores official sources as high confidence", () => {
+  const fact = classifyNewsroomFact(
+    "Menurut BPS dan Kemendagri, angka kemiskinan turun 2 persen berdasarkan data statistik pada portal bps.go.id",
+  );
+  const evidence = buildEvidenceEngine([fact]);
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+  const confidence = buildConfidenceEngine({
+    evidence,
+    sourceQuality,
+    factClassifications: [fact],
+  });
+
+  assert(confidence.confidence_score >= 75);
+  assert(["HIGH", "VERY HIGH"].includes(confidence.confidence_level));
+});
+
+runTest("buildConfidenceEngine scores user input only as low confidence", () => {
+  const fact = classifyNewsroomFact("Warga menyebut layanan publik membaik", {
+    topic: "Warga menyebut layanan publik membaik",
+    userInput: true,
+  });
+  const evidence = buildEvidenceEngine([fact], { userInput: true });
+  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+  const confidence = buildConfidenceEngine({
+    evidence,
+    sourceQuality,
+    factClassifications: [fact],
+  });
+
+  assert(confidence.confidence_score < 60);
+  assert(["LOW", "VERY LOW"].includes(confidence.confidence_level));
+});
+
+runTest("buildConfidenceEngine calculates mixed source confidence", () => {
+  const facts = [
+    classifyNewsroomFact(
+      "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+    ),
+    classifyNewsroomFact(
+      "Program ini diprediksi akan meningkatkan ekonomi daerah",
+    ),
+    classifyNewsroomFact("Unggahan Facebook menyebut antrean layanan panjang"),
+  ];
+  const evidence = buildEvidenceEngine(facts);
+  const sourceQuality = buildSourceQualityEngine(facts, evidence);
+  const confidence = buildConfidenceEngine({
+    evidence,
+    sourceQuality,
+    factClassifications: facts,
+  });
+  const breakdown = confidence.confidence_breakdown;
+  const expectedScore = Math.round(
+    breakdown.evidence_score * 0.4 +
+      breakdown.source_quality_score * 0.3 +
+      breakdown.fact_classification_score * 0.2 +
+      breakdown.verification_score * 0.1,
+  );
+
+  assert.strictEqual(confidence.confidence_score, expectedScore);
+  assert(confidence.confidence_score > 0);
+  assert(confidence.confidence_score < 100);
+});
+
+runTest("normalizeOpenRouterModel skips null and empty values", () => {
+  assert.strictEqual(normalizeOpenRouterModel(null), "");
+  assert.strictEqual(normalizeOpenRouterModel(undefined), "");
+  assert.strictEqual(normalizeOpenRouterModel(""), "");
+  assert.strictEqual(normalizeOpenRouterModel("null"), "");
+  assert.strictEqual(normalizeOpenRouterModel("undefined"), "");
+});
+
+runTest("isValidOpenRouterModel rejects :free variants and duplicates", () => {
+  assert.strictEqual(isValidOpenRouterModel("openrouter/auto"), true);
+  assert.strictEqual(
+    isValidOpenRouterModel("qwen/qwen3-235b-a22b:free"),
+    false,
+  );
+  assert.strictEqual(
+    isValidOpenRouterModel(" qwen/qwen3-235b-a22b:free "),
+    false,
+  );
+});
+
+runTest(
+  "getOpenRouterModels returns safe default and removes invalid fallback",
+  () => {
+    const original = process.env.OPENROUTER_MODEL;
+    process.env.OPENROUTER_MODEL = "null";
+    try {
+      const models = getOpenRouterModels();
+      assert(Array.isArray(models), "models should be an array");
+      assert.strictEqual(
+        models[0],
+        "deepseek/deepseek-chat-v3",
+        "default model should be used when configured model is invalid",
+      );
+      assert(
+        !models.some((m) => /:free\b/.test(m)),
+        "no :free variant should remain in the model list",
+      );
+    } finally {
+      process.env.OPENROUTER_MODEL = original;
+    }
+  },
+);
+
+if (process.exitCode === 1) {
+  process.exit(1);
+}

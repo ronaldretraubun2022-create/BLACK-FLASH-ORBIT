@@ -1,11 +1,20 @@
 import { supabase } from "../lib/supabase";
+import {
+  clearAuthSessionAndRedirect,
+  createSessionExpiredError,
+  recoverStaleRefreshToken,
+} from "../lib/authRecovery";
 import { normalizePromptCategory } from "../data/promptCategories";
+import apiUrlUtils from "./apiUrlUtils.cjs";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_WINDOW_MS = 60000;
-const API_BASE_URL =
-  String(import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/+$/, "") ||
-  "/api";
+const LOCAL_DEV_API_PORT = "5000";
+// Use IPv4 loopback in dev so Windows does not resolve localhost to ::1
+// when the Node server is listening on 127.0.0.1/IPv4 only.
+const LOCAL_DEV_API_BASE_URL = "http://127.0.0.1:5000/api";
+const API_BASE_URL = normalizeApiBaseUrl(getConfiguredApiBaseUrl());
+const AUTH_PROVIDER_UNAVAILABLE_CODE = "AUTH_PROVIDER_UNAVAILABLE";
 
 const AUTH_FAILURE_CODES = new Set([
   "missing_authorization",
@@ -13,6 +22,26 @@ const AUTH_FAILURE_CODES = new Set([
   "invalid_supabase_token",
   "invalid_supabase_user",
 ]);
+const PUBLIC_API_PATHS = new Set(["/api/health", "/api/v1/health"]);
+const KNOWLEDGE_API_PREFIX = "/api/v1/knowledge";
+const { getApiPathSuffix, joinApiUrl, normalizeApiBaseUrl, normalizeApiPath } =
+  apiUrlUtils;
+
+function createQueryString(params = {}) {
+  const searchParams = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    const cleanValue = String(value || "").trim();
+
+    if (cleanValue) {
+      searchParams.set(key, cleanValue);
+    }
+  });
+
+  const queryString = searchParams.toString();
+
+  return queryString ? `?${queryString}` : "";
+}
 
 function requireAccessToken(accessToken) {
   if (typeof accessToken !== "string" || !accessToken.trim()) {
@@ -27,16 +56,20 @@ async function getSupabaseAccessToken() {
     throw new Error("Supabase environment belum dikonfigurasi.");
   }
 
-  let session = await getSessionFromSupabaseAuth();
+  try {
+    let session = await getSessionFromSupabaseAuth();
 
-  if (shouldRefreshSession(session)) {
-    await refreshSupabaseSession();
-    session = await getSessionFromSupabaseAuth();
+    if (shouldRefreshSession(session)) {
+      await refreshSupabaseSession();
+      session = await getSessionFromSupabaseAuth();
+    }
+
+    logFrontendAuthDebug(session);
+
+    return requireAccessToken(session?.access_token);
+  } catch (error) {
+    await throwRecoveredAuthError(error);
   }
-
-  logFrontendAuthDebug(session);
-
-  return requireAccessToken(session?.access_token);
 }
 
 export async function getAuthenticatedHeaders() {
@@ -45,6 +78,10 @@ export async function getAuthenticatedHeaders() {
   return {
     Authorization: `Bearer ${accessToken}`,
   };
+}
+
+function isKnowledgeApiRequestUrl(requestUrl) {
+  return getRequestPathname(requestUrl).startsWith(KNOWLEDGE_API_PREFIX);
 }
 
 async function getSessionFromSupabaseAuth() {
@@ -72,13 +109,23 @@ async function refreshSupabaseSession() {
   const { data, error } = await supabase.auth.refreshSession();
 
   if (error) {
-    throw error;
+    await throwRecoveredAuthError(error);
   }
 
   return data.session ?? null;
 }
 
+async function throwRecoveredAuthError(error) {
+  if (await recoverStaleRefreshToken(error)) {
+    throw createSessionExpiredError();
+  }
+
+  throw error;
+}
+
 function logFrontendAuthDebug(session) {
+  if (import.meta.env.VITE_ENABLE_AUTH_DEBUG !== "true") return;
+
   const accessToken = session?.access_token || "";
 
   console.info("[AI Auth Frontend]", {
@@ -90,12 +137,7 @@ function logFrontendAuthDebug(session) {
 }
 
 function getApiErrorMessage(errorBody, status) {
-  const candidates = [
-    errorBody?.message,
-    errorBody?.error,
-    errorBody?.providerError?.message,
-    errorBody?.providerError?.metadata?.raw,
-  ]
+  const candidates = [errorBody?.message, errorBody?.error]
     .filter(Boolean)
     .map((value) => formatErrorValue(value))
     .filter(Boolean);
@@ -120,28 +162,129 @@ function formatErrorValue(value) {
 }
 
 function isAuthFailureResponse(errorBody, status) {
-  const code = String(errorBody?.code || "").toLowerCase();
+  const code = getApiErrorCode(errorBody).toLowerCase();
+  const message = getApiErrorMessage(errorBody, status).toLowerCase();
 
-  return status === 401 && AUTH_FAILURE_CODES.has(code);
+  return (
+    status === 401 &&
+    (AUTH_FAILURE_CODES.has(code) ||
+      message.includes("missing bearer token") ||
+      message.includes("invalid or expired token"))
+  );
+}
+
+function getApiErrorCode(errorBody) {
+  return String(errorBody?.code || "").trim();
+}
+
+export function isAuthProviderUnavailableResponse(errorBody, status) {
+  return (
+    status === 503 &&
+    getApiErrorCode(errorBody).toUpperCase() === AUTH_PROVIDER_UNAVAILABLE_CODE
+  );
+}
+
+export function isAuthProviderUnavailableError(error) {
+  return (
+    error?.code === AUTH_PROVIDER_UNAVAILABLE_CODE ||
+    isAuthProviderUnavailableResponse(error?.body, error?.status)
+  );
 }
 
 async function request(path, options = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const requestUrl = resolveApiUrl(path);
+  const hasFormDataBody =
+    typeof FormData !== "undefined" && options.body instanceof FormData;
+  const {
+    auth,
+    headers: optionHeaders,
+    redirectOnAuthFailure = true,
+    retryOnAuthFailure = true,
+    signal: externalSignal,
+    ...fetchOptions
+  } = options;
+  // Forward route/component aborts into the same controller so unmounts and
+  // manual cancels stop the fetch without losing the built-in timeout guard.
+  const handleExternalAbort = () => controller.abort();
+  let hasRetriedAuth = false;
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      externalSignal.addEventListener("abort", handleExternalAbort, {
+        once: true,
+      });
+    }
+  }
+
+  logApiRequestUrl(path, requestUrl);
 
   try {
-    const response = await fetch(resolveApiUrl(path), {
-      ...options,
-      headers: {
-        Accept: "application/json",
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
-        ...options.headers,
-      },
-      signal: controller.signal,
-    });
-    const data = await parseJsonResponse(response);
+    if (isKnowledgeApiRequestUrl(requestUrl)) {
+      fetchOptions.cache = "no-store";
+    } else if (
+      fetchOptions.cache === undefined &&
+      shouldForceNoStore(requestUrl)
+    ) {
+      fetchOptions.cache = "no-store";
+    }
 
-    if (!response.ok && response.status !== 304) {
+    const shouldHandleAuthFailure = shouldHandleAuthenticationFailure({
+      auth,
+      optionHeaders,
+      requestUrl,
+    });
+    let headers = await createRequestHeaders({
+      auth,
+      hasFormDataBody,
+      optionHeaders,
+      options,
+      requestUrl,
+    });
+
+    while (true) {
+      const response = await fetch(requestUrl, {
+        ...fetchOptions,
+        headers,
+        signal: controller.signal,
+      });
+      const data = await parseJsonResponse(response);
+
+      if (isKnowledgeApiRequestUrl(requestUrl) && import.meta.env.DEV) {
+        console.info("[Knowledge API]", {
+          method: String(fetchOptions.method || "GET").toUpperCase(),
+          hasBearerToken: headers.has("Authorization"),
+          status: response.status,
+          url: getPrintableRequestUrl(requestUrl),
+        });
+      }
+
+      if (response.ok || response.status === 304) {
+        return data;
+      }
+
+      if (
+        shouldHandleAuthFailure &&
+        retryOnAuthFailure &&
+        !hasRetriedAuth &&
+        isAuthFailureResponse(data, response.status)
+      ) {
+        hasRetriedAuth = true;
+        headers = await createRetriedAuthHeaders(headers);
+        continue;
+      }
+
+      if (
+        shouldHandleAuthFailure &&
+        redirectOnAuthFailure &&
+        isAuthFailureResponse(data, response.status)
+      ) {
+        await clearAuthSessionAndRedirect();
+      }
+
       const message = getApiErrorMessage(data, response.status);
 
       throw new ApiRequestError(message, {
@@ -149,17 +292,110 @@ async function request(path, options = {}) {
         status: response.status,
       });
     }
-
-    return data;
   } catch (error) {
     if (error.name === "AbortError") {
+      if (externalSignal?.aborted) {
+        // Preserve the real abort reason for callers that intentionally
+        // canceled the request; only non-abort failures are converted below.
+        throw error;
+      }
+
       throw new Error("API request timed out.");
     }
 
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    if (externalSignal) {
+      externalSignal.removeEventListener("abort", handleExternalAbort);
+    }
   }
+}
+
+async function createRequestHeaders({
+  auth,
+  hasFormDataBody,
+  optionHeaders,
+  options,
+  requestUrl,
+}) {
+  const headers = new Headers(optionHeaders || {});
+
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
+  }
+
+  if (options.body && !hasFormDataBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  if (shouldAttachAuthorizationHeader({ auth, headers, requestUrl })) {
+    const authHeaders = await getAuthenticatedHeaders();
+
+    Object.entries(authHeaders).forEach(([key, value]) => {
+      headers.set(key, value);
+    });
+  }
+
+  return headers;
+}
+
+function shouldAttachAuthorizationHeader({ auth, headers, requestUrl }) {
+  if (auth === false || headers.has("Authorization")) return false;
+  if (auth === true) return true;
+
+  return isProtectedApiRequestUrl(requestUrl);
+}
+
+function shouldHandleAuthenticationFailure({
+  auth,
+  optionHeaders,
+  requestUrl,
+}) {
+  if (auth === false) return false;
+  if (auth === true || isProtectedApiRequestUrl(requestUrl)) return true;
+
+  return new Headers(optionHeaders || {}).has("Authorization");
+}
+
+function isProtectedApiRequestUrl(requestUrl) {
+  const pathname = getRequestPathname(requestUrl);
+
+  if (!pathname.startsWith("/api/")) return false;
+
+  return !PUBLIC_API_PATHS.has(pathname);
+}
+
+function shouldForceNoStore(requestUrl) {
+  return isProtectedApiRequestUrl(requestUrl);
+}
+
+function getRequestPathname(requestUrl) {
+  try {
+    const url = /^https?:\/\//i.test(requestUrl)
+      ? new URL(requestUrl)
+      : new URL(requestUrl, "http://orbit.local");
+
+    return normalizeApiPath(url.pathname);
+  } catch {
+    const cleanPath = String(requestUrl || "").startsWith("/")
+      ? String(requestUrl || "")
+      : `/${requestUrl || ""}`;
+
+    return normalizeApiPath(cleanPath);
+  }
+}
+
+async function createRetriedAuthHeaders(previousHeaders) {
+  const refreshedSession = await refreshSupabaseSession();
+  const session = refreshedSession || (await getSessionFromSupabaseAuth());
+  const accessToken = requireAccessToken(session?.access_token);
+  const headers = new Headers(previousHeaders || {});
+
+  logFrontendAuthDebug(session);
+  headers.set("Authorization", `Bearer ${accessToken}`);
+
+  return headers;
 }
 
 async function parseJsonResponse(response) {
@@ -211,19 +447,92 @@ async function parseJsonResponse(response) {
   }
 }
 
-function resolveApiUrl(path) {
+export function resolveApiUrl(path) {
   if (/^https?:\/\//i.test(path)) return path;
 
   const cleanPath = String(path || "").startsWith("/")
     ? String(path || "")
     : `/${path || ""}`;
 
-  if (cleanPath === "/api") return API_BASE_URL;
-  if (cleanPath.startsWith("/api/")) {
-    return `${API_BASE_URL}${cleanPath.slice(4)}`;
+  return joinApiUrl(getRuntimeApiBaseUrl(), getApiPathSuffix(cleanPath));
+}
+
+function getConfiguredApiBaseUrl() {
+  const configuredBaseUrl = String(
+    import.meta.env.VITE_API_BASE_URL || "",
+  ).trim();
+
+  return configuredBaseUrl || "/api";
+}
+
+function getRuntimeApiBaseUrl() {
+  if (API_BASE_URL === "/api" && isDevelopmentFrontendOrigin()) {
+    return getDevelopmentApiBaseUrl();
   }
 
-  return `${API_BASE_URL}${cleanPath}`;
+  return API_BASE_URL;
+}
+
+function getDevelopmentApiBaseUrl() {
+  if (typeof window === "undefined") return LOCAL_DEV_API_BASE_URL;
+
+  const hostname = window.location.hostname;
+
+  if (!isDevelopmentHostname(hostname)) {
+    return LOCAL_DEV_API_BASE_URL;
+  }
+
+  return `http://127.0.0.1:${LOCAL_DEV_API_PORT}/api`;
+}
+
+function isDevelopmentFrontendOrigin() {
+  if (typeof window === "undefined") return false;
+
+  return isDevelopmentHostname(window.location.hostname);
+}
+
+function isDevelopmentHostname(hostname) {
+  if (isLocalhostHostname(hostname)) return true;
+
+  const cleanHostname = String(hostname || "").toLowerCase();
+  const parts = cleanHostname.split(".").map((part) => Number(part));
+
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    return false;
+  }
+
+  const [first, second] = parts;
+
+  return (
+    first === 10 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isLocalhostHostname(hostname) {
+  const cleanHostname = String(hostname || "").toLowerCase();
+
+  return cleanHostname === "localhost" || cleanHostname === "127.0.0.1";
+}
+
+function getPrintableRequestUrl(requestUrl) {
+  if (/^https?:\/\//i.test(requestUrl)) return requestUrl;
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return new URL(requestUrl, window.location.origin).href;
+  }
+
+  return requestUrl;
+}
+
+function logApiRequestUrl(path, requestUrl) {
+  if (import.meta.env.VITE_ENABLE_API_DEBUG !== "true") return;
+
+  console.info("[ORBIT API Request]", {
+    path,
+    url: getPrintableRequestUrl(requestUrl),
+  });
 }
 
 class ApiRequestError extends Error {
@@ -231,6 +540,7 @@ class ApiRequestError extends Error {
     super(message);
     this.name = "ApiRequestError";
     this.body = body;
+    this.code = getApiErrorCode(body);
     this.status = status;
   }
 }
@@ -275,32 +585,157 @@ export const api = {
     }
   },
 
-  getSystem() {
-    return request("/api/v1/system");
+  async getProfile({ signal } = {}) {
+    return request("/api/v1/profile", {
+      auth: true,
+      signal,
+    });
   },
 
-  getMetrics() {
-    return request("/api/v1/metrics");
+  async getSystem() {
+    return request("/api/v1/system", {
+      headers: await getAuthenticatedHeaders(),
+    });
   },
 
-  getActivity() {
-    return request("/api/v1/activity");
+  async getMetrics() {
+    return request("/api/v1/metrics", {
+      headers: await getAuthenticatedHeaders(),
+    });
   },
 
-  getProjects() {
-    return request("/api/v1/projects");
+  async getActivity() {
+    return request("/api/v1/activity", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async getProjects() {
+    return request("/api/v1/projects", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async getWebBuilderProjects() {
+    const response = await request("/api/v1/web-builder/projects", {
+      headers: await getAuthenticatedHeaders(),
+    });
+
+    return Array.isArray(response?.data) ? response.data : [];
+  },
+
+  async createWebBuilderProject(payload) {
+    return request("/api/v1/web-builder/projects", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getWebBuilderProject(projectId) {
+    return request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`,
+      {
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
+  async updateWebBuilderProject(projectId, payload) {
+    return request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`,
+      {
+        method: "PATCH",
+        headers: await getAuthenticatedHeaders(),
+        body: JSON.stringify(payload),
+      },
+    );
+  },
+
+  async deleteWebBuilderProject(projectId) {
+    return request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`,
+      {
+        method: "DELETE",
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
+  async getWebBuilderPages(projectId) {
+    const response = await request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}/pages`,
+      {
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+
+    return Array.isArray(response?.data) ? response.data : [];
+  },
+
+  async createWebBuilderPage(projectId, payload) {
+    return request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}/pages`,
+      {
+        method: "POST",
+        headers: await getAuthenticatedHeaders(),
+        body: JSON.stringify(payload),
+      },
+    );
+  },
+
+  async exportWebBuilderProject(projectId) {
+    return request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}/export`,
+      {
+        method: "POST",
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
+  async getWebBuilderPage(pageId) {
+    return request(`/api/v1/web-builder/pages/${encodeURIComponent(pageId)}`, {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async updateWebBuilderPage(pageId, payload) {
+    return request(`/api/v1/web-builder/pages/${encodeURIComponent(pageId)}`, {
+      method: "PATCH",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteWebBuilderPage(pageId) {
+    return request(`/api/v1/web-builder/pages/${encodeURIComponent(pageId)}`, {
+      method: "DELETE",
+      headers: await getAuthenticatedHeaders(),
+    });
   },
 
   async getSecurity() {
-    return normalizeSecurity(await request("/api/v1/security"));
+    return normalizeSecurity(
+      await request("/api/v1/security", {
+        headers: await getAuthenticatedHeaders(),
+      }),
+    );
   },
 
-  getDashboardStatus() {
-    return request("/api/v1/dashboard/status");
+  async getDashboardStatus({ signal } = {}) {
+    return request("/api/v1/dashboard/status", {
+      headers: await getAuthenticatedHeaders(),
+      signal,
+    });
   },
 
   async getReports() {
-    return normalizeReports(await request("/api/v1/reports"));
+    return normalizeReports(
+      await request("/api/v1/reports", {
+        headers: await getAuthenticatedHeaders(),
+      }),
+    );
   },
 
   async getPromptCategories() {
@@ -309,26 +744,117 @@ export const api = {
     });
   },
 
-  async getPrompts() {
+  async getPrompts({ category, search } = {}) {
+    return request(
+      `/api/v1/prompts${createQueryString({ category, search })}`,
+      {
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
+  async createPrompt({
+    category,
+    content,
+    isFavorite = false,
+    isPinned = false,
+    title,
+  }) {
     return request("/api/v1/prompts", {
       headers: await getAuthenticatedHeaders(),
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        content,
+        category: normalizePromptCategory(category),
+        isFavorite,
+        isPinned,
+      }),
     });
   },
 
-  async createPrompt({ category, content, title }) {
-    return request("/api/v1/prompts", {
-      method: "POST",
+  async updatePrompt({
+    category,
+    content,
+    id,
+    isFavorite = false,
+    isPinned = false,
+    title,
+  }) {
+    return request(`/api/v1/prompts/${id}`, {
+      method: "PUT",
       headers: await getAuthenticatedHeaders(),
       body: JSON.stringify({
         title,
         content,
         category: normalizePromptCategory(category),
+        isFavorite,
+        isPinned,
       }),
     });
   },
 
+  async togglePromptFavorite({ id, isFavorite }) {
+    return request(`/api/v1/prompts/${id}/favorite`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify({
+        isFavorite,
+      }),
+    });
+  },
+
+  async togglePromptPin({ id, isPinned }) {
+    return request(`/api/v1/prompts/${id}/pin`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify({
+        isPinned,
+      }),
+    });
+  },
+
+  async duplicatePrompt(id) {
+    return request(`/api/v1/prompts/${id}/duplicate`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async markPromptUsed(id) {
+    return request(`/api/v1/prompts/${id}/use`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async exportPrompts() {
+    return request("/api/v1/prompts/export", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async importPrompts(payload) {
+    return request("/api/v1/prompts/import", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deletePrompt(id) {
+    return request(`/api/v1/prompts/${id}`, {
+      method: "DELETE",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
   async getAutomation() {
-    return normalizeAutomation(await request("/api/v1/automation"));
+    return normalizeAutomation(
+      await request("/api/v1/automation", {
+        headers: await getAuthenticatedHeaders(),
+      }),
+    );
   },
 
   async getAutomationStatus() {
@@ -370,6 +896,62 @@ export const api = {
       security,
       system,
     };
+  },
+
+  async getKnowledgeDocuments() {
+    const response = await request("/api/v1/knowledge/documents", {
+      headers: await getAuthenticatedHeaders(),
+    });
+
+    return Array.isArray(response?.data) ? response.data : [];
+  },
+
+  async createKnowledgeDocument(payload) {
+    return request("/api/v1/knowledge/documents", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateKnowledgeDocument(documentId, payload) {
+    return request(`/api/v1/knowledge/documents/${documentId}`, {
+      method: "PUT",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async patchKnowledgeDocument(documentId, payload) {
+    return request(`/api/v1/knowledge/documents/${documentId}`, {
+      method: "PATCH",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteKnowledgeDocument(documentId) {
+    return request(`/api/v1/knowledge/documents/${documentId}`, {
+      method: "DELETE",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async uploadKnowledgeDocument(formData) {
+    return request("/api/v1/knowledge/upload", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: formData,
+    });
+  },
+
+  async askKnowledge(payload, { signal } = {}) {
+    return request("/api/v1/knowledge/ask", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+      signal,
+    });
   },
 
   async sendAiChat({ history, message, model, sessionId, systemPrompt }) {

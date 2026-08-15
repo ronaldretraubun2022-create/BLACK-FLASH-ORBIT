@@ -1,0 +1,12 @@
+require("./requireAdmin.test.js");
+require("./errorHandler.test.js");
+require("./knowledgeRls.test.js");
+require("./frontendApiUrl.test.js");
+require("./aiResponseValidator.test.js");
+require("./frontendMockHygiene.test.js");
+require("./aiRouter.test.js");
+require("./aiRouteCompatibility.test.js");
+require("./newsroomPromptEngine.test.js");
+require("./newsroomVerification.test.js");
+require("./newsroomIntelligenceSummary.test.js");
+require("./newsroomHistory.test.js");

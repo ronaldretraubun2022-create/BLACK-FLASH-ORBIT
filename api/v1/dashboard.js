@@ -1,13 +1,22 @@
-﻿module.exports = function handler(req, res) {
-  res.statusCode = 200;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({
-    success: true,
-    status: "ready",
-    module: "dashboard",
-    data: [],
-    metrics: {},
-    message: "Tidak ada issue aktif dari endpoint dashboard.",
-    timestamp: new Date().toISOString()
-  }));
-};
+const {
+  createDashboardResponse,
+  sendJson,
+  withTelemetryAuth,
+} = require("../../server/lib/orbitDashboardTelemetry");
+
+function handler(req, res) {
+  if (req.method && req.method !== "GET") {
+    return sendJson(
+      res,
+      {
+        success: false,
+        message: "Method not allowed.",
+      },
+      405,
+    );
+  }
+
+  return sendJson(res, createDashboardResponse());
+}
+
+module.exports = withTelemetryAuth(handler);

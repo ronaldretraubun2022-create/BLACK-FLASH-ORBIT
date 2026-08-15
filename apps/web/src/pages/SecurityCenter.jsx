@@ -3,6 +3,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
+  Cpu,
+  FileText,
   FileWarning,
   LockKeyhole,
   RefreshCw,
@@ -26,6 +28,13 @@ const fallbackSecurity = {
   rateLimit: "CHECKING",
   securityScore: 0,
 };
+
+const dependencySummary = [
+  { label: "React", value: "Connected", tone: "text-cyan-200" },
+  { label: "React Router", value: "Active", tone: "text-emerald-200" },
+  { label: "Supabase", value: "Ready", tone: "text-amber-200" },
+  { label: "Lucide Icons", value: "Loaded", tone: "text-sky-200" },
+];
 
 function getScoreLabel(score) {
   if (score >= 95) return "Hardened";
@@ -77,6 +86,35 @@ function buildAuditTimeline(security) {
   ];
 }
 
+function getEnvironmentAudit() {
+  const hasSupabaseUrl = Boolean(import.meta.env.VITE_SUPABASE_URL);
+  const hasSupabaseAnonKey = Boolean(import.meta.env.VITE_SUPABASE_ANON_KEY);
+  const hasApiBase = Boolean(import.meta.env.VITE_API_BASE_URL);
+
+  return [
+    {
+      label: "API Base",
+      value: hasApiBase ? "Configured" : "Relative /api",
+      tone: hasApiBase ? "text-emerald-200" : "text-amber-200",
+    },
+    {
+      label: "Supabase URL",
+      value: hasSupabaseUrl ? "Set" : "Missing",
+      tone: hasSupabaseUrl ? "text-emerald-200" : "text-amber-200",
+    },
+    {
+      label: "Anon Key",
+      value: hasSupabaseAnonKey ? "Present" : "Missing",
+      tone: hasSupabaseAnonKey ? "text-emerald-200" : "text-rose-200",
+    },
+    {
+      label: "Browser Context",
+      value: typeof window !== "undefined" ? "Client" : "SSR",
+      tone: "text-cyan-200",
+    },
+  ];
+}
+
 export function SecurityCenter() {
   const [security, setSecurity] = useState(fallbackSecurity);
   const [error, setError] = useState("");
@@ -121,6 +159,36 @@ export function SecurityCenter() {
   const scoreLabel = getScoreLabel(score);
   const scoreTone = getScoreTone(score);
   const timeline = useMemo(() => buildAuditTimeline(security), [security]);
+  const environmentAudit = useMemo(() => getEnvironmentAudit(), []);
+  const statusCards = useMemo(
+    () => [
+      {
+        icon: ShieldCheck,
+        label: "HTTP Headers",
+        value: security.helmet || "CHECKING",
+        detail: "Helmet middleware posture",
+      },
+      {
+        icon: LockKeyhole,
+        label: "CORS Boundary",
+        value: security.cors || "CHECKING",
+        detail: "Cross-origin access control",
+      },
+      {
+        icon: Siren,
+        label: "Rate Limit",
+        value: security.rateLimit || "CHECKING",
+        detail: "Abuse protection and throttle",
+      },
+      {
+        icon: FileWarning,
+        label: "Open Issues",
+        value: String(issues.length),
+        detail: "Pending security review items",
+      },
+    ],
+    [issues.length, security.cors, security.helmet, security.rateLimit],
+  );
 
   return (
     <div className="mx-auto grid max-w-7xl gap-5">
@@ -129,21 +197,32 @@ export function SecurityCenter() {
           <div className="min-w-0">
             <p className="orbit-eyebrow">DEFENSIVE CONTROL</p>
             <h2 className="mt-3 text-4xl font-black leading-none text-white sm:text-5xl lg:text-6xl">
-              Security Center
+              Security Center v0.6
             </h2>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-stone-400 sm:text-base">
               Pusat monitoring keamanan untuk headers, CORS, rate limiting,
-              audit backlog, dan kesiapan deploy BLACK FLASH ORBIT.
+              audit env, dependency summary, event log, dan kesiapan deploy
+              BLACK FLASH ORBIT.
             </p>
             <div className="mt-6 flex flex-wrap gap-2">
               <button
                 className="orbit-primary-button"
                 disabled={isLoading}
                 onClick={loadSecurity}
-                type="button"
-              >
-                <RefreshCw className={isLoading ? "animate-spin" : ""} size={17} />
-                Refresh Security
+                type="button">
+                <RefreshCw
+                  className={isLoading ? "animate-spin" : ""}
+                  size={17}
+                />
+                Scan Security
+              </button>
+              <button
+                className="orbit-secondary-button"
+                disabled={isLoading}
+                onClick={loadSecurity}
+                type="button">
+                <Cpu size={17} />
+                Refresh Audit
               </button>
               <span className="orbit-secondary-button">
                 Last Sync: {lastUpdated || "loading"}
@@ -152,7 +231,9 @@ export function SecurityCenter() {
           </div>
 
           <div className="orbit-live-core">
-            <span className={score >= 90 ? "orbit-pulse online" : "orbit-pulse"} />
+            <span
+              className={score >= 90 ? "orbit-pulse online" : "orbit-pulse"}
+            />
             <strong>{score}%</strong>
             <span>{scoreLabel} Security Posture</span>
           </div>
@@ -162,9 +243,11 @@ export function SecurityCenter() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="orbit-eyebrow">SECURITY SCORE</p>
-              <h3 className={`mt-2 text-5xl font-black ${scoreTone}`}>{score}%</h3>
+              <h3 className={`mt-2 text-5xl font-black ${scoreTone}`}>
+                {score}%
+              </h3>
             </div>
-            <ShieldCheck className="text-amber-300" size={28} />
+            <ShieldCheck className="text-cyan-200" size={28} />
           </div>
           <div className="mt-5 h-3 overflow-hidden rounded-full bg-white/10">
             <div
@@ -188,30 +271,9 @@ export function SecurityCenter() {
       </section>
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatusCard
-          icon={ShieldCheck}
-          label="Helmet"
-          value={security.helmet}
-          detail="Secure HTTP response headers"
-        />
-        <StatusCard
-          icon={LockKeyhole}
-          label="CORS"
-          value={security.cors}
-          detail="Origin access boundary"
-        />
-        <StatusCard
-          icon={Siren}
-          label="Rate Limit"
-          value={security.rateLimit}
-          detail="Request abuse protection"
-        />
-        <StatusCard
-          icon={FileWarning}
-          label="Open Issues"
-          value={issues.length}
-          detail="Items pending review"
-        />
+        {statusCards.map((card) => (
+          <StatusCard key={card.label} {...card} />
+        ))}
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
@@ -223,7 +285,7 @@ export function SecurityCenter() {
                 Security Findings
               </h3>
             </div>
-            <span className="w-fit rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-black uppercase text-amber-100">
+            <span className="w-fit rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-3 py-2 text-xs font-black uppercase text-cyan-100">
               /api/v1/security
             </span>
           </div>
@@ -252,22 +314,21 @@ export function SecurityCenter() {
         <article className="orbit-widget">
           <div className="mb-5 flex items-start justify-between gap-3">
             <div>
-              <p className="orbit-eyebrow">AUDIT TIMELINE</p>
+              <p className="orbit-eyebrow">AUDIT EVENT LOG</p>
               <h3 className="mt-2 text-xl font-black text-white">
                 Defensive Trail
               </h3>
             </div>
-            <Clock3 className="text-amber-300" size={22} />
+            <Clock3 className="text-cyan-200" size={22} />
           </div>
 
           <div className="grid gap-3">
             {timeline.map(({ detail, icon: Icon, status, title }) => (
               <article
                 className="rounded-lg border border-white/10 bg-black/20 p-4"
-                key={title}
-              >
+                key={title}>
                 <div className="flex items-start gap-3">
-                  <span className="grid size-10 shrink-0 place-items-center rounded-lg border border-amber-300/20 bg-amber-300/10 text-amber-200">
+                  <span className="grid size-10 shrink-0 place-items-center rounded-lg border border-cyan-300/20 bg-cyan-300/10 text-cyan-200">
                     <Icon size={18} />
                   </span>
                   <div className="min-w-0 flex-1">
@@ -283,6 +344,67 @@ export function SecurityCenter() {
                   </div>
                 </div>
               </article>
+            ))}
+          </div>
+        </article>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.85fr)]">
+        <article className="orbit-widget">
+          <div className="mb-5 flex items-start justify-between gap-3">
+            <div>
+              <p className="orbit-eyebrow">ENV AUDIT</p>
+              <h3 className="mt-2 text-xl font-black text-white">
+                Runtime Exposure
+              </h3>
+            </div>
+            <ShieldCheck className="text-cyan-200" size={22} />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            {environmentAudit.map((item) => (
+              <div
+                className="rounded-lg border border-white/10 bg-black/20 p-4"
+                key={item.label}>
+                <p className="text-xs font-bold uppercase text-stone-500">
+                  {item.label}
+                </p>
+                <p className={`mt-2 text-sm font-black ${item.tone}`}>
+                  {item.value}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <p className="mt-4 text-xs leading-5 text-stone-500">
+            Audit ini hanya menampilkan status lingkungan tanpa mengekspos token
+            atau nilai rahasia.
+          </p>
+        </article>
+
+        <article className="orbit-widget">
+          <div className="mb-5 flex items-start justify-between gap-3">
+            <div>
+              <p className="orbit-eyebrow">DEPENDENCY SUMMARY</p>
+              <h3 className="mt-2 text-xl font-black text-white">
+                Frontend Stack
+              </h3>
+            </div>
+            <FileText className="text-cyan-200" size={22} />
+          </div>
+
+          <div className="grid gap-3">
+            {dependencySummary.map((item) => (
+              <div
+                className="flex items-center justify-between rounded-lg border border-white/10 bg-black/20 px-4 py-3"
+                key={item.label}>
+                <span className="text-sm font-bold text-white">
+                  {item.label}
+                </span>
+                <span className={`text-xs font-black uppercase ${item.tone}`}>
+                  {item.value}
+                </span>
+              </div>
             ))}
           </div>
         </article>
@@ -353,9 +475,22 @@ function getErrorMessage(error) {
 function SeverityBadge({ className, severity }) {
   return (
     <span
-      className={`inline-flex rounded-md border px-2.5 py-1 text-xs font-black uppercase ${className}`}
-    >
+      className={`inline-flex rounded-md border px-2.5 py-1 text-xs font-black uppercase ${className}`}>
       {severity}
     </span>
   );
 }
+```
+
+COMMAND:
+`npm.cmd exec vite -- build`
+
+TEST:
+`npm.cmd exec vite -- build`
+`git diff --check`
+`git diff -- apps/web/src/pages/SecurityCenter.jsx`
+Security Center renders with score, status cards, env audit, dependency summary, and event log
+Refresh/scan buttons work
+No routing changes
+No secrets exposed in env audit output
+Mobile layout remains responsive

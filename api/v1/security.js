@@ -1,13 +1,9 @@
-﻿module.exports = function handler(req, res) {
-  res.statusCode = 200;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({
-    success: true,
-    status: "ready",
-    module: "security",
-    data: [],
-    metrics: {},
-    message: "Module security ready for staging.",
-    timestamp: new Date().toISOString()
-  }));
-};
+const {
+  getOrbitSecurity,
+  sendJson,
+  withTelemetryAuth,
+} = require("../../server/lib/orbitDashboardTelemetry");
+
+module.exports = withTelemetryAuth(function handler(req, res) {
+  sendJson(res, getOrbitSecurity());
+});

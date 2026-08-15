@@ -105,6 +105,32 @@ export function AIWorkspace() {
         .includes(query),
     );
   }, [sessionSearchQuery, sessions]);
+  const latestUserPrompt = useMemo(() => {
+    return [...(messages || [])]
+      .reverse()
+      .find((message) => message?.role === "user")?.content || "";
+  }, [messages]);
+  const latestAssistantResponse = useMemo(() => {
+    return [...(messages || [])]
+      .reverse()
+      .find((message) => message?.role === "assistant")?.content || "";
+  }, [messages]);
+  const workspaceSummary = useMemo(
+    () => ({
+      activeSessionTitle: activeSession?.title || "Prompt Console",
+      latestOutput: latestAssistantResponse || "Output AI akan tampil di sini.",
+      latestPrompt: latestUserPrompt || "Belum ada prompt aktif.",
+      messageCount: messages.length,
+      sessionCount: sessions.length,
+    }),
+    [
+      activeSession?.title,
+      latestAssistantResponse,
+      latestUserPrompt,
+      messages.length,
+      sessions.length,
+    ],
+  );
   const loadSessionMessages = useCallback(async (sessionId) => {
     const targetSessionId = String(sessionId || "").trim();
     const requestId = messageLoadRequestIdRef.current + 1;
@@ -620,7 +646,12 @@ export function AIWorkspace() {
   }
 
   function useLibraryPrompt(libraryPrompt) {
-    setPrompt(libraryPrompt);
+    const promptContent =
+      typeof libraryPrompt === "string"
+        ? libraryPrompt
+        : libraryPrompt?.content || libraryPrompt?.prompt || "";
+
+    setPrompt(promptContent);
   }
 
   function handleExportConversation(format) {
@@ -661,15 +692,29 @@ export function AIWorkspace() {
           AI OPERATIONS
         </p>
         <h2 className="mt-3 text-3xl font-black tracking-tight text-white sm:text-5xl">
-          AI Workspace Professional
+          AI Workspace v0.9
         </h2>
         <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base sm:leading-7">
-          Workspace newsroom untuk multi-model AI, session chat permanen,
-          riwayat Supabase, dan respons OpenRouter real-time.
+          Workspace newsroom untuk chat panel, prompt library, session history,
+          AI tools, context, output, dan settings dalam satu command surface.
         </p>
+        <div className="mt-5 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-200">
+          <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1">
+            {workspaceSummary.activeSessionTitle}
+          </span>
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-slate-200">
+            {selectedModelLabel}
+          </span>
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-slate-200">
+            {workspaceSummary.sessionCount} sessions
+          </span>
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-slate-200">
+            {workspaceSummary.messageCount} messages
+          </span>
+        </div>
       </section>
 
-      <section className="mt-6 grid gap-4 md:grid-cols-3">
+      <section className="mt-6 grid gap-4 md:grid-cols-3 xl:grid-cols-4">
         <MetricCard
           label="Model Aktif"
           value={selectedModelLabel}
@@ -681,18 +726,23 @@ export function AIWorkspace() {
           icon={MessageSquare}
         />
         <MetricCard label="Mode" value="OpenRouter API" icon={Clock3} />
+        <MetricCard
+          label="Output"
+          value={latestAssistantResponse ? "Ready" : "Waiting"}
+          icon={Bot}
+        />
       </section>
 
-      <section className="mt-6 grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)_340px]">
+      <section className="mt-6 grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
         <aside className="grid content-start gap-4">
           <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
-                  CHAT SESSION
+                  SESSION HISTORY
                 </p>
                 <h3 className="mt-2 text-lg font-black text-white">
-                  Workspace
+                  Saved sessions
                 </h3>
               </div>
               <button
@@ -793,20 +843,240 @@ export function AIWorkspace() {
               )}
             </div>
           </section>
+
+          <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
+                  AI TOOLS
+                </p>
+                <h3 className="mt-2 text-lg font-black text-white">
+                  Model presets
+                </h3>
+              </div>
+              <Sparkles className="text-cyan-300" size={18} />
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              {modelOptions.map((model) => {
+                const isActive = model.value === selectedModel;
+
+                return (
+                  <button
+                    className={`flex items-center justify-between gap-3 rounded-2xl border px-3 py-3 text-left transition ${
+                      isActive
+                        ? "border-cyan-300/30 bg-cyan-300/10"
+                        : "border-white/10 bg-black/15 hover:border-cyan-300/20"
+                    }`}
+                    disabled={isSessionActionLoading || isSending}
+                    key={model.value}
+                    onClick={() => handleModelChange(model.value)}
+                    type="button">
+                    <span className="min-w-0">
+                      <span className="block text-sm font-black text-white">
+                        {model.label}
+                      </span>
+                      <span className="mt-1 block text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                        {isActive ? "Active preset" : "Switch preset"}
+                      </span>
+                    </span>
+                    <span
+                      className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${
+                        isActive
+                          ? "border-cyan-300/30 bg-cyan-300/15 text-cyan-100"
+                          : "border-white/10 bg-white/[0.03] text-slate-400"
+                      }`}>
+                      {isActive ? "Selected" : "Use"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-black text-slate-200 transition hover:border-cyan-300/30 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!userEmail || isSessionActionLoading}
+              onClick={handleNewChat}
+              type="button">
+              <Plus size={16} />
+              Start New Session
+            </button>
+          </section>
         </aside>
 
-        <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
-          <div className="flex flex-col gap-4 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
+        <section className="grid gap-4">
+          <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
+                  CHAT PANEL
+                </p>
+                <h3 className="mt-2 text-xl font-black text-white">
+                  {activeSession?.title || "Prompt Console"}
+                </h3>
+                <p className="mt-2 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
+                  {selectedModelLabel} â€¢ {workspaceSummary.messageCount} messages
+                </p>
+              </div>
+              <button
+                className="inline-flex items-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/15 px-4 py-2 text-sm font-black text-cyan-100 transition hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isSessionActionLoading}
+                onClick={handleNewChat}
+                type="button">
+                <Plus size={16} />
+                New Chat
+              </button>
+            </div>
+
+            <div className="mt-5 grid max-h-[520px] gap-4 overflow-y-auto pr-1">
+              {isLoadingHistory && (
+                <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/5 px-4 py-3 text-xs font-bold text-cyan-200">
+                  Memuat history chat dari Supabase...
+                </div>
+              )}
+              {!isLoadingHistory && messages.length === 0 && (
+                <article className="mr-auto max-w-2xl rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">
+                      AI Workspace
+                    </p>
+                    <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold text-slate-500">
+                      System
+                    </span>
+                  </div>
+                  <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">
+                    Selamat datang di AI Workspace. Pilih model, tulis prompt,
+                    lalu submit untuk menyimpan percakapan ke Supabase.
+                  </p>
+                </article>
+              )}
+              {!isLoadingHistory &&
+                messages.length > 0 &&
+                filteredMessages.length === 0 && (
+                  <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-xs font-bold text-slate-400">
+                    Tidak ada message yang cocok dengan pencarian.
+                  </div>
+                )}
+              {filteredMessages.map((message) => (
+                <article
+                  className={`rounded-2xl border p-4 ${
+                    message.role === "user"
+                      ? "ml-auto max-w-2xl border-cyan-300/20 bg-cyan-300/10"
+                      : "mr-auto max-w-2xl border-white/10 bg-black/20"
+                  }`}
+                  key={message.id}>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">
+                      {message.role === "user" ? "Operator" : "AI Workspace"}
+                    </p>
+                    <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold text-slate-500">
+                      {modelOptions.find((model) => model.value === message.model)
+                        ?.label || message.model}
+                    </span>
+                  </div>
+                  <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">
+                    {message.content}
+                  </p>
+                </article>
+              ))}
+            </div>
+
+            <form className="mt-5 grid gap-3" onSubmit={handleSubmit}>
+              {isSending && (
+                <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/5 px-4 py-3 text-xs font-bold text-cyan-200">
+                  Menghubungi OpenRouter API...
+                </div>
+              )}
+              {error && (
+                <div className="rounded-2xl border border-rose-300/20 bg-rose-300/5 px-4 py-3 text-xs font-bold text-rose-200">
+                  {error}
+                </div>
+              )}
+              <textarea
+                className="min-h-36 resize-y rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300/40"
+                onChange={(event) => setPrompt(event.target.value)}
+                placeholder="Tulis prompt untuk berita, transkrip audio, gambar AI, atau audit naskah..."
+                value={prompt}
+              />
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs text-slate-500">
+                  History tersimpan di Supabase sesuai user login. Jawaban AI
+                  diproses real-time lewat OpenRouter API.
+                </p>
+                <button
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/15 px-4 py-3 text-sm font-black text-cyan-100 transition hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    !prompt.trim() ||
+                    isSending ||
+                    isLoadingHistory ||
+                    !activeSession?.id
+                  }
+                  type="submit">
+                  {isSending ? "Mengirim..." : "Submit Prompt"}
+                  <Send size={16} />
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
+                  OUTPUT PANEL
+                </p>
+                <h3 className="mt-2 text-lg font-black text-white">
+                  Latest assistant output
+                </h3>
+              </div>
+              <Download className="text-cyan-300" size={18} />
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                Preview
+              </p>
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-200">
+                {workspaceSummary.latestOutput}
+              </p>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-white/10 bg-black/15 p-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                  Last Prompt
+                </p>
+                <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-200">
+                  {workspaceSummary.latestPrompt}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-black/15 p-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                  Session
+                </p>
+                <p className="mt-2 text-sm font-bold text-white">
+                  {workspaceSummary.activeSessionTitle}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {workspaceSummary.messageCount} saved messages
+                </p>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <aside className="grid gap-6">
+          <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
             <div>
               <p className="text-[10px] font-bold tracking-[0.24em] text-cyan-300">
-                CHAT WORKSPACE
+                WORKSPACE SETTINGS
               </p>
               <h3 className="mt-2 text-xl font-black text-white">
-                {activeSession?.title || "Prompt Console"}
+                Model, search, export
               </h3>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-[minmax(180px,240px)_minmax(180px,260px)] xl:grid-cols-[minmax(170px,220px)_minmax(180px,240px)_minmax(180px,220px)]">
+            <div className="mt-4 grid gap-3">
               <label className="grid gap-2 text-[10px] font-black tracking-[0.18em] text-slate-500">
                 MODEL SELECTOR
                 <select
@@ -854,106 +1124,20 @@ export function AIWorkspace() {
                 </div>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div className="mt-5 grid max-h-[520px] gap-4 overflow-y-auto pr-1">
-            {isLoadingHistory && (
-              <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/5 px-4 py-3 text-xs font-bold text-cyan-200">
-                Memuat history chat dari Supabase...
-              </div>
-            )}
-            {!isLoadingHistory && messages.length === 0 && (
-              <article className="mr-auto max-w-2xl rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">
-                    AI Workspace
-                  </p>
-                  <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold text-slate-500">
-                    System
-                  </span>
-                </div>
-                <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">
-                  Selamat datang di AI Workspace. Pilih model, tulis prompt,
-                  lalu submit untuk menyimpan percakapan ke Supabase.
-                </p>
-              </article>
-            )}
-            {!isLoadingHistory &&
-              messages.length > 0 &&
-              filteredMessages.length === 0 && (
-                <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-xs font-bold text-slate-400">
-                  Tidak ada message yang cocok dengan pencarian.
-                </div>
-              )}
-            {filteredMessages.map((message) => (
-              <article
-                className={`rounded-2xl border p-4 ${
-                  message.role === "user"
-                    ? "ml-auto max-w-2xl border-cyan-300/20 bg-cyan-300/10"
-                    : "mr-auto max-w-2xl border-white/10 bg-black/20"
-                }`}
-                key={message.id}>
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">
-                    {message.role === "user" ? "Operator" : "AI Workspace"}
-                  </p>
-                  <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold text-slate-500">
-                    {modelOptions.find((model) => model.value === message.model)
-                      ?.label || message.model}
-                  </span>
-                </div>
-                <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">
-                  {message.content}
-                </p>
-              </article>
-            ))}
-          </div>
-
-          <form className="mt-5 grid gap-3" onSubmit={handleSubmit}>
-            {isSending && (
-              <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/5 px-4 py-3 text-xs font-bold text-cyan-200">
-                Menghubungi OpenRouter API...
-              </div>
-            )}
-            {error && (
-              <div className="rounded-2xl border border-rose-300/20 bg-rose-300/5 px-4 py-3 text-xs font-bold text-rose-200">
-                {error}
-              </div>
-            )}
-            <textarea
-              className="min-h-36 resize-y rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300/40"
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="Tulis prompt untuk berita, transkrip audio, gambar AI, atau audit naskah..."
-              value={prompt}
-            />
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-xs text-slate-500">
-                History tersimpan di Supabase sesuai user login. Jawaban AI
-                diproses real-time lewat OpenRouter API.
-              </p>
-              <button
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/15 px-4 py-3 text-sm font-black text-cyan-100 transition hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={
-                  !prompt.trim() ||
-                  isSending ||
-                  isLoadingHistory ||
-                  !activeSession?.id
-                }
-                type="submit">
-                {isSending ? "Mengirim..." : "Submit Prompt"}
-                <Send size={16} />
-              </button>
-            </div>
-          </form>
-        </div>
-
-        <aside className="grid gap-6">
           <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
             <div className="flex items-center gap-2">
               <Search className="text-cyan-300" size={18} />
               <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
-                SEARCH CONVERSATION
+                CONTEXT PANEL
               </p>
+            </div>
+            <div className="mt-4 grid gap-2">
+              <DetailLine label="Active session" value={workspaceSummary.activeSessionTitle} />
+              <DetailLine label="Selected model" value={selectedModelLabel} />
+              <DetailLine label="Prompt count" value={`${conversationCount} prompt`} />
+              <DetailLine label="Output state" value={latestAssistantResponse ? "Ready" : "Waiting"} />
             </div>
 
             <label className="mt-4 flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-slate-500 transition focus-within:border-cyan-300/40">
@@ -1036,11 +1220,25 @@ export function AIWorkspace() {
             </div>
           </section>
 
-          <PromptLibrary onSelectTemplate={useLibraryPrompt} />
+          <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
+            <div className="flex items-center gap-2">
+              <Sparkles className="text-cyan-300" size={18} />
+              <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
+                PROMPT LIBRARY
+              </p>
+            </div>
+            <div className="mt-4">
+              <PromptLibrary
+                currentPrompt={prompt || latestUserPrompt}
+                latestAssistantResponse={latestAssistantResponse}
+                onSelectTemplate={useLibraryPrompt}
+              />
+            </div>
+          </section>
 
           <section className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
             <p className="text-[10px] font-black tracking-[0.24em] text-cyan-300">
-              CONVERSATION HISTORY
+              SESSION SNAPSHOT
             </p>
             <div className="mt-4 grid gap-3">
               {messages
@@ -1109,6 +1307,19 @@ export function AIWorkspace() {
           </p>
         </SessionModal>
       )}
+    </div>
+  );
+}
+
+function DetailLine({ label, value }) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-2xl border border-white/10 bg-black/15 px-3 py-2">
+      <span className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+        {label}
+      </span>
+      <span className="max-w-[58%] text-right text-[11px] font-bold text-slate-100">
+        {value}
+      </span>
     </div>
   );
 }

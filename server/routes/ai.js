@@ -2,14 +2,21 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const { createClient } = require("@supabase/supabase-js");
 const supabaseDatabase = require("../lib/supabase");
+const { buildOrbitRuntimeContext } = require("../lib/orbitRuntimeContext");
+const { handleOrbitCommand } = require("../lib/orbitCommands");
+const { buildOrbitKnowledgeContext } = require("../lib/orbitKnowledge");
+const {
+  buildOrbitMemoryContext,
+  containsSensitiveData,
+} = require("../lib/orbitMemory");
+const { generateCompletion, AI_USE_CASES } = require("../services/ai/aiRouter");
 
 const router = express.Router();
 
-const OPENROUTER_CHAT_COMPLETIONS_URL =
-  "https://openrouter.ai/api/v1/chat/completions";
-
 const DEFAULT_OPENROUTER_MODEL = "openrouter/auto";
 const OPENROUTER_TIMEOUT_MS = 30000;
+const DEBUG_AI_AUTH =
+  process.env.NODE_ENV !== "production" && process.env.DEBUG_AI_AUTH === "true";
 const CHAT_MEMORY_LIMIT = 20;
 const MAX_AI_MESSAGE_LENGTH = 12000;
 const MAX_AI_HISTORY_ITEMS = 20;
@@ -37,10 +44,6 @@ const aiChatLimiter = rateLimit({
   },
 });
 
-function getSafeOpenRouterApiKey() {
-  return String(process.env.OPENROUTER_API_KEY || "").trim();
-}
-
 function createHttpError(
   message,
   statusCode = 500,
@@ -57,12 +60,16 @@ function createHttpError(
 function sendSafeError(res, error, fallbackMessage = "Request AI gagal.") {
   const status = Number(error?.statusCode || error?.status || 500);
   const safeStatus = status >= 400 && status < 600 ? status : 500;
+  const message =
+    safeStatus >= 500
+      ? fallbackMessage
+      : error?.safeMessage || error?.message || fallbackMessage;
 
   return res.status(safeStatus).json({
     success: false,
     status: safeStatus,
     code: error?.code || "ai_request_failed",
-    message: error?.safeMessage || error?.message || fallbackMessage,
+    message,
   });
 }
 
@@ -141,17 +148,6 @@ function getJwtPayload(token) {
   }
 }
 
-function createDevelopmentUserFromToken(token) {
-  const payload = getJwtPayload(token);
-
-  return {
-    id: payload?.sub || "development-auth-bypass-user",
-    aud: payload?.aud || "authenticated",
-    email: payload?.email || null,
-    role: payload?.role || "authenticated",
-  };
-}
-
 function getSupabaseAuthClient() {
   const { supabaseAnonKey, supabaseUrl } = getSupabaseAuthConfig();
   const nextClientKey = `${supabaseUrl}:${supabaseAnonKey.slice(0, 12)}`;
@@ -208,23 +204,24 @@ function getBearerToken(req) {
 function getAuthDebug(req) {
   const authorization = req.headers.authorization || "";
   const authHeaderStartsWithBearer = authorization.startsWith("Bearer ");
-  const token = authHeaderStartsWithBearer
-    ? authorization.slice("Bearer ".length).trim()
-    : "";
 
   return {
     hasAuthorization: Boolean(authorization),
     authHeaderStartsWithBearer,
-    tokenLength: token.length,
   };
 }
 
 function logAuthDebug(req, reason, details = {}) {
+  const debugDetails = DEBUG_AI_AUTH
+    ? {
+        ...getAuthDebug(req),
+        supabaseAuthStatus: details.supabaseAuthStatus || null,
+        userId: details.userId || null,
+      }
+    : {};
+
   console.warn("[AI Auth]", {
-    ...getAuthDebug(req),
-    supabaseAuthError: null,
-    userId: null,
-    ...details,
+    ...debugDetails,
     reason,
   });
 }
@@ -248,10 +245,7 @@ async function requireAuthenticatedUser(req) {
     authResult = await supabase.auth.getUser(token);
   } catch (error) {
     logAuthDebug(req, "supabase_auth_unavailable", {
-      supabaseAuthError: {
-        message: error.message || null,
-        status: error.status || null,
-      },
+      supabaseAuthStatus: error.status || null,
     });
     throw createHttpError(
       "Gagal validasi Supabase auth token.",
@@ -270,7 +264,6 @@ async function requireAuthenticatedUser(req) {
   const error = authResult?.error;
   const supabaseAuthError = error
     ? {
-        message: error.message || null,
         status: error.status || null,
       }
     : null;
@@ -279,7 +272,7 @@ async function requireAuthenticatedUser(req) {
     req,
     error || !user?.id ? "invalid_supabase_token" : "supabase_auth_validated",
     {
-      supabaseAuthError,
+      supabaseAuthStatus: supabaseAuthError?.status || null,
       userId: user?.id || null,
     },
   );
@@ -296,41 +289,6 @@ async function requireAuthenticatedUser(req) {
   }
 
   return user;
-}
-
-function hasInvalidHeaderCharacters(value) {
-  return /[^\x20-\x7E]/.test(value);
-}
-
-function getOpenRouterError(data) {
-  return data?.error || data?.provider_error || data?.providerError || null;
-}
-
-function getOpenRouterErrorMessage(data) {
-  const providerError = getOpenRouterError(data);
-
-  return (
-    providerError?.message ||
-    providerError?.metadata?.raw ||
-    data?.message ||
-    "OpenRouter gagal memproses request."
-  );
-}
-
-function getSafeOpenRouterStatusMessage(status) {
-  if (status === 401 || status === 403) {
-    return "Konfigurasi akses provider AI tidak valid.";
-  }
-
-  if (status === 429) {
-    return "Provider AI sedang membatasi request. Coba lagi nanti.";
-  }
-
-  if (status >= 500) {
-    return "OpenRouter gagal memproses request.";
-  }
-
-  return "OpenRouter menolak request AI.";
 }
 
 function normalizeSessionId(value) {
@@ -376,11 +334,7 @@ function validateAiChatBody(body) {
   }
 
   if (message.length > MAX_AI_MESSAGE_LENGTH) {
-    throw createHttpError(
-      "Message terlalu panjang.",
-      413,
-      "message_too_large",
-    );
+    throw createHttpError("Message terlalu panjang.", 413, "message_too_large");
   }
 
   if (!sessionId) {
@@ -392,8 +346,20 @@ function validateAiChatBody(body) {
     message,
     model: normalizeModel(body.model),
     sessionId,
-    systemPrompt: normalizeSystemPrompt(body.systemPrompt || body.system_prompt),
+    systemPrompt: normalizeSystemPrompt(
+      body.systemPrompt || body.system_prompt,
+    ),
   };
+}
+
+function hasSensitiveAiInput({ history, message, systemPrompt }) {
+  const historyContent = (Array.isArray(history) ? history : []).map(
+    (item) => item?.content,
+  );
+
+  return [message, systemPrompt, ...historyContent].some((value) =>
+    containsSensitiveData(value),
+  );
 }
 
 function normalizeChatHistoryRow(row) {
@@ -475,9 +441,8 @@ async function logAiAuditEvent({
   user,
 }) {
   try {
-    const userEmail = normalizeEmail(user?.email);
     const userId = user?.id || null;
-    const message = `AI chat ${status}: user=${userEmail || userId || "unknown"} session=${sessionId} model=${model} duration=${durationMs}ms`;
+    const message = `AI chat ${status}: user=${userId || "unknown"} session=${sessionId} model=${model} duration=${durationMs}ms`;
 
     console.info("[AI Audit]", {
       code,
@@ -485,7 +450,6 @@ async function logAiAuditEvent({
       model,
       sessionId,
       status,
-      userEmail: userEmail || null,
       userId,
     });
 
@@ -525,6 +489,17 @@ async function buildOpenRouterMessages({
     sessionId,
     userEmail,
   });
+  const memoryContext = await buildOrbitMemoryContext({
+    currentMessage,
+    db: supabaseDatabase,
+    history,
+    userEmail,
+  });
+  const knowledgeContext = await buildOrbitKnowledgeContext({
+    db: supabaseDatabase,
+    query: currentMessage,
+    userEmail,
+  });
   const activeSystemPrompt = normalizeSystemPrompt(systemPrompt);
   const systemMessages = [];
 
@@ -538,6 +513,25 @@ async function buildOpenRouterMessages({
   systemMessages.push({
     role: "system",
     content: ORBIT_SYSTEM_PROMPT,
+  });
+
+  if (memoryContext) {
+    systemMessages.push({
+      role: "system",
+      content: memoryContext,
+    });
+  }
+
+  if (knowledgeContext) {
+    systemMessages.push({
+      role: "system",
+      content: knowledgeContext,
+    });
+  }
+
+  systemMessages.push({
+    role: "system",
+    content: buildOrbitRuntimeContext(),
   });
 
   return [
@@ -559,33 +553,38 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
     systemPrompt: "",
     history: [],
   };
-  let timeout = null;
 
   try {
     const authenticatedUser = req.user;
     requestContext = validateAiChatBody(req.body);
     const { history, message, model, sessionId, systemPrompt } = requestContext;
 
-    const apiKey = getSafeOpenRouterApiKey();
-
-    if (!apiKey) {
+    if (hasSensitiveAiInput(requestContext)) {
       throw createHttpError(
-        "Konfigurasi OpenRouter belum siap.",
-        500,
-        "openrouter_config_missing",
+        "Prompt mengandung data sensitif dan tidak dikirim ke AI.",
+        400,
+        "ai_sensitive_input_rejected",
       );
     }
 
-    if (hasInvalidHeaderCharacters(apiKey)) {
-      throw createHttpError(
-        "Konfigurasi OpenRouter tidak valid.",
-        500,
-        "openrouter_config_invalid",
-      );
+    const orbitCommandResponse = handleOrbitCommand(message);
+
+    if (orbitCommandResponse) {
+      await logAiAuditEvent({
+        durationMs: Date.now() - startedAt,
+        model: "orbit-command",
+        sessionId,
+        status: "success",
+        user: authenticatedUser,
+      });
+
+      return res.status(200).json({
+        success: true,
+        response: orbitCommandResponse,
+        model: "orbit-command",
+      });
     }
 
-    const controller = new AbortController();
-    timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
     const openRouterMessages = await buildOpenRouterMessages({
       currentMessage: message,
       fallbackHistory: history,
@@ -593,58 +592,19 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       systemPrompt,
       userEmail: authenticatedUser.email,
     });
-
-    const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:4173",
-        "X-Title": "BLACK FLASH ORBIT",
-      },
-      body: JSON.stringify({
-        model,
-        messages: openRouterMessages,
-      }),
-      signal: controller.signal,
+    const aiResult = await generateCompletion({
+      maxTokens: 1200,
+      messages: openRouterMessages,
+      model,
+      requestId: sessionId,
+      temperature: 0.2,
+      timeout: OPENROUTER_TIMEOUT_MS,
+      useCase: AI_USE_CASES.GENERAL_CHAT,
     });
-
-    const data = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      const providerError = getOpenRouterError(data);
-      const errorMessage = getOpenRouterErrorMessage(data);
-      const safeProviderMessage = getSafeOpenRouterStatusMessage(
-        response.status,
-      );
-
-      console.error("[OpenRouter API Error]", {
-        status: response.status,
-        model,
-        message: errorMessage,
-        providerError,
-      });
-
-      throw createHttpError(
-        safeProviderMessage,
-        response.status,
-        "openrouter_error",
-      );
-    }
-
-    const aiResponse = data?.choices?.[0]?.message?.content;
-
-    if (!aiResponse) {
-      throw createHttpError(
-        "OpenRouter tidak mengembalikan jawaban AI.",
-        502,
-        "openrouter_empty_response",
-      );
-    }
 
     await logAiAuditEvent({
       durationMs: Date.now() - startedAt,
-      model,
+      model: aiResult.model,
       sessionId,
       status: "success",
       user: authenticatedUser,
@@ -652,18 +612,14 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      response: aiResponse,
-      model,
+      response: aiResult.content,
+      model: aiResult.model,
     });
   } catch (error) {
-    const isAbort = error.name === "AbortError";
-
-    const status = error.statusCode || error.status || (isAbort ? 504 : 502);
-    const code =
-      error.code || (isAbort ? "openrouter_timeout" : "ai_fetch_failed");
-    const message = isAbort
-      ? "Request ke OpenRouter timeout."
-      : error.statusCode || error.status
+    const status = error.statusCode || error.status || 502;
+    const code = error.code || "ai_fetch_failed";
+    const message =
+      error.statusCode || error.status
         ? error.message
         : "Gagal terhubung ke OpenRouter.";
 
@@ -690,10 +646,6 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       createHttpError(message, status, code),
       "Request AI gagal.",
     );
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 });
 

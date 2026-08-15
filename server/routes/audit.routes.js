@@ -5,6 +5,14 @@ const { runWorkspaceAudit } = require("../services/auditEngine");
 
 const router = express.Router();
 
+function logAuditRouteError(scope, error) {
+  console.warn("[ORBIT Audit Route]", {
+    code: error?.code || null,
+    scope,
+    status: error?.status || error?.statusCode || null,
+  });
+}
+
 function requireAuditDatabase(res) {
   const supabaseAdmin = getSupabaseAdmin();
 
@@ -44,10 +52,11 @@ router.post("/run", requireAuth, async (req, res) => {
       .single();
 
     if (error) {
+      logAuditRouteError("save_report", error);
+
       return res.status(500).json({
         ok: false,
         message: "Failed to save audit report.",
-        error: error.message,
       });
     }
 
@@ -56,10 +65,11 @@ router.post("/run", requireAuth, async (req, res) => {
       report: data,
     });
   } catch (error) {
+    logAuditRouteError("run_audit", error);
+
     return res.status(500).json({
       ok: false,
       message: "Audit engine failed.",
-      error: error.message,
     });
   }
 });
@@ -75,10 +85,11 @@ router.get("/history", requireAuth, async (req, res) => {
     .order("created_at", { ascending: false });
 
   if (error) {
+    logAuditRouteError("load_history", error);
+
     return res.status(500).json({
       ok: false,
       message: "Failed to load audit history.",
-      error: error.message,
     });
   }
 
