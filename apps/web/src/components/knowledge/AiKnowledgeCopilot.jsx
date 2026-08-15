@@ -43,7 +43,7 @@ export function AiKnowledgeCopilot({
               Ask documents with source-aware context
             </h2>
             <p className="mt-2 text-xs leading-5 text-zinc-500">
-              Mock AI response based on local demo context.
+              Authenticated RAG API with retrieved context and citations.
             </p>
           </div>
         </div>

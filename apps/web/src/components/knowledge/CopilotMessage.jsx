@@ -52,7 +52,7 @@ export function CopilotMessage({ message }) {
             {message.citationCount || 0} citation(s)
           </span>
           <span className="rounded-md border border-white/10 bg-black/20 px-2 py-1">
-            {isStreaming ? "Typing" : "Local mock"}
+            {isStreaming ? "Typing" : message.mode || "rag-api"}
           </span>
         </div>
       ) : null}

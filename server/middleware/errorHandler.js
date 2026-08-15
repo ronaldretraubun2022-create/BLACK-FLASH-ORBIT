@@ -1,6 +1,11 @@
 function errorHandler(error, req, res, next) {
+  const errorStatus = Number(error?.statusCode || error?.status || 0);
   const statusCode =
-    res.statusCode && res.statusCode !== 200 ? res.statusCode : 500;
+    errorStatus >= 400 && errorStatus <= 599
+      ? errorStatus
+      : res.statusCode && res.statusCode !== 200
+        ? res.statusCode
+        : 500;
   const message =
     statusCode === 404
       ? "Route tidak ditemukan."
@@ -20,6 +25,7 @@ function errorHandler(error, req, res, next) {
 
   res.status(statusCode).json({
     success: false,
+    code: error?.code || "REQUEST_FAILED",
     message,
   });
 }

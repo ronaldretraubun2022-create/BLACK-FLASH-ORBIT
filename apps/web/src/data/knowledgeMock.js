@@ -1,7 +1,7 @@
 export const knowledgeReleaseState = [
   { label: "Module", value: "knowledge-base", tone: "text-amber-300" },
   { label: "Version", value: "v3.0", tone: "text-white" },
-  { label: "Mode", value: "mock-ai-local", tone: "text-emerald-300" },
+  { label: "Mode", value: "rag-api", tone: "text-emerald-300" },
 ];
 
 export const knowledgeCollections = [
@@ -222,7 +222,7 @@ export const initialKnowledgeActivityLog = [
   {
     id: "act-1",
     action: "AI Knowledge Copilot prepared",
-    detail: "Local mock RAG context indexed for 5 demo documents.",
+    detail: "Production RAG API route ready for authenticated requests.",
     time: "10:24 WIT",
     tone: "green",
   },
@@ -236,7 +236,7 @@ export const initialKnowledgeActivityLog = [
   {
     id: "act-3",
     action: "Upload queue staged",
-    detail: "No backend request was sent.",
+    detail: "Upload panel targets the protected Knowledge RAG API.",
     time: "09:35 WIT",
     tone: "maroon",
   },

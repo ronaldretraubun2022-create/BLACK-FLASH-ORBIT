@@ -46,8 +46,8 @@ import { Register } from "./pages/Register.jsx";
 import { WorkflowAutomation } from "./pages/WorkflowAutomation.jsx";
 import { WebBuilder } from "./pages/WebBuilder.jsx";
 import {
-  getAuthenticatedHeaders,
-  isAuthProviderUnavailableResponse,
+  api,
+  isAuthProviderUnavailableError,
 } from "./services/api.js";
 
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
@@ -207,27 +207,11 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       setTelemetryError("");
 
       try {
-        const authHeaders = await getAuthenticatedHeaders();
-        const response = await fetch("/api/v1/dashboard/status", {
-          headers: { Accept: "application/json", ...authHeaders },
+        // Use the shared API client so dashboard fallbacks and auth handling
+        // stay aligned with the rest of the app.
+        const payload = await api.getDashboardStatus({
           signal: controller.signal,
         });
-        const payload = await response.json().catch(() => null);
-
-        if (isAuthProviderUnavailableResponse(payload, response.status)) {
-          setTelemetryError(
-            payload?.message ||
-              "Limited connectivity: auth provider temporarily unavailable.",
-          );
-          setDashboardData(null);
-          return;
-        }
-
-        if (!response.ok) {
-          throw new Error(
-            payload?.message || `Telemetry request failed: ${response.status}`,
-          );
-        }
 
         setDashboardData(payload?.data ?? null);
         setTelemetryError(
@@ -237,6 +221,15 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
         );
       } catch (error) {
         if (error?.name === "AbortError") return;
+
+        if (isAuthProviderUnavailableError(error)) {
+          setTelemetryError(
+            error?.message ||
+              "Limited connectivity: auth provider temporarily unavailable.",
+          );
+          setDashboardData(null);
+          return;
+        }
 
         setTelemetryError(error?.message || "Telemetry unavailable");
         setDashboardData(null);
@@ -597,7 +590,7 @@ function AppShell() {
       {
         id: "ai-knowledge-copilot",
         label: "AI Knowledge Copilot",
-        description: "Open the local mock RAG copilot panel.",
+        description: "Open the source-aware Knowledge RAG copilot panel.",
         icon: BrainCircuit,
         keywords: ["knowledge", "copilot", "rag", "ai", "context"],
         to: "/knowledge-base#copilot",

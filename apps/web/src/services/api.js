@@ -1,5 +1,6 @@
 import { supabase } from "../lib/supabase";
 import {
+  clearAuthSessionAndRedirect,
   createSessionExpiredError,
   recoverStaleRefreshToken,
 } from "../lib/authRecovery";
@@ -8,7 +9,9 @@ import { normalizePromptCategory } from "../data/promptCategories";
 const DEFAULT_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_WINDOW_MS = 60000;
 const LOCAL_DEV_API_PORT = "5000";
-const LOCAL_DEV_API_BASE_URL = "http://localhost:5000/api";
+// Use IPv4 loopback in dev so Windows does not resolve localhost to ::1
+// when the Node server is listening on 127.0.0.1/IPv4 only.
+const LOCAL_DEV_API_BASE_URL = "http://127.0.0.1:5000/api";
 const API_BASE_URL = normalizeApiBaseUrl(getConfiguredApiBaseUrl());
 const AUTH_PROVIDER_UNAVAILABLE_CODE = "AUTH_PROVIDER_UNAVAILABLE";
 
@@ -18,6 +21,8 @@ const AUTH_FAILURE_CODES = new Set([
   "invalid_supabase_token",
   "invalid_supabase_user",
 ]);
+const PUBLIC_API_PATHS = new Set(["/api/health", "/api/v1/health"]);
+const KNOWLEDGE_API_PREFIX = "/api/v1/knowledge";
 
 function createQueryString(params = {}) {
   const searchParams = new URLSearchParams();
@@ -70,6 +75,10 @@ export async function getAuthenticatedHeaders() {
   return {
     Authorization: `Bearer ${accessToken}`,
   };
+}
+
+function isKnowledgeApiRequestUrl(requestUrl) {
+  return getRequestPathname(requestUrl).startsWith(KNOWLEDGE_API_PREFIX);
 }
 
 async function getSessionFromSupabaseAuth() {
@@ -154,8 +163,14 @@ function formatErrorValue(value) {
 
 function isAuthFailureResponse(errorBody, status) {
   const code = getApiErrorCode(errorBody).toLowerCase();
+  const message = getApiErrorMessage(errorBody, status).toLowerCase();
 
-  return status === 401 && AUTH_FAILURE_CODES.has(code);
+  return (
+    status === 401 &&
+    (AUTH_FAILURE_CODES.has(code) ||
+      message.includes("missing bearer token") ||
+      message.includes("invalid or expired token"))
+  );
 }
 
 function getApiErrorCode(errorBody) {
@@ -182,24 +197,91 @@ async function request(path, options = {}) {
   const requestUrl = resolveApiUrl(path);
   const hasFormDataBody =
     typeof FormData !== "undefined" && options.body instanceof FormData;
+  const {
+    auth,
+    headers: optionHeaders,
+    redirectOnAuthFailure = true,
+    retryOnAuthFailure = true,
+    signal: externalSignal,
+    ...fetchOptions
+  } = options;
+  // Forward route/component aborts into the same controller so unmounts and
+  // manual cancels stop the fetch without losing the built-in timeout guard.
+  const handleExternalAbort = () => controller.abort();
+  let hasRetriedAuth = false;
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      externalSignal.addEventListener("abort", handleExternalAbort, {
+        once: true,
+      });
+    }
+  }
 
   logApiRequestUrl(path, requestUrl);
 
   try {
-    const response = await fetch(requestUrl, {
-      ...options,
-      headers: {
-        Accept: "application/json",
-        ...(options.body && !hasFormDataBody
-          ? { "Content-Type": "application/json" }
-          : {}),
-        ...options.headers,
-      },
-      signal: controller.signal,
-    });
-    const data = await parseJsonResponse(response);
+    if (isKnowledgeApiRequestUrl(requestUrl)) {
+      fetchOptions.cache = "no-store";
+    } else if (fetchOptions.cache === undefined && shouldForceNoStore(requestUrl)) {
+      fetchOptions.cache = "no-store";
+    }
 
-    if (!response.ok && response.status !== 304) {
+    const shouldHandleAuthFailure = shouldHandleAuthenticationFailure({
+      auth,
+      optionHeaders,
+      requestUrl,
+    });
+    let headers = await createRequestHeaders({
+      auth,
+      hasFormDataBody,
+      optionHeaders,
+      options,
+      requestUrl,
+    });
+
+    while (true) {
+      const response = await fetch(requestUrl, {
+        ...fetchOptions,
+        headers,
+        signal: controller.signal,
+      });
+      const data = await parseJsonResponse(response);
+
+      if (isKnowledgeApiRequestUrl(requestUrl) && import.meta.env.DEV) {
+        console.info("[Knowledge API]", {
+          method: String(fetchOptions.method || "GET").toUpperCase(),
+          hasBearerToken: headers.has("Authorization"),
+          status: response.status,
+          url: getPrintableRequestUrl(requestUrl),
+        });
+      }
+
+      if (response.ok || response.status === 304) {
+        return data;
+      }
+
+      if (
+        shouldHandleAuthFailure &&
+        retryOnAuthFailure &&
+        !hasRetriedAuth &&
+        isAuthFailureResponse(data, response.status)
+      ) {
+        hasRetriedAuth = true;
+        headers = await createRetriedAuthHeaders(headers);
+        continue;
+      }
+
+      if (
+        shouldHandleAuthFailure &&
+        redirectOnAuthFailure &&
+        isAuthFailureResponse(data, response.status)
+      ) {
+        await clearAuthSessionAndRedirect();
+      }
+
       const message = getApiErrorMessage(data, response.status);
 
       throw new ApiRequestError(message, {
@@ -207,17 +289,106 @@ async function request(path, options = {}) {
         status: response.status,
       });
     }
-
-    return data;
   } catch (error) {
     if (error.name === "AbortError") {
+      if (externalSignal?.aborted) {
+        // Preserve the real abort reason for callers that intentionally
+        // canceled the request; only non-abort failures are converted below.
+        throw error;
+      }
+
       throw new Error("API request timed out.");
     }
 
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    if (externalSignal) {
+      externalSignal.removeEventListener("abort", handleExternalAbort);
+    }
   }
+}
+
+async function createRequestHeaders({
+  auth,
+  hasFormDataBody,
+  optionHeaders,
+  options,
+  requestUrl,
+}) {
+  const headers = new Headers(optionHeaders || {});
+
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
+  }
+
+  if (options.body && !hasFormDataBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  if (shouldAttachAuthorizationHeader({ auth, headers, requestUrl })) {
+    const authHeaders = await getAuthenticatedHeaders();
+
+    Object.entries(authHeaders).forEach(([key, value]) => {
+      headers.set(key, value);
+    });
+  }
+
+  return headers;
+}
+
+function shouldAttachAuthorizationHeader({ auth, headers, requestUrl }) {
+  if (auth === false || headers.has("Authorization")) return false;
+  if (auth === true) return true;
+
+  return isProtectedApiRequestUrl(requestUrl);
+}
+
+function shouldHandleAuthenticationFailure({ auth, optionHeaders, requestUrl }) {
+  if (auth === false) return false;
+  if (auth === true || isProtectedApiRequestUrl(requestUrl)) return true;
+
+  return new Headers(optionHeaders || {}).has("Authorization");
+}
+
+function isProtectedApiRequestUrl(requestUrl) {
+  const pathname = getRequestPathname(requestUrl);
+
+  if (!pathname.startsWith("/api/")) return false;
+
+  return !PUBLIC_API_PATHS.has(pathname);
+}
+
+function shouldForceNoStore(requestUrl) {
+  return isProtectedApiRequestUrl(requestUrl);
+}
+
+function getRequestPathname(requestUrl) {
+  try {
+    const url = /^https?:\/\//i.test(requestUrl)
+      ? new URL(requestUrl)
+      : new URL(requestUrl, "http://orbit.local");
+
+    return normalizeApiPath(url.pathname);
+  } catch {
+    const cleanPath = String(requestUrl || "").startsWith("/")
+      ? String(requestUrl || "")
+      : `/${requestUrl || ""}`;
+
+    return normalizeApiPath(cleanPath);
+  }
+}
+
+async function createRetriedAuthHeaders(previousHeaders) {
+  const refreshedSession = await refreshSupabaseSession();
+  const session = refreshedSession || (await getSessionFromSupabaseAuth());
+  const accessToken = requireAccessToken(session?.access_token);
+  const headers = new Headers(previousHeaders || {});
+
+  logFrontendAuthDebug(session);
+  headers.set("Authorization", `Bearer ${accessToken}`);
+
+  return headers;
 }
 
 async function parseJsonResponse(response) {
@@ -298,6 +469,10 @@ function normalizeApiBaseUrl(value) {
     const url = new URL(cleanValue);
     const pathname = url.pathname.replace(/\/+$/, "");
 
+    if (isLocalhostHostname(url.hostname)) {
+      url.hostname = "127.0.0.1";
+    }
+
     url.pathname = normalizeApiPath(
       pathname && pathname !== "/" ? pathname : "/api",
     );
@@ -325,7 +500,7 @@ function getDevelopmentApiBaseUrl() {
     return LOCAL_DEV_API_BASE_URL;
   }
 
-  return `http://${hostname}:${LOCAL_DEV_API_PORT}/api`;
+  return `http://127.0.0.1:${LOCAL_DEV_API_PORT}/api`;
 }
 
 function isDevelopmentFrontendOrigin() {
@@ -335,12 +510,10 @@ function isDevelopmentFrontendOrigin() {
 }
 
 function isDevelopmentHostname(hostname) {
+  if (isLocalhostHostname(hostname)) return true;
+
   const cleanHostname = String(hostname || "").toLowerCase();
   const parts = cleanHostname.split(".").map((part) => Number(part));
-
-  if (cleanHostname === "localhost" || cleanHostname === "127.0.0.1") {
-    return true;
-  }
 
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
     return false;
@@ -353,6 +526,12 @@ function isDevelopmentHostname(hostname) {
     (first === 172 && second >= 16 && second <= 31) ||
     (first === 192 && second === 168)
   );
+}
+
+function isLocalhostHostname(hostname) {
+  const cleanHostname = String(hostname || "").toLowerCase();
+
+  return cleanHostname === "localhost" || cleanHostname === "127.0.0.1";
 }
 
 function getApiPathSuffix(cleanPath) {
@@ -447,6 +626,13 @@ export const api = {
     } catch {
       return request("/api/health");
     }
+  },
+
+  async getProfile({ signal } = {}) {
+    return request("/api/v1/profile", {
+      auth: true,
+      signal,
+    });
   },
 
   async getSystem() {
@@ -571,9 +757,10 @@ export const api = {
     );
   },
 
-  async getDashboardStatus() {
+  async getDashboardStatus({ signal } = {}) {
     return request("/api/v1/dashboard/status", {
       headers: await getAuthenticatedHeaders(),
+      signal,
     });
   },
 
@@ -746,7 +933,7 @@ export const api = {
   },
 
   async getKnowledgeDocuments() {
-    const response = await request("/api/knowledge/documents", {
+    const response = await request("/api/v1/knowledge/documents", {
       headers: await getAuthenticatedHeaders(),
     });
 
@@ -754,7 +941,7 @@ export const api = {
   },
 
   async createKnowledgeDocument(payload) {
-    return request("/api/knowledge/documents", {
+    return request("/api/v1/knowledge/documents", {
       method: "POST",
       headers: await getAuthenticatedHeaders(),
       body: JSON.stringify(payload),
@@ -762,7 +949,7 @@ export const api = {
   },
 
   async updateKnowledgeDocument(documentId, payload) {
-    return request(`/api/knowledge/documents/${documentId}`, {
+    return request(`/api/v1/knowledge/documents/${documentId}`, {
       method: "PUT",
       headers: await getAuthenticatedHeaders(),
       body: JSON.stringify(payload),
@@ -770,7 +957,7 @@ export const api = {
   },
 
   async patchKnowledgeDocument(documentId, payload) {
-    return request(`/api/knowledge/documents/${documentId}`, {
+    return request(`/api/v1/knowledge/documents/${documentId}`, {
       method: "PATCH",
       headers: await getAuthenticatedHeaders(),
       body: JSON.stringify(payload),
@@ -778,17 +965,26 @@ export const api = {
   },
 
   async deleteKnowledgeDocument(documentId) {
-    return request(`/api/knowledge/documents/${documentId}`, {
+    return request(`/api/v1/knowledge/documents/${documentId}`, {
       method: "DELETE",
       headers: await getAuthenticatedHeaders(),
     });
   },
 
   async uploadKnowledgeDocument(formData) {
-    return request("/api/knowledge/documents/upload", {
+    return request("/api/v1/knowledge/upload", {
       method: "POST",
       headers: await getAuthenticatedHeaders(),
       body: formData,
+    });
+  },
+
+  async askKnowledge(payload, { signal } = {}) {
+    return request("/api/v1/knowledge/ask", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+      signal,
     });
   },
 

@@ -39,8 +39,8 @@ export function CopilotChat({ isLoading, messages = [], onSubmitQuestion }) {
                 No AI response yet
               </p>
               <p className="mt-2 text-xs leading-5 text-zinc-500">
-                Ask about a document or run a command action to retrieve local
-                mock context.
+                Ask about a document or run a command action to retrieve
+                indexed RAG context.
               </p>
             </div>
           </div>
@@ -81,7 +81,7 @@ function LoadingMessage() {
   return (
     <div className="inline-flex w-fit items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-bold text-zinc-400">
       <Loader2 className="animate-spin text-[#d9ad57]" size={14} />
-      Retrieving local context...
+      Retrieving RAG context...
     </div>
   );
 }

@@ -9,6 +9,10 @@ import {
   generateMockAnswer,
   retrieveContext,
 } from "../lib/mockRagEngine.js";
+import {
+  askKnowledge,
+  isKnowledgeMockFallbackEnabled,
+} from "../services/knowledgeService.js";
 
 function createMessage(role, content, meta = {}) {
   return {
@@ -25,12 +29,36 @@ function createMessage(role, content, meta = {}) {
 }
 
 function getScopedDocuments(documents, activeDocument, actionId) {
-  if (!activeDocument) return documents;
+  if (!activeDocument?.id) return documents;
   if (actionId === "compare-sources" || actionId === "find-security-risks") {
     return [activeDocument, ...documents.filter((item) => item.id !== activeDocument.id)];
   }
 
   return [activeDocument];
+}
+
+function getActiveDocumentId(activeDocument, actionId) {
+  if (!activeDocument?.id) return "";
+  if (actionId === "compare-sources" || actionId === "find-security-risks") {
+    return "";
+  }
+
+  return activeDocument.id;
+}
+
+function createFallbackResult(query, documents) {
+  const context = retrieveContext(query, documents);
+  const citations = buildCitations(context);
+  const confidence = calculateConfidence(context);
+
+  return {
+    answer: generateMockAnswer(query, context),
+    citations,
+    confidence,
+    context,
+    mode: "dev-mock-fallback",
+    verificationRequired: context.length === 0,
+  };
 }
 
 export function useKnowledgeCopilot({
@@ -43,47 +71,59 @@ export function useKnowledgeCopilot({
   const [selectedContext, setSelectedContext] = useState([]);
   const [citations, setCitations] = useState([]);
   const [confidence, setConfidence] = useState(0);
-  const timeoutRef = useRef(null);
-  const streamRef = useRef(null);
+  const abortRef = useRef(null);
 
   useEffect(
     () => () => {
-      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
-      if (streamRef.current) window.clearInterval(streamRef.current);
+      abortRef.current?.abort();
     },
     [],
   );
 
   const quickPrompts = useMemo(() => copilotQuickPrompts, []);
   const commandActions = useMemo(() => knowledgeCommandActions, []);
-  const selectionContext = useMemo(() => {
-    if (!activeDocument) return [];
-
-    return retrieveContext(activeDocument.title, [activeDocument]);
-  }, [activeDocument]);
 
   useEffect(() => {
-    if (!activeDocument) {
+    if (!activeDocument?.id) {
       setSelectedContext([]);
       setCitations([]);
       setConfidence(0);
       return;
     }
 
-    const nextCitations = buildCitations(selectionContext);
+    const nextCitations = Array.isArray(activeDocument.citations)
+      ? activeDocument.citations
+      : [];
 
-    setSelectedContext(selectionContext);
+    setSelectedContext(
+      activeDocument.contextChunks?.length
+        ? [
+            {
+              chunks: activeDocument.contextChunks,
+              id: activeDocument.id,
+              score: activeDocument.confidence || 0,
+              source: activeDocument.source,
+              title: activeDocument.title,
+            },
+          ]
+        : [],
+    );
     setCitations(nextCitations);
-    setConfidence(calculateConfidence(selectionContext));
-  }, [activeDocument, selectionContext]);
+    setConfidence(activeDocument.confidence || 0);
+  }, [activeDocument]);
 
   const executeQuery = useCallback(
-    (rawQuery, options = {}) => {
+    async (rawQuery, options = {}) => {
       const query = String(rawQuery || "").trim();
       if (!query || isLoading) return;
 
       const scopedDocuments = options.documents || documents;
       const userLabel = options.userLabel || query;
+      const documentId =
+        options.documentId ?? getActiveDocumentId(activeDocument, options.actionId);
+
+      abortRef.current?.abort();
+      abortRef.current = new AbortController();
 
       setIsLoading(true);
       setMessages((currentMessages) => [
@@ -93,76 +133,69 @@ export function useKnowledgeCopilot({
         }),
       ]);
 
-      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
-      if (streamRef.current) window.clearInterval(streamRef.current);
+      try {
+        let result;
 
-      timeoutRef.current = window.setTimeout(() => {
-        const context = retrieveContext(query, scopedDocuments);
-        const nextCitations = buildCitations(context);
-        const nextConfidence = calculateConfidence(context);
-        const answer = generateMockAnswer(query, context);
-        const answerTokens = answer.split(" ");
-        const streamMessageId = `assistant-${Date.now()}-${Math.random()
-          .toString(16)
-          .slice(2)}`;
+        try {
+          result = await askKnowledge({
+            documentId,
+            question: query,
+            signal: abortRef.current.signal,
+          });
+        } catch (error) {
+          if (error?.name === "AbortError") throw error;
+          if (!isKnowledgeMockFallbackEnabled()) throw error;
 
-        setSelectedContext(context);
-        setCitations(nextCitations);
-        setConfidence(nextConfidence);
+          result = createFallbackResult(query, scopedDocuments);
+        }
+
+        setSelectedContext(result.context);
+        setCitations(result.citations);
+        setConfidence(result.confidence);
         setMessages((currentMessages) => [
           ...currentMessages,
-          {
-            id: streamMessageId,
-            role: "assistant",
-            content: "",
-            timestamp: new Date().toLocaleTimeString("id-ID", {
-              hour: "2-digit",
-              minute: "2-digit",
-              timeZone: "Asia/Jayapura",
-            }),
+          createMessage("assistant", result.answer, {
             actionId: options.actionId || null,
-            citationCount: nextCitations.length,
-            confidence: nextConfidence,
-            isStreaming: true,
-          },
+            citationCount: result.citations.length,
+            confidence: result.confidence,
+            mode: result.mode,
+            verificationRequired: result.verificationRequired,
+          }),
         ]);
-
-        let index = 0;
-        streamRef.current = window.setInterval(() => {
-          index += 1;
-
-          setMessages((currentMessages) =>
-            currentMessages.map((message) => {
-              if (message.id !== streamMessageId) return message;
-
-              const nextContent = answerTokens.slice(0, index).join(" ");
-              const isComplete = index >= answerTokens.length;
-
-              return {
-                ...message,
-                content: nextContent,
-                isStreaming: !isComplete,
-              };
-            }),
-          );
-
-          if (index >= answerTokens.length) {
-            if (streamRef.current) window.clearInterval(streamRef.current);
-            streamRef.current = null;
-            setIsLoading(false);
-          }
-        }, 28);
 
         onActivity?.(
           options.activityTitle || "AI question asked",
-          context.length
-            ? `${userLabel} returned ${context.length} local context match(es).`
-            : `${userLabel} returned no matching local documents.`,
-          options.tone || (context.length ? "green" : "maroon"),
+          result.context.length
+            ? `${userLabel} returned ${result.context.length} RAG context match(es).`
+            : `${userLabel} requires additional verification.`,
+          options.tone || (result.context.length ? "green" : "maroon"),
         );
-      }, 220);
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+
+        setMessages((currentMessages) => [
+          ...currentMessages,
+          createMessage(
+            "assistant",
+            error?.message ||
+              "Knowledge RAG request failed. Verification required.",
+            {
+              actionId: options.actionId || null,
+              confidence: 0,
+              verificationRequired: true,
+            },
+          ),
+        ]);
+        onActivity?.(
+          "AI question failed",
+          error?.message || "Knowledge RAG API unavailable.",
+          "maroon",
+        );
+      } finally {
+        setIsLoading(false);
+      }
     },
-    [documents, isLoading, onActivity],
+    [activeDocument, documents, isLoading, onActivity],
   );
 
   const submitQuestion = useCallback(

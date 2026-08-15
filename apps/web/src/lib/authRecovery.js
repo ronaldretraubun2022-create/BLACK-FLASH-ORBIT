@@ -33,11 +33,11 @@ export function createSessionExpiredError() {
 export async function recoverStaleRefreshToken(error) {
   if (!isStaleRefreshTokenError(error)) return false;
 
-  await clearLocalAuthStateAndRedirect();
+  await clearAuthSessionAndRedirect();
   return true;
 }
 
-async function clearLocalAuthStateAndRedirect() {
+export async function clearAuthSessionAndRedirect() {
   if (!authRecoveryPromise) {
     authRecoveryPromise = runAuthRecovery().finally(() => {
       authRecoveryPromise = null;

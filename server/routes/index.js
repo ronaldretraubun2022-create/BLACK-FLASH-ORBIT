@@ -1,6 +1,7 @@
 const express = require("express");
 const supabase = require("../lib/supabase");
 const { requireAuth } = require("../middleware/requireAuth");
+const { requireAdmin } = require("../middleware/requireAdmin");
 
 const router = express.Router();
 const MAX_PROMPT_TITLE_LENGTH = 140;
@@ -1712,7 +1713,7 @@ router.get("/profile", requireAuth, async (req, res) => {
   res.json(profile);
 });
 
-router.get("/security", (req, res) => {
+router.get("/security", requireAdmin, (req, res) => {
   const security = {
     securityScore: 94,
     helmet: "PROTECTED",

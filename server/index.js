@@ -5,7 +5,6 @@ const http = require("node:http");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
-const morgan = require("morgan");
 const compression = require("compression");
 const rateLimit = require("express-rate-limit");
 
@@ -19,6 +18,10 @@ const knowledgeRoutes = require("./routes/knowledge.routes");
 const webBuilderRoutes = require("./routes/webBuilder.routes");
 const notFound = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
+const {
+  getEmbeddingProviderStatus,
+  getKnowledgeChatProviderStatus,
+} = require("./services/knowledge/embeddingService");
 
 const app = express();
 
@@ -69,6 +72,29 @@ function uniqueValues(values) {
   return values.filter(
     (value, index, source) => value && source.indexOf(value) === index,
   );
+}
+
+function sanitizeLogValue(value, maxLength = 240) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function requestLogger(req, res, next) {
+  const startedAt = Date.now();
+
+  res.once("finish", () => {
+    console.info("[ORBIT HTTP]", {
+      durationMs: Date.now() - startedAt,
+      method: sanitizeLogValue(req.method, 12),
+      path: sanitizeLogValue(req.originalUrl || req.url),
+      status: res.statusCode,
+    });
+  });
+
+  next();
 }
 
 function isDevelopmentHostname(hostname) {
@@ -210,6 +236,19 @@ function hasEnvValue(key) {
   return Boolean(String(process.env[key] || "").trim());
 }
 
+function validateRequiredEnv() {
+  const embeddingProvider = getEmbeddingProviderStatus();
+  const knowledgeChatProvider = getKnowledgeChatProviderStatus();
+
+  console.info("[ORBIT Startup] Knowledge env", {
+    embeddingProvider,
+    knowledgeChatProvider,
+    serviceRoleConfigured:
+      hasEnvValue("SUPABASE_URL") &&
+      hasEnvValue("SUPABASE_SERVICE_ROLE_KEY"),
+  });
+}
+
 function getStartupEnvironmentDiagnostics() {
   const hasSupabaseUrl = hasEnvValue("SUPABASE_URL");
   const hasSupabaseAnonKey = hasEnvValue("SUPABASE_ANON_KEY");
@@ -244,6 +283,7 @@ function logStartupEnvironmentDiagnostics() {
 
 if (NODE_ENV !== "test") {
   logStartupEnvironmentDiagnostics();
+  validateRequiredEnv();
 }
 
 app.disable("x-powered-by");
@@ -268,14 +308,17 @@ app.use(
         return callback(null, true);
       }
 
-      return callback(new Error(`CORS blocked: ${origin}`));
+      const error = new Error("CORS origin denied.");
+      error.code = "CORS_ORIGIN_DENIED";
+      error.statusCode = 403;
+      return callback(error);
     },
     credentials: true,
   }),
 );
 
 if (NODE_ENV !== "test") {
-  app.use(morgan(isProduction ? "combined" : "dev"));
+  app.use(requestLogger);
 }
 
 app.get(

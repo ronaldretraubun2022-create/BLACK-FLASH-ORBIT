@@ -19,6 +19,9 @@ const DEFAULT_OPENROUTER_MODEL = "openrouter/auto";
 const MIN_OPENROUTER_API_KEY_LENGTH = 32;
 const OPENROUTER_API_KEY_PREFIX = "sk-or-v1-";
 const OPENROUTER_TIMEOUT_MS = 30000;
+const DEBUG_AI_AUTH =
+  process.env.NODE_ENV !== "production" &&
+  process.env.DEBUG_AI_AUTH === "true";
 const CHAT_MEMORY_LIMIT = 20;
 const MAX_AI_MESSAGE_LENGTH = 12000;
 const MAX_AI_HISTORY_ITEMS = 20;
@@ -331,23 +334,24 @@ function getBearerToken(req) {
 function getAuthDebug(req) {
   const authorization = req.headers.authorization || "";
   const authHeaderStartsWithBearer = authorization.startsWith("Bearer ");
-  const token = authHeaderStartsWithBearer
-    ? authorization.slice("Bearer ".length).trim()
-    : "";
 
   return {
     hasAuthorization: Boolean(authorization),
     authHeaderStartsWithBearer,
-    tokenLength: token.length,
   };
 }
 
 function logAuthDebug(req, reason, details = {}) {
+  const debugDetails = DEBUG_AI_AUTH
+    ? {
+        ...getAuthDebug(req),
+        supabaseAuthStatus: details.supabaseAuthStatus || null,
+        userId: details.userId || null,
+      }
+    : {};
+
   console.warn("[AI Auth]", {
-    ...getAuthDebug(req),
-    supabaseAuthError: null,
-    userId: null,
-    ...details,
+    ...debugDetails,
     reason,
   });
 }
@@ -371,10 +375,7 @@ async function requireAuthenticatedUser(req) {
     authResult = await supabase.auth.getUser(token);
   } catch (error) {
     logAuthDebug(req, "supabase_auth_unavailable", {
-      supabaseAuthError: {
-        message: error.message || null,
-        status: error.status || null,
-      },
+      supabaseAuthStatus: error.status || null,
     });
     throw createHttpError(
       "Gagal validasi Supabase auth token.",
@@ -393,7 +394,6 @@ async function requireAuthenticatedUser(req) {
   const error = authResult?.error;
   const supabaseAuthError = error
     ? {
-        message: error.message || null,
         status: error.status || null,
       }
     : null;
@@ -402,7 +402,7 @@ async function requireAuthenticatedUser(req) {
     req,
     error || !user?.id ? "invalid_supabase_token" : "supabase_auth_validated",
     {
-      supabaseAuthError,
+      supabaseAuthStatus: supabaseAuthError?.status || null,
       userId: user?.id || null,
     },
   );
@@ -604,9 +604,8 @@ async function logAiAuditEvent({
   user,
 }) {
   try {
-    const userEmail = normalizeEmail(user?.email);
     const userId = user?.id || null;
-    const message = `AI chat ${status}: user=${userEmail || userId || "unknown"} session=${sessionId} model=${model} duration=${durationMs}ms`;
+    const message = `AI chat ${status}: user=${userId || "unknown"} session=${sessionId} model=${model} duration=${durationMs}ms`;
 
     console.info("[AI Audit]", {
       code,
@@ -614,7 +613,6 @@ async function logAiAuditEvent({
       model,
       sessionId,
       status,
-      userEmail: userEmail || null,
       userId,
     });
 

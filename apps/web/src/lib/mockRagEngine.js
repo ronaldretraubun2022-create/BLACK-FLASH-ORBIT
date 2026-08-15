@@ -270,6 +270,6 @@ export function generateMockAnswer(query, context = []) {
     "",
     `Retrieved context:\n${chunkList}`,
     "",
-    "Mock AI response based on local demo context.",
+    "Development fallback response based on local demo context.",
   ].join("\n");
 }

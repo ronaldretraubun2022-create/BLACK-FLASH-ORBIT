@@ -26,4 +26,13 @@ function getSupabaseAdmin() {
   return adminClient;
 }
 
-module.exports = { getSupabaseAdmin };
+function isSupabaseServiceConfigured() {
+  return Boolean(String(process.env.SUPABASE_URL || "").trim()) && Boolean(
+    String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim(),
+  );
+}
+
+module.exports = {
+  getSupabaseAdmin,
+  isSupabaseServiceConfigured,
+};

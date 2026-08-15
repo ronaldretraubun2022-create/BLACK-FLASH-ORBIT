@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  Trash2,
   UploadCloud,
 } from "lucide-react";
 import { UserMenu } from "../components/auth/UserMenu.jsx";
@@ -27,11 +28,19 @@ import {
   knowledgeCollections,
   knowledgeDocuments,
   knowledgeReleaseState,
-  mockUploadQueue,
 } from "../data/knowledgeMock.js";
 import { useProfile } from "../hooks/useProfile.js";
 import { useKnowledgeCopilot } from "../hooks/useKnowledgeCopilot.js";
 import { searchKnowledge } from "../lib/mockRagEngine.js";
+import {
+  deleteKnowledgeDocument,
+  formatKnowledgeFileSize,
+  getKnowledgeDocument,
+  getKnowledgeDocuments,
+  isKnowledgeMockFallbackEnabled,
+  searchKnowledgeDocuments,
+  uploadKnowledgeDocument,
+} from "../services/knowledgeService.js";
 
 function getNowLabel() {
   return new Date().toLocaleTimeString("id-ID", {
@@ -41,40 +50,132 @@ function getNowLabel() {
   });
 }
 
+const emptyKnowledgeDocument = {
+  id: "",
+  citations: [],
+  collectionId: "all",
+  confidence: 0,
+  contextChunks: [],
+  excerpt: "Upload dokumen untuk mulai memakai Knowledge RAG API.",
+  favorite: false,
+  owner: "Authenticated User",
+  pages: "-",
+  source: "Knowledge RAG API",
+  status: "Awaiting Upload",
+  summary:
+    "Belum ada dokumen terindeks. Upload PDF, TXT, MD, atau DOCX untuk membuat chunk, embedding, dan citation source.",
+  tags: ["rag-api"],
+  title: "No Knowledge Document",
+  tokens: "-",
+  type: "DOCUMENT",
+  updatedAt: "not synced",
+};
+
+function mergeKnowledgeDocuments(primaryDocuments, secondaryDocuments = []) {
+  const documentsById = new Map();
+
+  [...primaryDocuments, ...secondaryDocuments].forEach((document) => {
+    if (document?.id && !documentsById.has(document.id)) {
+      documentsById.set(document.id, document);
+    }
+  });
+
+  return Array.from(documentsById.values());
+}
+
 export function KnowledgeBase() {
   const { profile } = useProfile();
   const userRole = profile?.role || "user";
   const [activeCollectionId, setActiveCollectionId] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedDocument, setSelectedDocument] = useState(
-    knowledgeDocuments[0],
-  );
-  const [favoriteIds, setFavoriteIds] = useState(
-    () =>
-      new Set(
-        knowledgeDocuments
-          .filter((document) => document.favorite)
-          .map((document) => document.id),
-      ),
-  );
+  const [documents, setDocuments] = useState([]);
+  const [selectedDocumentId, setSelectedDocumentId] = useState("");
+  const [favoriteIds, setFavoriteIds] = useState(() => new Set());
   const [activityLog, setActivityLog] = useState(initialKnowledgeActivityLog);
-  const [mockUploadState, setMockUploadState] = useState({
+  const [uploadState, setUploadState] = useState({
+    error: "",
+    isUploading: false,
+    lastUploaded: "",
     phase: "Ready",
+    progress: 0,
     indexedCount: 0,
-    queueCount: mockUploadQueue.length,
+    queueCount: 0,
   });
+  const [isDocumentsLoading, setIsDocumentsLoading] = useState(true);
+  const [libraryError, setLibraryError] = useState("");
+  const [isUsingMockFallback, setIsUsingMockFallback] = useState(false);
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
+  const [remoteSearchDocuments, setRemoteSearchDocuments] = useState([]);
+  const [deletingDocumentId, setDeletingDocumentId] = useState("");
+  const uploadInputRef = useRef(null);
+  const failedUploadFilesRef = useRef([]);
   const searchInputRef = useRef(null);
+  const selectedDocument =
+    documents.find((document) => document.id === selectedDocumentId) ||
+    documents[0] ||
+    emptyKnowledgeDocument;
+
+  const loadKnowledgeDocuments = useCallback(async () => {
+    setIsDocumentsLoading(true);
+    setLibraryError("");
+
+    try {
+      const nextDocuments = await getKnowledgeDocuments();
+
+      setDocuments(nextDocuments);
+      setIsUsingMockFallback(false);
+      setFavoriteIds(
+        new Set(
+          nextDocuments
+            .filter((document) => document.favorite)
+            .map((document) => document.id),
+        ),
+      );
+      setUploadState((currentState) => ({
+        ...currentState,
+        indexedCount: nextDocuments.length,
+      }));
+    } catch (error) {
+      if (String(error?.message || "").includes("Session token missing")) {
+        setDocuments([]);
+        setIsUsingMockFallback(false);
+        setLibraryError("Session token missing. Please login again.");
+        return;
+      }
+
+      if (isKnowledgeMockFallbackEnabled()) {
+        setDocuments(knowledgeDocuments);
+        setIsUsingMockFallback(true);
+        setLibraryError(
+          "Development fallback active. Knowledge RAG API belum tersedia.",
+        );
+        return;
+      }
+
+      setDocuments([]);
+      setIsUsingMockFallback(false);
+      setLibraryError(error?.message || "Knowledge RAG API unavailable.");
+    } finally {
+      setIsDocumentsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadKnowledgeDocuments();
+  }, [loadKnowledgeDocuments]);
 
   const filteredDocuments = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
+    const sourceDocuments =
+      query && remoteSearchDocuments.length ? remoteSearchDocuments : documents;
 
-    return knowledgeDocuments.filter((document) => {
+    return sourceDocuments.filter((document) => {
       const isInCollection =
         activeCollectionId === "all" ||
         document.collectionId === activeCollectionId;
 
       if (!isInCollection) return false;
+      if (query && remoteSearchDocuments.length) return true;
       if (!query) return true;
 
       return [
@@ -89,7 +190,38 @@ export function KnowledgeBase() {
         .toLowerCase()
         .includes(query);
     });
-  }, [activeCollectionId, searchQuery]);
+  }, [activeCollectionId, documents, remoteSearchDocuments, searchQuery]);
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+
+    if (!query || isUsingMockFallback) {
+      setRemoteSearchDocuments([]);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    let isActive = true;
+
+    searchKnowledgeDocuments(query, { signal: controller.signal })
+      .then((nextDocuments) => {
+        if (!isActive) return;
+
+        setRemoteSearchDocuments(nextDocuments);
+        setDocuments((currentDocuments) =>
+          mergeKnowledgeDocuments(currentDocuments, nextDocuments),
+        );
+      })
+      .catch((error) => {
+        if (!isActive || error?.name === "AbortError") return;
+        setRemoteSearchDocuments([]);
+      });
+
+    return () => {
+      isActive = false;
+      controller.abort();
+    };
+  }, [isUsingMockFallback, searchQuery]);
 
   const addActivity = useCallback((action, detail, tone = "gold") => {
     setActivityLog((currentLog) => [
@@ -104,54 +236,253 @@ export function KnowledgeBase() {
     ]);
   }, []);
 
+  // Keep these handlers above useKnowledgeKeyboardShortcuts.
+  // The hook reads them during render; moving the hook above this block
+  // reintroduces the TDZ crash that previously broke the page.
+  const handleSelectDocument = useCallback(async (document) => {
+    setSelectedDocumentId(document.id);
+    addActivity(
+      "Document preview opened",
+      `${document.title} loaded in preview panel.`,
+      "green",
+    );
+
+    if (!document?.id || isUsingMockFallback) return;
+
+    try {
+      const previewDocument = await getKnowledgeDocument(document.id);
+
+      setDocuments((currentDocuments) =>
+        mergeKnowledgeDocuments([previewDocument], currentDocuments),
+      );
+    } catch (error) {
+      setLibraryError(
+        error?.message || "Gagal mengambil preview knowledge document.",
+      );
+    }
+  }, [addActivity, isUsingMockFallback]);
+
+  const toggleFavorite = useCallback((document) => {
+    if (!document?.id) return;
+
+    const isFavorite = favoriteIds.has(document.id);
+
+    setFavoriteIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      if (isFavorite) {
+        nextIds.delete(document.id);
+      } else {
+        nextIds.add(document.id);
+      }
+
+      return nextIds;
+    });
+    addActivity(
+      isFavorite ? "Favorite removed" : "Favorite pinned",
+      document.title,
+      isFavorite ? "maroon" : "gold",
+    );
+  }, [addActivity, favoriteIds]);
+
+  const openUploadPicker = useCallback(() => {
+    uploadInputRef.current?.click();
+  }, []);
+
+  const handleKnowledgeUpload = useCallback(async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length || uploadState.isUploading) return;
+
+    failedUploadFilesRef.current = files;
+    setUploadState((currentState) => ({
+      ...currentState,
+      error: "",
+      isUploading: true,
+      phase: "Uploading",
+      progress: 0,
+      queueCount: files.length,
+    }));
+
+    try {
+      for (const [index, file] of files.entries()) {
+        failedUploadFilesRef.current = files.slice(index);
+        const uploadedDocument = await uploadKnowledgeDocument({
+          file,
+          onProgress: (progress) => {
+            setUploadState((currentState) => ({
+              ...currentState,
+              progress: Math.min(100, progress),
+            }));
+          },
+          title: file.name.replace(/\.[^.]+$/, ""),
+        });
+
+        if (uploadedDocument?.id) {
+          setDocuments((currentDocuments) =>
+            mergeKnowledgeDocuments([uploadedDocument], currentDocuments),
+          );
+          setSelectedDocumentId(uploadedDocument.id);
+        }
+
+        addActivity(
+          "Knowledge document indexed",
+          `${file.name} uploaded to RAG API (${index + 1}/${files.length}).`,
+          "green",
+        );
+        failedUploadFilesRef.current = files.slice(index + 1);
+      }
+
+      await loadKnowledgeDocuments();
+      failedUploadFilesRef.current = [];
+      setUploadState((currentState) => ({
+        ...currentState,
+        error: "",
+        isUploading: false,
+        lastUploaded: files[files.length - 1]?.name || "",
+        phase: "Indexed",
+        progress: 100,
+        queueCount: 0,
+      }));
+    } catch (error) {
+      if (String(error?.message || "").includes("Session token missing")) {
+        setUploadState((currentState) => ({
+          ...currentState,
+          error: "Session token missing. Please login again.",
+          isUploading: false,
+          phase: "Failed",
+        }));
+        addActivity(
+          "Knowledge upload failed",
+          "Session token missing. Please login again.",
+          "maroon",
+        );
+        return;
+      }
+
+      setUploadState((currentState) => ({
+        ...currentState,
+        error: error?.message || "Upload knowledge gagal.",
+        isUploading: false,
+        phase: "Failed",
+      }));
+      addActivity(
+        "Knowledge upload failed",
+        error?.message || "Upload knowledge gagal.",
+        "maroon",
+      );
+    }
+  }, [addActivity, loadKnowledgeDocuments, uploadState.isUploading]);
+
+  const retryKnowledgeUpload = useCallback(() => {
+    if (!failedUploadFilesRef.current.length || uploadState.isUploading) return;
+
+    handleKnowledgeUpload(failedUploadFilesRef.current);
+  }, [handleKnowledgeUpload, uploadState.isUploading]);
+
+  const handleDeleteDocument = useCallback(async (document) => {
+    if (!document?.id || isUsingMockFallback) return;
+    if (deletingDocumentId === document.id) return;
+    if (!window.confirm(`Hapus "${document.title}" dari Knowledge RAG?`)) {
+      return;
+    }
+
+    setDeletingDocumentId(document.id);
+    setLibraryError("");
+
+    try {
+      await deleteKnowledgeDocument(document.id);
+      addActivity(
+        "Knowledge document deleted",
+        document.title,
+        "maroon",
+      );
+      if (selectedDocumentId === document.id) {
+        setSelectedDocumentId("");
+      }
+      await loadKnowledgeDocuments();
+    } catch (error) {
+      setLibraryError(
+        error?.message || "Gagal menghapus knowledge document.",
+      );
+      addActivity(
+        "Knowledge delete failed",
+        error?.message || "Gagal menghapus knowledge document.",
+        "maroon",
+      );
+    } finally {
+      setDeletingDocumentId("");
+    }
+  }, [
+    addActivity,
+    deletingDocumentId,
+    isUsingMockFallback,
+    loadKnowledgeDocuments,
+    selectedDocumentId,
+  ]);
+
   const copilot = useKnowledgeCopilot({
     activeDocument: selectedDocument,
-    documents: knowledgeDocuments,
+    documents,
     onActivity: addActivity,
   });
 
   const semanticResults = useMemo(
-    () => searchKnowledge(searchQuery, filteredDocuments).slice(0, 4),
-    [filteredDocuments, searchQuery],
+    () => {
+      const query = searchQuery.trim();
+      const remoteResults =
+        query && remoteSearchDocuments.length
+          ? remoteSearchDocuments.map((document) => ({
+              document,
+              score: Math.max(65, Number(document.confidence || 0)),
+            }))
+          : [];
+
+      return (remoteResults.length
+        ? remoteResults
+        : searchKnowledge(searchQuery, filteredDocuments)
+      ).slice(0, 4);
+    },
+    [filteredDocuments, remoteSearchDocuments, searchQuery],
   );
 
   const favoriteDocuments = useMemo(
-    () => knowledgeDocuments.filter((document) => favoriteIds.has(document.id)),
-    [favoriteIds],
+    () => documents.filter((document) => favoriteIds.has(document.id)),
+    [documents, favoriteIds],
   );
 
   useEffect(() => {
-    if (!filteredDocuments.length) return;
-    if (filteredDocuments.some((document) => document.id === selectedDocument.id)) {
+    if (!filteredDocuments.length) {
+      setSelectedDocumentId("");
       return;
     }
 
-    setSelectedDocument(filteredDocuments[0]);
-  }, [filteredDocuments, selectedDocument.id]);
+    if (filteredDocuments.some((document) => document.id === selectedDocumentId)) {
+      return;
+    }
+
+    setSelectedDocumentId(filteredDocuments[0].id);
+  }, [filteredDocuments, selectedDocumentId]);
 
   const metrics = useMemo(
     () => [
       {
         icon: Files,
         label: "Documents",
-        value: knowledgeDocuments.length,
-        detail: "mock library",
+        value: documents.length,
+        detail: isUsingMockFallback ? "dev fallback" : "rag indexed",
       },
       {
         icon: Database,
         label: "RAG Ready",
-        value: knowledgeDocuments.filter((document) => document.confidence >= 90)
+        value: documents.filter((document) => document.status === "Indexed")
           .length,
-        detail: "trusted context",
+        detail: "vector indexed",
       },
       {
         icon: Link2,
         label: "Citations",
-        value: knowledgeDocuments.reduce(
-          (total, document) => total + document.citations.length,
-          0,
-        ),
-        detail: "source cards",
+        value: copilot.citations.length,
+        detail: "latest answer",
       },
       {
         icon: Star,
@@ -160,7 +491,7 @@ export function KnowledgeBase() {
         detail: "pinned docs",
       },
     ],
-    [favoriteDocuments.length],
+    [copilot.citations.length, documents, favoriteDocuments.length, isUsingMockFallback],
   );
 
   useEffect(() => {
@@ -193,7 +524,7 @@ export function KnowledgeBase() {
     onOpenCopilot: () => setIsCopilotOpen(true),
     onCloseCopilot: () => setIsCopilotOpen(false),
     onToggleFavorite: toggleFavorite,
-    onToggleUpload: handleMockUpload,
+    onToggleUpload: openUploadPicker,
     setActiveCollectionId,
     selectedDocument,
   });
@@ -210,64 +541,42 @@ export function KnowledgeBase() {
     quickPrompts: copilot.quickPrompts,
     selectedContext: copilot.selectedContext,
   };
+  const releaseState = useMemo(
+    () =>
+      knowledgeReleaseState.map((item) =>
+        item.label === "Mode"
+          ? {
+              ...item,
+              tone: isUsingMockFallback ? "text-amber-300" : "text-emerald-300",
+              value: isUsingMockFallback ? "dev-fallback" : "rag-api",
+            }
+          : item,
+      ),
+    [isUsingMockFallback],
+  );
+  const collectionItems = useMemo(
+    () =>
+      knowledgeCollections.map((collection) => {
+        const count =
+          collection.id === "all"
+            ? documents.length
+            : documents.filter(
+                (document) => document.collectionId === collection.id,
+              ).length;
 
-  const handleSelectDocument = useCallback((document) => {
-    setSelectedDocument(document);
-    addActivity(
-      "Document preview opened",
-      `${document.title} loaded in preview panel.`,
-      "green",
-    );
-  }, [addActivity]);
-
-  const toggleFavorite = useCallback((document) => {
-    const isFavorite = favoriteIds.has(document.id);
-
-    setFavoriteIds((currentIds) => {
-      const nextIds = new Set(currentIds);
-
-      if (isFavorite) {
-        nextIds.delete(document.id);
-      } else {
-        nextIds.add(document.id);
-      }
-
-      return nextIds;
-    });
-    addActivity(
-      isFavorite ? "Favorite removed" : "Favorite pinned",
-      document.title,
-      isFavorite ? "maroon" : "gold",
-    );
-  }, [addActivity, favoriteIds]);
-
-  const handleMockUpload = useCallback(() => {
-    const nextPhase =
-      mockUploadState.phase === "Ready" ? "Validated" : "Ready";
-    const nextIndexedCount =
-      nextPhase === "Validated"
-        ? filteredDocuments.length
-        : Math.max(0, mockUploadState.indexedCount - 1);
-
-    setMockUploadState({
-      phase: nextPhase,
-      indexedCount: nextIndexedCount,
-      queueCount: mockUploadQueue.length,
-    });
-    addActivity(
-      "Mock upload checked",
-      nextPhase === "Validated"
-        ? `Upload panel indexed ${nextIndexedCount} local document(s) without backend traffic.`
-        : "Upload panel reset to ready state.",
-      nextPhase === "Validated" ? "green" : "gold",
-    );
-  }, [addActivity, filteredDocuments.length, mockUploadState.indexedCount, mockUploadState.phase]);
+        return {
+          ...collection,
+          countLabel: `${count} docs`,
+        };
+      }),
+    [documents],
+  );
 
   return (
     <main className="min-h-screen bg-[#050506] text-zinc-100">
       <div className="orbit-shell">
         <CommandCenterSidebar
-          releaseState={knowledgeReleaseState}
+          releaseState={releaseState}
           userRole={userRole}
         />
 
@@ -293,6 +602,9 @@ export function KnowledgeBase() {
 
           <div className="grid gap-4 p-4 md:p-6">
             <KnowledgeHero
+              isDocumentsLoading={isDocumentsLoading}
+              isUsingMockFallback={isUsingMockFallback}
+              libraryError={libraryError}
               metrics={metrics}
               onOpenCopilot={() => setIsCopilotOpen(true)}
               selectedDocument={selectedDocument}
@@ -301,7 +613,7 @@ export function KnowledgeBase() {
             <section className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)_420px]">
               <CollectionSidebar
                 activeCollectionId={activeCollectionId}
-                collections={knowledgeCollections}
+                collections={collectionItems}
                 onSelectCollection={setActiveCollectionId}
               />
 
@@ -315,8 +627,11 @@ export function KnowledgeBase() {
                   results={semanticResults}
                 />
                 <DocumentLibrary
+                  deletingDocumentId={deletingDocumentId}
                   documents={filteredDocuments}
                   favoriteIds={favoriteIds}
+                  isUsingMockFallback={isUsingMockFallback}
+                  onDeleteDocument={handleDeleteDocument}
                   onSelectDocument={handleSelectDocument}
                   onToggleFavorite={toggleFavorite}
                   selectedDocumentId={selectedDocument.id}
@@ -331,20 +646,26 @@ export function KnowledgeBase() {
 
             <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
               <div className="grid gap-4 lg:grid-cols-2">
-                <SourceCitationCards document={selectedDocument} />
+                <SourceCitationCards
+                  citations={copilot.citations}
+                  document={selectedDocument}
+                />
                 <RagContextPreview
                   document={selectedDocument}
                   id="knowledge-rag-preview"
+                  selectedContext={copilot.selectedContext}
                 />
               </div>
 
               <aside className="grid gap-4 content-start">
                 <UploadPanel
-                  mockUploadState={mockUploadState}
-                  onMockUpload={handleMockUpload}
-                  uploadQueue={mockUploadQueue}
-                  indexedCount={mockUploadState.indexedCount}
-                  queueCount={mockUploadState.queueCount}
+                  canRetryUpload={Boolean(failedUploadFilesRef.current.length)}
+                  inputRef={uploadInputRef}
+                  isUsingMockFallback={isUsingMockFallback}
+                  onRetryUpload={retryKnowledgeUpload}
+                  onSelectFiles={handleKnowledgeUpload}
+                  onTriggerUpload={openUploadPicker}
+                  uploadState={uploadState}
                 />
                 <FavoritesPanel
                   documents={favoriteDocuments}
@@ -472,7 +793,14 @@ function useKnowledgeKeyboardShortcuts({
   ]);
 }
 
-function KnowledgeHero({ metrics, onOpenCopilot, selectedDocument }) {
+function KnowledgeHero({
+  isDocumentsLoading,
+  isUsingMockFallback,
+  libraryError,
+  metrics,
+  onOpenCopilot,
+  selectedDocument,
+}) {
   return (
     <section className="rounded-lg border border-[#d9ad57]/20 bg-[linear-gradient(135deg,_rgba(217,173,87,0.13),_rgba(125,31,47,0.24)_42%,_rgba(255,255,255,0.035))] p-5 shadow-2xl shadow-black/30 md:p-6">
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -485,11 +813,18 @@ function KnowledgeHero({ metrics, onOpenCopilot, selectedDocument }) {
             Source-aware AI copilot for newsroom knowledge.
           </h2>
           <p className="mt-4 max-w-3xl text-sm leading-6 text-zinc-400">
-            Local mock RAG panel untuk tanya dokumen, preview retrieved context,
-            source citation cards, confidence score, quick prompts, command
-            actions, upload staging, favorites, dan activity log tanpa klaim
-            integrasi API real.
+            Production RAG API untuk upload dokumen, chunking, embedding
+            pgvector, retrieved context, source citation cards, confidence
+            score, quick prompts, command actions, favorites, dan activity log
+            dengan Supabase Bearer auth.
           </p>
+          {libraryError ? (
+            <p className="mt-3 rounded-lg border border-[#d9ad57]/25 bg-[#d9ad57]/10 px-3 py-2 text-xs font-bold text-[#f1c36f]">
+              {isUsingMockFallback
+                ? libraryError
+                : `Knowledge API warning: ${libraryError}`}
+            </p>
+          ) : null}
           <button
             aria-label="Open AI Knowledge Copilot panel"
             className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#d9ad57]/35 bg-[#d9ad57]/15 px-4 text-sm font-black text-[#f1c36f] transition hover:bg-[#d9ad57]/20 xl:hidden"
@@ -515,6 +850,16 @@ function KnowledgeHero({ metrics, onOpenCopilot, selectedDocument }) {
           <StatusLine label="Confidence" value={`${selectedDocument.confidence}%`} />
           <StatusLine label="Owner" value={selectedDocument.owner} />
           <StatusLine label="Updated" value={selectedDocument.updatedAt} />
+          <StatusLine
+            label="API"
+            value={
+              isDocumentsLoading
+                ? "Syncing"
+                : isUsingMockFallback
+                  ? "Dev fallback"
+                  : "RAG live"
+            }
+          />
         </div>
       </div>
 
@@ -669,8 +1014,11 @@ function SemanticSearchPanel({
 }
 
 function DocumentLibrary({
+  deletingDocumentId,
   documents,
   favoriteIds,
+  isUsingMockFallback,
+  onDeleteDocument,
   onSelectDocument,
   onToggleFavorite,
   selectedDocumentId,
@@ -750,6 +1098,17 @@ function DocumentLibrary({
                       type="button">
                       <ChevronRight size={17} />
                     </button>
+                    <button
+                      aria-label={`Delete ${document.title}`}
+                      className="grid size-10 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-zinc-500 transition hover:border-[#7d1f2f]/40 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={
+                        isUsingMockFallback ||
+                        deletingDocumentId === document.id
+                      }
+                      onClick={() => onDeleteDocument(document)}
+                      type="button">
+                      <Trash2 size={16} />
+                    </button>
                   </div>
                 </div>
 
@@ -772,71 +1131,121 @@ function DocumentLibrary({
 }
 
 function UploadPanel({
-  indexedCount,
-  mockUploadState,
-  onMockUpload,
-  queueCount,
-  uploadQueue,
+  canRetryUpload,
+  inputRef,
+  isUsingMockFallback,
+  onRetryUpload,
+  onSelectFiles,
+  onTriggerUpload,
+  uploadState,
 }) {
-  const isReady = mockUploadState.phase === "Ready";
+  const isReady = uploadState.phase === "Ready";
 
   return (
     <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="orbit-kicker">Upload Panel</p>
-          <h2 className="mt-1 text-lg font-black text-white">Mock Intake</h2>
+          <h2 className="mt-1 text-lg font-black text-white">RAG Intake</h2>
         </div>
         <UploadCloud className="text-[#d9ad57]" size={22} />
       </div>
 
       <div className="mt-4 rounded-lg border border-dashed border-[#d9ad57]/30 bg-black/25 p-4 text-center">
         <UploadCloud className="mx-auto text-[#d9ad57]" size={28} />
-        <p className="mt-3 text-sm font-black text-white">Drop zone preview</p>
+        <p className="mt-3 text-sm font-black text-white">Upload to RAG API</p>
         <p className="mt-2 text-xs leading-5 text-zinc-500">
-          Local mock state only. No file leaves the browser.
+          PDF, TXT, MD, atau DOCX. File dikirim ke backend protected, disimpan
+          di Supabase Storage, lalu diindeks dengan embeddings.
         </p>
+        <input
+          accept=".pdf,.txt,.md,.docx"
+          className="hidden"
+          multiple
+          onChange={(event) => {
+            onSelectFiles(event.target.files);
+            event.target.value = "";
+          }}
+          ref={inputRef}
+          type="file"
+        />
         <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          <StatusLine label="Upload phase" value={mockUploadState.phase} />
-          <StatusLine label="Indexed docs" value={String(indexedCount)} />
-          <StatusLine label="Queue size" value={String(queueCount)} />
+          <StatusLine label="Upload phase" value={uploadState.phase} />
+          <StatusLine label="Indexed docs" value={String(uploadState.indexedCount)} />
+          <StatusLine label="Queue size" value={String(uploadState.queueCount)} />
           <StatusLine
             label="Mode"
-            value={isReady ? "Awaiting files" : "Mock indexing active"}
+            value={
+              isUsingMockFallback
+                ? "Dev fallback"
+                : isReady
+                  ? "Awaiting files"
+                  : "RAG indexing active"
+            }
           />
+        </div>
+
+        <div className="mt-4 overflow-hidden rounded-full border border-white/10 bg-black/40">
+          <div
+            className="h-2 bg-[#d9ad57] transition-all"
+            style={{ width: `${Math.max(0, Math.min(100, uploadState.progress))}%` }}
+          />
+        </div>
+
+        {uploadState.lastUploaded ? (
+          <p className="mt-3 text-xs font-bold text-zinc-500">
+            Last upload: {uploadState.lastUploaded}
+          </p>
+        ) : null}
+
+        {uploadState.error ? (
+          <p className="mt-3 rounded-lg border border-rose-300/20 bg-rose-300/10 px-3 py-2 text-xs font-bold text-rose-100">
+            {uploadState.error}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-black text-white">
+              Supported files
+            </p>
+            <p className="mt-1 text-xs font-bold text-zinc-500">
+              PDF, TXT, MD, DOCX up to {formatKnowledgeFileSize(10 * 1024 * 1024)}
+            </p>
+          </div>
+          <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase text-zinc-400">
+            protected
+          </span>
         </div>
       </div>
 
-      <div className="mt-4 grid gap-2">
-        {uploadQueue.map((item) => (
-          <div
-            className="rounded-lg border border-white/10 bg-black/20 p-3"
-            key={item.id}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-black text-white">
-                  {item.name}
-                </p>
-                <p className="mt-1 text-xs font-bold text-zinc-500">
-                  {item.size}
-                </p>
-              </div>
-              <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase text-zinc-400">
-                {item.status}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
+      {isUsingMockFallback ? (
+        <div className="mt-4 rounded-lg border border-[#d9ad57]/25 bg-[#d9ad57]/10 p-3 text-xs leading-5 text-[#f1c36f]">
+          Development fallback active. Upload is disabled until Knowledge RAG
+          API is reachable.
+        </div>
+      ) : null}
 
       <button
-        aria-label="Validate mock upload queue"
-        className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#d9ad57]/35 bg-[#d9ad57]/15 px-4 text-sm font-black text-[#f1c36f] transition hover:bg-[#d9ad57]/20"
-        onClick={onMockUpload}
+        aria-label="Upload knowledge documents"
+        className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#d9ad57]/35 bg-[#d9ad57]/15 px-4 text-sm font-black text-[#f1c36f] transition hover:bg-[#d9ad57]/20 disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={uploadState.isUploading || isUsingMockFallback}
+        onClick={onTriggerUpload}
         type="button">
         <CheckCircle2 size={16} />
-        {isReady ? "Validate Mock Queue" : "Reset Mock Queue"}
+        {uploadState.isUploading ? "Indexing..." : "Upload & Index Document"}
       </button>
+      {uploadState.phase === "Failed" && canRetryUpload ? (
+        <button
+          className="mt-2 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-white/15 bg-white/[0.04] px-4 text-sm font-black text-white transition hover:border-[#d9ad57]/30 hover:text-[#f1c36f] disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={uploadState.isUploading || isUsingMockFallback}
+          onClick={onRetryUpload}
+          type="button">
+          Retry Failed Upload
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -932,22 +1341,24 @@ function DocumentPreview({ document }) {
   );
 }
 
-function SourceCitationCards({ document }) {
+function SourceCitationCards({ citations = [], document }) {
+  const displayedCitations = citations.length ? citations : document.citations;
+
   return (
     <section className="rounded-lg border border-white/10 bg-white/[0.035] p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="orbit-kicker">Selected Source Citations</p>
           <h2 className="mt-1 text-lg font-black text-white">
-            {document.citations.length} Cards
+            {displayedCitations.length} Cards
           </h2>
         </div>
         <Link2 className="text-[#d9ad57]" size={21} />
       </div>
 
       <div className="mt-4 grid gap-3">
-        {document.citations.length ? (
-          document.citations.map((citation) => (
+        {displayedCitations.length ? (
+          displayedCitations.map((citation) => (
             <article
               className="rounded-lg border border-white/10 bg-black/20 p-3"
               key={citation.id}>
@@ -979,7 +1390,11 @@ function SourceCitationCards({ document }) {
   );
 }
 
-function RagContextPreview({ document, id }) {
+function RagContextPreview({ document, id, selectedContext = [] }) {
+  const contextChunks = selectedContext.length
+    ? selectedContext.flatMap((item) => item.chunks || [])
+    : document.contextChunks;
+
   return (
     <section
       className="scroll-mt-24 rounded-lg border border-white/10 bg-white/[0.035] p-4"
@@ -993,8 +1408,8 @@ function RagContextPreview({ document, id }) {
       </div>
 
       <div className="mt-4 grid gap-2">
-        {document.contextChunks.length ? (
-          document.contextChunks.map((chunk, index) => (
+        {contextChunks.length ? (
+          contextChunks.map((chunk, index) => (
             <div
               className="rounded-lg border border-white/10 bg-black/25 p-3"
               key={chunk}>

@@ -57,7 +57,9 @@ export default defineConfig(({ command }) => {
       port: 5173,
       proxy: {
         "/api": {
-          target: "http://localhost:5000",
+          // Match the server's IPv4 listen address so Windows dev traffic
+          // does not bounce through localhost -> ::1 and fail.
+          target: "http://127.0.0.1:5000",
           changeOrigin: true,
           secure: false,
         },

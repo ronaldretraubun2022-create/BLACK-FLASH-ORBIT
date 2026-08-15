@@ -1,4 +1,4 @@
-import { getAuthenticatedHeaders, resolveApiUrl } from "./api";
+import { api } from "./api";
 
 export function createProfilePayload(user) {
   return {
@@ -8,23 +8,10 @@ export function createProfilePayload(user) {
   };
 }
 
-export async function ensureUserProfile(user) {
+export async function ensureUserProfile(user, { signal } = {}) {
   if (!user) return null;
 
-  const response = await fetch(resolveApiUrl("/v1/profile"), {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      ...(await getAuthenticatedHeaders()),
-    },
-    credentials: "include",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Gagal mengambil profile: ${response.status}`);
-  }
-
-  const profile = await response.json();
+  const profile = await api.getProfile({ signal });
 
   return {
     id: profile.id || user.id,
