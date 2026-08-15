@@ -1,5 +1,8 @@
 ﻿import { useMemo, useState } from "react";
-import { generateIntelligenceDraft } from "../services/newsroomAI.js";
+import {
+  generateIntelligenceDraft,
+  isNewsroomLocalFallbackEnabled,
+} from "../services/newsroomAI.js";
 
 const INTELLIGENCE_LAYERS = {
   "Writing Layer": [
@@ -852,6 +855,7 @@ export function AINewsroom() {
   const [citationEngineEnabled, setCitationEngineEnabled] = useState(true);
   const [sourceConfidenceEnabled, setSourceConfidenceEnabled] = useState(true);
   const [draft, setDraft] = useState("");
+  const [generationError, setGenerationError] = useState("");
   const [copyStatus, setCopyStatus] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [confidence, setConfidence] = useState({
@@ -983,6 +987,7 @@ export function AINewsroom() {
     const safeTopic = String(topic || "").trim();
 
     if (!safeTopic) {
+      setGenerationError("");
       setDraft(
         "Topik tidak boleh kosong. Silakan isi topik untuk menghasilkan draft.",
       );
@@ -990,6 +995,7 @@ export function AINewsroom() {
     }
 
     if (safeTopic.length > 3000) {
+      setGenerationError("");
       setDraft("Topik terlalu panjang. Batasi maksimal 3000 karakter.");
       return;
     }
@@ -1010,6 +1016,7 @@ export function AINewsroom() {
     };
 
     setIsGenerating(true);
+    setGenerationError("");
 
     try {
       const response = await generateIntelligenceDraft(payload);
@@ -1025,15 +1032,24 @@ export function AINewsroom() {
       } else {
         throw new Error("AI response missing draft");
       }
-    } catch {
-      const fallback = `[LOCAL FALLBACK MODE]\n\n${buildEditorialDraft({
-        topic: safeTopic,
-        layer,
-        mode,
-        audience,
-        complexity,
-      })}`;
-      setDraft(fallback);
+    } catch (error) {
+      if (isNewsroomLocalFallbackEnabled()) {
+        const fallback = `[LOCAL DEV FALLBACK MODE]\n\n${buildEditorialDraft({
+          topic: safeTopic,
+          layer,
+          mode,
+          audience,
+          complexity,
+        })}`;
+        setDraft(fallback);
+      } else {
+        setDraft("");
+        setGenerationError(
+          error?.message ||
+            "Gagal menghasilkan draf AI Newsroom. Periksa koneksi/provider lalu coba lagi.",
+        );
+      }
+
       setConfidence({
         score: 0,
         publicationReadiness: "Verification Required",
@@ -1181,7 +1197,8 @@ export function AINewsroom() {
             <select
               value={layer}
               onChange={handleLayerChange}
-              className="mb-5 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10">
+              className="mb-5 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10"
+            >
               {Object.keys(INTELLIGENCE_LAYERS).map((item) => (
                 <option key={item} value={item} className="bg-[#070d1a]">
                   {item}
@@ -1196,7 +1213,8 @@ export function AINewsroom() {
             <select
               value={mode}
               onChange={(event) => setMode(event.target.value)}
-              className="mb-5 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10">
+              className="mb-5 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10"
+            >
               {modes.map((item) => (
                 <option key={item} value={item} className="bg-[#070d1a]">
                   {item}
@@ -1211,7 +1229,8 @@ export function AINewsroom() {
             <select
               value={audience}
               onChange={(event) => setAudience(event.target.value)}
-              className="mb-5 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10">
+              className="mb-5 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10"
+            >
               {AUDIENCES.map((item) => (
                 <option key={item} value={item} className="bg-[#070d1a]">
                   {item}
@@ -1226,7 +1245,8 @@ export function AINewsroom() {
             <select
               value={complexity}
               onChange={(event) => setComplexity(event.target.value)}
-              className="mb-5 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10">
+              className="mb-5 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10"
+            >
               {COMPLEXITY_LEVELS.map((item) => (
                 <option key={item} value={item} className="bg-[#070d1a]">
                   {item}
@@ -1243,7 +1263,8 @@ export function AINewsroom() {
               onChange={(event) =>
                 setFactGuardEnabled(event.target.value === "enabled")
               }
-              className="mb-2 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10">
+              className="mb-2 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10"
+            >
               <option value="enabled">Enabled</option>
               <option value="disabled">Disabled</option>
             </select>
@@ -1263,7 +1284,8 @@ export function AINewsroom() {
               onChange={(event) =>
                 setCitationEngineEnabled(event.target.value === "enabled")
               }
-              className="mb-2 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10">
+              className="mb-2 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10"
+            >
               <option value="enabled">Enabled</option>
               <option value="disabled">Disabled</option>
             </select>
@@ -1282,7 +1304,8 @@ export function AINewsroom() {
               onChange={(event) =>
                 setSourceConfidenceEnabled(event.target.value === "enabled")
               }
-              className="mb-2 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10">
+              className="mb-2 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10"
+            >
               <option value="enabled">Enabled</option>
               <option value="disabled">Disabled</option>
             </select>
@@ -1415,7 +1438,8 @@ export function AINewsroom() {
                 {priorityItems.map((item) => (
                   <div
                     key={item.label}
-                    className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-3 py-3">
+                    className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-3 py-3"
+                  >
                     <span className="text-xs font-bold text-slate-400">
                       {item.label}
                     </span>
@@ -1443,7 +1467,8 @@ export function AINewsroom() {
               type="button"
               onClick={handleGenerate}
               disabled={isGenerating}
-              className="mt-6 w-full rounded-2xl bg-cyan-300 px-5 py-4 text-sm font-black uppercase tracking-[0.2em] text-slate-950 shadow-[0_0_30px_rgba(103,232,249,0.25)] transition hover:bg-cyan-200 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed">
+              className="mt-6 w-full rounded-2xl bg-cyan-300 px-5 py-4 text-sm font-black uppercase tracking-[0.2em] text-slate-950 shadow-[0_0_30px_rgba(103,232,249,0.25)] transition hover:bg-cyan-200 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               {isGenerating ? "Generating..." : "Generate Intelligence Draft"}
             </button>
           </section>
@@ -1477,7 +1502,8 @@ export function AINewsroom() {
                 {executiveDashboardItems.map((item) => (
                   <div
                     key={item.label}
-                    className="rounded-2xl border border-cyan-300/15 bg-white/[0.035] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                    className="rounded-2xl border border-cyan-300/15 bg-white/[0.035] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                  >
                     <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
                       {item.label}
                     </p>
@@ -1508,7 +1534,8 @@ export function AINewsroom() {
                   type="button"
                   onClick={handleCopy}
                   disabled={!draft.trim()}
-                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">
+                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
                   Copy
                 </button>
 
@@ -1516,7 +1543,8 @@ export function AINewsroom() {
                   type="button"
                   onClick={handleExportTxt}
                   disabled={!draft.trim()}
-                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">
+                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
                   TXT
                 </button>
 
@@ -1524,7 +1552,8 @@ export function AINewsroom() {
                   type="button"
                   onClick={handleExportJson}
                   disabled={!draft.trim()}
-                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">
+                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
                   JSON
                 </button>
 
@@ -1532,7 +1561,8 @@ export function AINewsroom() {
                   type="button"
                   onClick={handlePrint}
                   disabled={!draft.trim()}
-                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">
+                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
                   PRINT
                 </button>
               </div>
@@ -1542,6 +1572,12 @@ export function AINewsroom() {
               <p className="mb-3 text-sm font-bold text-cyan-200">
                 {copyStatus}
               </p>
+            )}
+
+            {generationError && (
+              <div className="mb-3 rounded-2xl border border-[#7d1f2f]/50 bg-[#7d1f2f]/15 px-4 py-3 text-sm font-bold text-[#f1c36f]">
+                {generationError}
+              </div>
             )}
 
             <div className="min-h-[500px] rounded-3xl border border-white/10 bg-[#070d1a] p-5">

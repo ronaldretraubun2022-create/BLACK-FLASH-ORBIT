@@ -2,6 +2,8 @@ import { api, getAuthenticatedHeaders, resolveApiUrl } from "./api";
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const SUPPORTED_EXTENSIONS = [".txt", ".md", ".pdf", ".docx"];
+const KNOWLEDGE_MOCK_DATA_MODULE = "../data/knowledgeMock.js";
+const KNOWLEDGE_MOCK_RAG_MODULE = "../lib/mockRagEngine.js";
 const SUPPORTED_MIME_TYPES = {
   ".docx": [
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -26,7 +28,11 @@ function isDevelopment() {
 }
 
 function logKnowledgeApiRequest({ method, url, hasBearerToken, status }) {
-  if (!isDevelopment() || import.meta.env.VITE_ENABLE_KNOWLEDGE_API_DEBUG !== "true") return;
+  if (
+    !isDevelopment() ||
+    import.meta.env.VITE_ENABLE_KNOWLEDGE_API_DEBUG !== "true"
+  )
+    return;
 
   console.info("[Knowledge API]", {
     method,
@@ -93,7 +99,10 @@ function getDocumentType(document) {
 
 function normalizeKnowledgeDocument(document) {
   const fileName = normalizeText(document?.fileName || document?.file_name);
-  const title = normalizeText(document?.title, fileName || "Untitled Knowledge Document");
+  const title = normalizeText(
+    document?.title,
+    fileName || "Untitled Knowledge Document",
+  );
   const source =
     normalizeText(document?.sourceLabel || document?.source_label) ||
     normalizeText(document?.source) ||
@@ -109,7 +118,9 @@ function normalizeKnowledgeDocument(document) {
       : Array.isArray(document?.chunks)
         ? document.chunks
         : [];
-  const citations = Array.isArray(document?.citations) ? document.citations : [];
+  const citations = Array.isArray(document?.citations)
+    ? document.citations
+    : [];
   const chunkCount = Number(document?.chunkCount || document?.chunk_count || 0);
 
   return {
@@ -126,7 +137,11 @@ function normalizeKnowledgeDocument(document) {
     favorite: Boolean(document?.favorite),
     fileName,
     fileType: document?.fileType || document?.file_type || "",
-    owner: document?.owner || document?.ownerEmail || document?.owner_email || "Authenticated User",
+    owner:
+      document?.owner ||
+      document?.ownerEmail ||
+      document?.owner_email ||
+      "Authenticated User",
     pages: document?.pages || "-",
     source,
     status,
@@ -191,7 +206,8 @@ function extractDataArray(response) {
 
 function createKnowledgeRequestError(responseBody, status) {
   const error = new Error(
-    responseBody?.message || `Knowledge request gagal dengan status HTTP ${status}.`,
+    responseBody?.message ||
+      `Knowledge request gagal dengan status HTTP ${status}.`,
   );
 
   error.code = responseBody?.code ?? null;
@@ -202,7 +218,10 @@ function createKnowledgeRequestError(responseBody, status) {
   return error;
 }
 
-async function requestKnowledgeJson(path, { body, method = "GET", signal } = {}) {
+async function requestKnowledgeJson(
+  path,
+  { body, method = "GET", signal } = {},
+) {
   const headers = await getAuthenticatedHeaders();
   const requestHeaders = {
     Accept: "application/json",
@@ -214,12 +233,15 @@ async function requestKnowledgeJson(path, { body, method = "GET", signal } = {})
     requestHeaders["Content-Type"] = "application/json";
   }
 
-  const response = await fetch(resolveApiUrl(`${KNOWLEDGE_API_PREFIX}${path}`), {
-    body: hasBody ? JSON.stringify(body) : undefined,
-    headers: requestHeaders,
-    method,
-    signal,
-  });
+  const response = await fetch(
+    resolveApiUrl(`${KNOWLEDGE_API_PREFIX}${path}`),
+    {
+      body: hasBody ? JSON.stringify(body) : undefined,
+      headers: requestHeaders,
+      method,
+      signal,
+    },
+  );
   const responseText = await response.text();
   const responseBody = parseJsonResponse(responseText);
 
@@ -360,9 +382,50 @@ function requestKnowledgeUpload({ formData, onProgress }) {
 
 export function isKnowledgeMockFallbackEnabled() {
   return (
-    import.meta.env.DEV &&
-    import.meta.env.VITE_ENABLE_KNOWLEDGE_MOCK_FALLBACK !== "false"
+    import.meta.env.DEV === true &&
+    import.meta.env.VITE_ENABLE_KNOWLEDGE_MOCK_FALLBACK === "true"
   );
+}
+
+export async function loadKnowledgeMockDocuments() {
+  if (!isKnowledgeMockFallbackEnabled()) {
+    throw new Error(
+      "Knowledge mock fallback hanya tersedia di development dengan flag eksplisit.",
+    );
+  }
+
+  const { knowledgeDocuments } = await import(
+    /* @vite-ignore */ KNOWLEDGE_MOCK_DATA_MODULE
+  );
+
+  return knowledgeDocuments;
+}
+
+export async function createKnowledgeMockFallbackResult(query, documents) {
+  if (!isKnowledgeMockFallbackEnabled()) {
+    throw new Error(
+      "Knowledge mock fallback hanya tersedia di development dengan flag eksplisit.",
+    );
+  }
+
+  const {
+    buildCitations,
+    calculateConfidence,
+    generateMockAnswer,
+    retrieveContext,
+  } = await import(/* @vite-ignore */ KNOWLEDGE_MOCK_RAG_MODULE);
+  const context = retrieveContext(query, documents);
+  const citations = buildCitations(context);
+  const confidence = calculateConfidence(context);
+
+  return {
+    answer: generateMockAnswer(query, context),
+    citations,
+    confidence,
+    context,
+    mode: "dev-mock-fallback",
+    verificationRequired: context.length === 0,
+  };
 }
 
 export function getKnowledgeFileValidation(file) {
@@ -525,17 +588,14 @@ export async function uploadKnowledgeDocument({
 
 export async function askKnowledge({ documentId, question, signal } = {}) {
   try {
-    const response = await requestKnowledgeJson(
-      "/ask",
-      {
-        body: {
-          documentId: normalizeText(documentId),
-          question: normalizeText(question),
-        },
-        method: "POST",
-        signal,
+    const response = await requestKnowledgeJson("/ask", {
+      body: {
+        documentId: normalizeText(documentId),
+        question: normalizeText(question),
       },
-    );
+      method: "POST",
+      signal,
+    });
 
     return normalizeAskResponse(response);
   } catch (error) {

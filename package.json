@@ -33,7 +33,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "express-rate-limit": "^8.5.2",
+    "express-rate-limit": "^8.6.2",
     "fast-glob": "^3.3.3",
     "helmet": "^8.2.0",
     "lucide-react": "^1.17.0",
@@ -42,7 +42,11 @@
     "pdf-parse": "^2.4.5",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-router-dom": "^7.16.0"
+    "react-router-dom": "^7.18.2"
+  },
+  "overrides": {
+    "body-parser": "^2.3.0",
+    "ip-address": "^10.5.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.0",

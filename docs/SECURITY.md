@@ -18,16 +18,16 @@ Melindungi identity, session, data pengguna, dokumen, prompt, hasil AI, project 
 
 ## 3. Asset classification
 
-| Asset | Sensitivitas | Kontrol minimum |
-| --- | --- | --- |
-| Supabase service-role key | Critical | Server-only, rotation, restricted environment |
-| AI provider API keys | Critical | Server-only, no logs, quota monitoring |
-| Access/refresh token | High | Secure session handling, no persistent debug logs |
-| Knowledge documents | High | Auth, ownership, RLS, retention |
-| OSINT evidence | High | Case authorization, audit, chain of custody |
-| Draft newsroom | Medium/High | User/workspace isolation |
-| Web Builder assets | Medium | Ownership, type validation, safe preview |
-| Health status | Low | Minimal public response |
+| Asset                     | Sensitivitas | Kontrol minimum                                   |
+| ------------------------- | ------------ | ------------------------------------------------- |
+| Supabase service-role key | Critical     | Server-only, rotation, restricted environment     |
+| AI provider API keys      | Critical     | Server-only, no logs, quota monitoring            |
+| Access/refresh token      | High         | Secure session handling, no persistent debug logs |
+| Knowledge documents       | High         | Auth, ownership, RLS, retention                   |
+| OSINT evidence            | High         | Case authorization, audit, chain of custody       |
+| Draft newsroom            | Medium/High  | User/workspace isolation                          |
+| Web Builder assets        | Medium       | Ownership, type validation, safe preview          |
+| Health status             | Low          | Minimal public response                           |
 
 ## 4. Authentication controls
 
@@ -39,6 +39,33 @@ Melindungi identity, session, data pengguna, dokumen, prompt, hasil AI, project 
 - Endpoint Security Center memvalidasi role `admin`, `owner`, atau `super_admin` pada backend.
 - Expired/stale refresh token harus memicu recovery/logout yang aman.
 - Auth provider unavailable tidak boleh membuka bypass.
+
+### Middleware auth P0 review
+
+Status P0.1-P0.8: `requireAuth` dan `requireSupabaseAuth` tetap dipertahankan untuk backward compatibility sampai AI Router v2.
+
+Route yang memakai `requireAuth`:
+
+- `/api/ai/newsroom`
+- `/api/chat`
+- `/api/v1/audit`
+- `/api/v1/web-builder`
+- `/api/v1/activity`, `/api/v1/automation`, `/api/v1/dashboard`, `/api/v1/metrics`, `/api/v1/monitoring`, `/api/v1/osint`, `/api/v1/projects`, `/api/v1/reports`, `/api/v1/security`, `/api/v1/settings`, `/api/v1/system`, `/api/v1/workspace`
+- `/api/v1/prompts`, `/api/v1/profile`
+
+Route yang memakai `requireSupabaseAuth`:
+
+- `/api/knowledge`
+- `/api/v1/knowledge`
+
+Route AI chat `/api/ai/chat` memakai auth internal khusus di `server/routes/ai.js` untuk validasi token dan rate-limit per user.
+
+Perbedaan perilaku:
+
+- `requireSupabaseAuth` memiliki timeout Supabase auth 5 detik, response error selalu menyertakan `code`, dan config auth yang hilang menjadi 503.
+- `requireAuth` sudah mendeteksi network/auth-provider failure dan mengembalikan `AUTH_PROVIDER_UNAVAILABLE`, tetapi sebagian error legacy tidak memiliki `code`.
+- Keduanya menulis `req.user`, `req.userId`, dan `req.userEmail`, serta tidak membuka bypass saat provider auth gagal.
+- `/api/v1/health` tetap public melalui route health sebelum middleware auth.
 
 ## 5. Authorization controls
 
@@ -126,6 +153,11 @@ Target tambahan:
 - Newsroom tidak boleh mengarang fakta atau citation.
 - OSINT hanya defensive, legal, dan authorized.
 - Tool/action execution membutuhkan explicit permission dan validation.
+- Respons provider AI wajib melewati normalisasi konten terpusat dan menolak content kosong, whitespace-only, choices/message/content yang hilang, serta payload null/undefined.
+- AI Router v2 menjadi satu abstraksi backend untuk request generative provider. Route tidak boleh membuat request HTTP langsung ke OpenRouter.
+- Diagnostics AI Router hanya boleh memuat metadata aman: requestId, provider, requestedModel, resolvedModel, attempt, fallbackUsed, durationMs, dan status.
+- Fallback lokal Newsroom hanya boleh aktif di development dengan `VITE_ENABLE_NEWSROOM_LOCAL_FALLBACK=true`; produksi harus menampilkan error bersih dan retry, bukan draf fabricated.
+- Mock Knowledge hanya boleh aktif di development dengan `VITE_ENABLE_KNOWLEDGE_MOCK_FALLBACK=true`; produksi harus gagal jelas jika RAG API/provider tidak tersedia.
 
 ## 10. Web Builder security
 

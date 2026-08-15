@@ -9,19 +9,14 @@ const {
   buildOrbitMemoryContext,
   containsSensitiveData,
 } = require("../lib/orbitMemory");
+const { generateCompletion, AI_USE_CASES } = require("../services/ai/aiRouter");
 
 const router = express.Router();
 
-const OPENROUTER_CHAT_COMPLETIONS_URL =
-  "https://openrouter.ai/api/v1/chat/completions";
-
 const DEFAULT_OPENROUTER_MODEL = "openrouter/auto";
-const MIN_OPENROUTER_API_KEY_LENGTH = 32;
-const OPENROUTER_API_KEY_PREFIX = "sk-or-v1-";
 const OPENROUTER_TIMEOUT_MS = 30000;
 const DEBUG_AI_AUTH =
-  process.env.NODE_ENV !== "production" &&
-  process.env.DEBUG_AI_AUTH === "true";
+  process.env.NODE_ENV !== "production" && process.env.DEBUG_AI_AUTH === "true";
 const CHAT_MEMORY_LIMIT = 20;
 const MAX_AI_MESSAGE_LENGTH = 12000;
 const MAX_AI_HISTORY_ITEMS = 20;
@@ -48,131 +43,6 @@ const aiChatLimiter = rateLimit({
     message: "Terlalu banyak request AI. Coba lagi sebentar.",
   },
 });
-
-function getRawOpenRouterApiKey() {
-  return String(process.env.OPENROUTER_API_KEY || "");
-}
-
-function stripWrappingQuotes(value) {
-  const trimmedValue = String(value || "").trim();
-  const firstCharacter = trimmedValue[0];
-  const lastCharacter = trimmedValue[trimmedValue.length - 1];
-
-  if (
-    trimmedValue.length >= 2 &&
-    ((firstCharacter === '"' && lastCharacter === '"') ||
-      (firstCharacter === "'" && lastCharacter === "'"))
-  ) {
-    return trimmedValue.slice(1, -1).trim();
-  }
-
-  return trimmedValue;
-}
-
-function normalizeOpenRouterApiKey(rawApiKey) {
-  const trimmedKey = String(rawApiKey || "").trim();
-  const withoutBearerPrefix = trimmedKey.replace(/^Bearer\s+/i, "").trim();
-
-  return stripWrappingQuotes(withoutBearerPrefix);
-}
-
-function getOpenRouterApiKeyDiagnostics(rawApiKey) {
-  const rawKey = String(rawApiKey || "");
-  const trimmedKey = rawKey.trim();
-  const normalizedKey = normalizeOpenRouterApiKey(rawKey);
-
-  return {
-    keyExists: Boolean(trimmedKey),
-    keyLength: normalizedKey.length,
-    startsWithSkOrV1: normalizedKey.startsWith(OPENROUTER_API_KEY_PREFIX),
-    hasInvalidHeaderChars: hasInvalidHeaderCharacters(normalizedKey),
-    containsBearerPrefix: /^Bearer\s+/i.test(trimmedKey),
-    containsQuotes: /['"]/.test(rawKey),
-    containsWhitespaceOrNewline: /\s/.test(rawKey),
-  };
-}
-
-function getOpenRouterApiKeyValidationIssues(diagnostics) {
-  const issues = [];
-
-  if (!diagnostics.keyExists) {
-    issues.push("OPENROUTER_API_KEY belum diisi");
-  }
-
-  if (diagnostics.containsBearerPrefix) {
-    issues.push("hapus prefix Bearer dari OPENROUTER_API_KEY");
-  }
-
-  if (diagnostics.containsQuotes) {
-    issues.push("hapus tanda kutip dari OPENROUTER_API_KEY");
-  }
-
-  if (diagnostics.containsWhitespaceOrNewline) {
-    issues.push("hapus spasi atau newline dari OPENROUTER_API_KEY");
-  }
-
-  if (
-    diagnostics.keyLength > 0 &&
-    diagnostics.keyLength < MIN_OPENROUTER_API_KEY_LENGTH
-  ) {
-    issues.push("OPENROUTER_API_KEY terlalu pendek");
-  }
-
-  if (diagnostics.keyExists && !diagnostics.startsWithSkOrV1) {
-    issues.push("OPENROUTER_API_KEY harus diawali sk-or-v1-");
-  }
-
-  if (diagnostics.hasInvalidHeaderChars) {
-    issues.push("OPENROUTER_API_KEY mengandung karakter header tidak valid");
-  }
-
-  return issues;
-}
-
-function logOpenRouterApiKeyDiagnostics(diagnostics) {
-  console.warn("[OpenRouter Env Diagnostics]", diagnostics);
-}
-
-function validateOpenRouterApiKey() {
-  const rawApiKey = getRawOpenRouterApiKey();
-  const diagnostics = getOpenRouterApiKeyDiagnostics(rawApiKey);
-  const apiKey = normalizeOpenRouterApiKey(rawApiKey);
-  const validationIssues = getOpenRouterApiKeyValidationIssues(diagnostics);
-
-  logOpenRouterApiKeyDiagnostics(diagnostics);
-
-  if (!diagnostics.keyExists) {
-    throw createHttpError(
-      "Konfigurasi OpenRouter belum siap. OPENROUTER_API_KEY belum diisi.",
-      500,
-      "openrouter_config_missing",
-    );
-  }
-
-  if (
-    diagnostics.hasInvalidHeaderChars ||
-    diagnostics.keyLength < MIN_OPENROUTER_API_KEY_LENGTH ||
-    !diagnostics.startsWithSkOrV1
-  ) {
-    throw createHttpError(
-      `Konfigurasi OpenRouter tidak valid. ${validationIssues.join("; ")}.`,
-      500,
-      "openrouter_config_invalid",
-    );
-  }
-
-  return apiKey;
-}
-
-function getOpenRouterSiteUrl() {
-  return String(process.env.OPENROUTER_SITE_URL || "http://localhost:5173")
-    .trim()
-    .replace(/\/+$/, "");
-}
-
-function getOpenRouterAppName() {
-  return String(process.env.OPENROUTER_APP_NAME || "BLACK FLASH ORBIT").trim();
-}
 
 function createHttpError(
   message,
@@ -419,39 +289,6 @@ async function requireAuthenticatedUser(req) {
   }
 
   return user;
-}
-
-function hasInvalidHeaderCharacters(value) {
-  return /[^\x20-\x7E]/.test(value);
-}
-
-function getOpenRouterError(data) {
-  return data?.error || data?.provider_error || data?.providerError || null;
-}
-
-function getSafeOpenRouterErrorMetadata(providerError) {
-  if (!providerError || typeof providerError !== "object") return null;
-
-  return {
-    code: providerError.code || null,
-    type: providerError.type || providerError.name || null,
-  };
-}
-
-function getSafeOpenRouterStatusMessage(status) {
-  if (status === 401 || status === 403) {
-    return "Konfigurasi akses provider AI tidak valid.";
-  }
-
-  if (status === 429) {
-    return "Provider AI sedang membatasi request. Coba lagi nanti.";
-  }
-
-  if (status >= 500) {
-    return "OpenRouter gagal memproses request.";
-  }
-
-  return "OpenRouter menolak request AI.";
 }
 
 function normalizeSessionId(value) {
@@ -716,7 +553,6 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
     systemPrompt: "",
     history: [],
   };
-  let timeout = null;
 
   try {
     const authenticatedUser = req.user;
@@ -749,11 +585,6 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       });
     }
 
-    const apiKey = validateOpenRouterApiKey();
-
-    const controller = new AbortController();
-    timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
-
     const openRouterMessages = await buildOpenRouterMessages({
       currentMessage: message,
       fallbackHistory: history,
@@ -761,57 +592,19 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       systemPrompt,
       userEmail: authenticatedUser.email,
     });
-
-    const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": getOpenRouterSiteUrl(),
-        "X-Title": getOpenRouterAppName(),
-      },
-      body: JSON.stringify({
-        model,
-        messages: openRouterMessages,
-      }),
-      signal: controller.signal,
+    const aiResult = await generateCompletion({
+      maxTokens: 1200,
+      messages: openRouterMessages,
+      model,
+      requestId: sessionId,
+      temperature: 0.2,
+      timeout: OPENROUTER_TIMEOUT_MS,
+      useCase: AI_USE_CASES.GENERAL_CHAT,
     });
-
-    const data = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      const providerError = getOpenRouterError(data);
-      const safeProviderMessage = getSafeOpenRouterStatusMessage(
-        response.status,
-      );
-
-      console.error("[OpenRouter API Error]", {
-        status: response.status,
-        model,
-        message: safeProviderMessage,
-        providerError: getSafeOpenRouterErrorMetadata(providerError),
-      });
-
-      throw createHttpError(
-        safeProviderMessage,
-        response.status,
-        "openrouter_error",
-      );
-    }
-
-    const aiResponse = data?.choices?.[0]?.message?.content;
-
-    if (!aiResponse) {
-      throw createHttpError(
-        "OpenRouter tidak mengembalikan jawaban AI.",
-        502,
-        "openrouter_empty_response",
-      );
-    }
 
     await logAiAuditEvent({
       durationMs: Date.now() - startedAt,
-      model,
+      model: aiResult.model,
       sessionId,
       status: "success",
       user: authenticatedUser,
@@ -819,18 +612,14 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      response: aiResponse,
-      model,
+      response: aiResult.content,
+      model: aiResult.model,
     });
   } catch (error) {
-    const isAbort = error.name === "AbortError";
-
-    const status = error.statusCode || error.status || (isAbort ? 504 : 502);
-    const code =
-      error.code || (isAbort ? "openrouter_timeout" : "ai_fetch_failed");
-    const message = isAbort
-      ? "Request ke OpenRouter timeout."
-      : error.statusCode || error.status
+    const status = error.statusCode || error.status || 502;
+    const code = error.code || "ai_fetch_failed";
+    const message =
+      error.statusCode || error.status
         ? error.message
         : "Gagal terhubung ke OpenRouter.";
 
@@ -857,10 +646,6 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       createHttpError(message, status, code),
       "Request AI gagal.",
     );
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 });
 

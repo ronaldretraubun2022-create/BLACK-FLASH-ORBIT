@@ -5,6 +5,7 @@ import {
   recoverStaleRefreshToken,
 } from "../lib/authRecovery";
 import { normalizePromptCategory } from "../data/promptCategories";
+import apiUrlUtils from "./apiUrlUtils.cjs";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_WINDOW_MS = 60000;
@@ -23,6 +24,8 @@ const AUTH_FAILURE_CODES = new Set([
 ]);
 const PUBLIC_API_PATHS = new Set(["/api/health", "/api/v1/health"]);
 const KNOWLEDGE_API_PREFIX = "/api/v1/knowledge";
+const { getApiPathSuffix, joinApiUrl, normalizeApiBaseUrl, normalizeApiPath } =
+  apiUrlUtils;
 
 function createQueryString(params = {}) {
   const searchParams = new URLSearchParams();
@@ -134,10 +137,7 @@ function logFrontendAuthDebug(session) {
 }
 
 function getApiErrorMessage(errorBody, status) {
-  const candidates = [
-    errorBody?.message,
-    errorBody?.error,
-  ]
+  const candidates = [errorBody?.message, errorBody?.error]
     .filter(Boolean)
     .map((value) => formatErrorValue(value))
     .filter(Boolean);
@@ -225,7 +225,10 @@ async function request(path, options = {}) {
   try {
     if (isKnowledgeApiRequestUrl(requestUrl)) {
       fetchOptions.cache = "no-store";
-    } else if (fetchOptions.cache === undefined && shouldForceNoStore(requestUrl)) {
+    } else if (
+      fetchOptions.cache === undefined &&
+      shouldForceNoStore(requestUrl)
+    ) {
       fetchOptions.cache = "no-store";
     }
 
@@ -344,7 +347,11 @@ function shouldAttachAuthorizationHeader({ auth, headers, requestUrl }) {
   return isProtectedApiRequestUrl(requestUrl);
 }
 
-function shouldHandleAuthenticationFailure({ auth, optionHeaders, requestUrl }) {
+function shouldHandleAuthenticationFailure({
+  auth,
+  optionHeaders,
+  requestUrl,
+}) {
   if (auth === false) return false;
   if (auth === true || isProtectedApiRequestUrl(requestUrl)) return true;
 
@@ -458,31 +465,6 @@ function getConfiguredApiBaseUrl() {
   return configuredBaseUrl || "/api";
 }
 
-function normalizeApiBaseUrl(value) {
-  const cleanValue = String(value || "/api")
-    .trim()
-    .replace(/\/+$/, "");
-
-  if (!cleanValue) return "/api";
-
-  if (/^https?:\/\//i.test(cleanValue)) {
-    const url = new URL(cleanValue);
-    const pathname = url.pathname.replace(/\/+$/, "");
-
-    if (isLocalhostHostname(url.hostname)) {
-      url.hostname = "127.0.0.1";
-    }
-
-    url.pathname = normalizeApiPath(
-      pathname && pathname !== "/" ? pathname : "/api",
-    );
-
-    return url.toString().replace(/\/+$/, "");
-  }
-
-  return normalizeApiPath(cleanValue);
-}
-
 function getRuntimeApiBaseUrl() {
   if (API_BASE_URL === "/api" && isDevelopmentFrontendOrigin()) {
     return getDevelopmentApiBaseUrl();
@@ -532,31 +514,6 @@ function isLocalhostHostname(hostname) {
   const cleanHostname = String(hostname || "").toLowerCase();
 
   return cleanHostname === "localhost" || cleanHostname === "127.0.0.1";
-}
-
-function getApiPathSuffix(cleanPath) {
-  const normalizedPath = normalizeApiPath(cleanPath);
-
-  if (normalizedPath === "/api") return "";
-  if (normalizedPath.startsWith("/api/")) return normalizedPath.slice(4);
-
-  return normalizedPath;
-}
-
-function joinApiUrl(baseUrl, pathSuffix) {
-  const cleanBaseUrl =
-    normalizeApiPath(String(baseUrl || "/api").replace(/\/+$/, "")) || "/api";
-  const cleanPathSuffix = String(pathSuffix || "");
-
-  if (!cleanPathSuffix) return cleanBaseUrl;
-
-  return normalizeApiPath(`${cleanBaseUrl}${
-    cleanPathSuffix.startsWith("/") ? cleanPathSuffix : `/${cleanPathSuffix}`
-  }`);
-}
-
-function normalizeApiPath(value) {
-  return String(value || "").replace(/\/api(?:\/api)+(?=\/|$)/gi, "/api");
 }
 
 function getPrintableRequestUrl(requestUrl) {
@@ -676,24 +633,33 @@ export const api = {
   },
 
   async getWebBuilderProject(projectId) {
-    return request(`/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`, {
-      headers: await getAuthenticatedHeaders(),
-    });
+    return request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`,
+      {
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
   },
 
   async updateWebBuilderProject(projectId, payload) {
-    return request(`/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`, {
-      method: "PATCH",
-      headers: await getAuthenticatedHeaders(),
-      body: JSON.stringify(payload),
-    });
+    return request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`,
+      {
+        method: "PATCH",
+        headers: await getAuthenticatedHeaders(),
+        body: JSON.stringify(payload),
+      },
+    );
   },
 
   async deleteWebBuilderProject(projectId) {
-    return request(`/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`, {
-      method: "DELETE",
-      headers: await getAuthenticatedHeaders(),
-    });
+    return request(
+      `/api/v1/web-builder/projects/${encodeURIComponent(projectId)}`,
+      {
+        method: "DELETE",
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
   },
 
   async getWebBuilderPages(projectId) {

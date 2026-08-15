@@ -2,15 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   copilotQuickPrompts,
   knowledgeCommandActions,
-} from "../data/knowledgeMock.js";
-import {
-  buildCitations,
-  calculateConfidence,
-  generateMockAnswer,
-  retrieveContext,
-} from "../lib/mockRagEngine.js";
+} from "../data/knowledgeUiConfig.js";
 import {
   askKnowledge,
+  createKnowledgeMockFallbackResult,
   isKnowledgeMockFallbackEnabled,
 } from "../services/knowledgeService.js";
 
@@ -31,7 +26,10 @@ function createMessage(role, content, meta = {}) {
 function getScopedDocuments(documents, activeDocument, actionId) {
   if (!activeDocument?.id) return documents;
   if (actionId === "compare-sources" || actionId === "find-security-risks") {
-    return [activeDocument, ...documents.filter((item) => item.id !== activeDocument.id)];
+    return [
+      activeDocument,
+      ...documents.filter((item) => item.id !== activeDocument.id),
+    ];
   }
 
   return [activeDocument];
@@ -44,21 +42,6 @@ function getActiveDocumentId(activeDocument, actionId) {
   }
 
   return activeDocument.id;
-}
-
-function createFallbackResult(query, documents) {
-  const context = retrieveContext(query, documents);
-  const citations = buildCitations(context);
-  const confidence = calculateConfidence(context);
-
-  return {
-    answer: generateMockAnswer(query, context),
-    citations,
-    confidence,
-    context,
-    mode: "dev-mock-fallback",
-    verificationRequired: context.length === 0,
-  };
 }
 
 export function useKnowledgeCopilot({
@@ -120,7 +103,8 @@ export function useKnowledgeCopilot({
       const scopedDocuments = options.documents || documents;
       const userLabel = options.userLabel || query;
       const documentId =
-        options.documentId ?? getActiveDocumentId(activeDocument, options.actionId);
+        options.documentId ??
+        getActiveDocumentId(activeDocument, options.actionId);
 
       abortRef.current?.abort();
       abortRef.current = new AbortController();
@@ -146,7 +130,10 @@ export function useKnowledgeCopilot({
           if (error?.name === "AbortError") throw error;
           if (!isKnowledgeMockFallbackEnabled()) throw error;
 
-          result = createFallbackResult(query, scopedDocuments);
+          result = await createKnowledgeMockFallbackResult(
+            query,
+            scopedDocuments,
+          );
         }
 
         setSelectedContext(result.context);

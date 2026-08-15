@@ -1,8 +1,15 @@
-import { getAuthenticatedHeaders } from "./api";
+import { getAuthenticatedHeaders, resolveApiUrl } from "./api";
+
+export function isNewsroomLocalFallbackEnabled() {
+  return (
+    import.meta.env.DEV === true &&
+    import.meta.env.VITE_ENABLE_NEWSROOM_LOCAL_FALLBACK === "true"
+  );
+}
 
 export async function generateIntelligenceDraft(payload) {
   try {
-    const response = await fetch("/api/ai/newsroom", {
+    const response = await fetch(resolveApiUrl("/api/ai/newsroom"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

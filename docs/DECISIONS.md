@@ -2,6 +2,47 @@
 
 Keputusan baru ditambahkan di bagian paling atas. Jangan menghapus keputusan lama; tandai `Superseded` dan tautkan penggantinya.
 
+## ADR-010 — AI Router v2 centralizes generative provider requests
+
+- Status: Accepted
+- Date: 2026-08-15
+
+### Context
+
+Audit P1 menemukan AI Newsroom, General AI Chat, dan Knowledge/RAG Chat memiliki logika generative provider yang tersebar. Ini meningkatkan risiko fallback tidak konsisten, error provider bocor, retry tidak terkendali, dan model configuration drift.
+
+### Decision
+
+Semua request generative OpenRouter melewati AI Router v2 di backend. Route tetap bertanggung jawab pada auth, validasi input, context assembly, dan response mapping, sementara transport provider, model registry, retry/fallback policy, response validation, dan error normalization dipusatkan di `server/services/ai/`.
+
+Embedding tetap berada pada service embedding karena API dan semantiknya berbeda dari chat completion.
+
+### Consequences
+
+- Satu jalur provider generative untuk Newsroom, AI Chat, dan Knowledge Chat.
+- Fallback model hanya berasal dari konfigurasi dan tidak aktif untuk auth/config/rate-limit failure.
+- Debug AI hanya mencatat metadata aman.
+- AI Router v2 menjadi fondasi untuk P2 Audience Engine dan Prompt Engine tanpa mengubah kontrak publik route.
+
+## ADR-009 — P0 provider failure must fail clearly in production
+
+- Status: Accepted
+- Date: 2026-08-15
+
+### Context
+
+Audit P0 menemukan frontend dapat memuat mock Knowledge dan membuat draf Newsroom lokal setelah backend/provider gagal. Perilaku ini berguna untuk development, tetapi berisiko menyamarkan kegagalan auth/provider pada production.
+
+### Decision
+
+Fallback mock/local hanya aktif di development dengan flag eksplisit. Production harus menampilkan error bersih, mempertahankan input pengguna, dan menyediakan retry tanpa menyajikan konten fabricated sebagai hasil provider AI.
+
+### Consequences
+
+- Kegagalan provider/auth lebih terlihat di production.
+- Development workflow tetap tersedia setelah flag dinyalakan.
+- AI Router v2 perlu menyediakan fallback provider nyata, bukan fallback konten lokal.
+
 ## ADR-008 — Standardize Knowledge API prefix
 
 - Status: Proposed
@@ -145,4 +186,3 @@ Alternatif yang dipertimbangkan.
 
 Dampak positif, negatif, migration, dan risk.
 ```
-

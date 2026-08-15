@@ -162,6 +162,50 @@ test("createEmbedding fails fast when api key missing", async () => {
   }
 });
 
+test("embedding provider normalizes quoted Bearer api key", async () => {
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.OPENAI_API_KEY;
+  const originalProvider = process.env.KNOWLEDGE_EMBEDDING_PROVIDER;
+  let authorizationHeader = "";
+
+  process.env.OPENAI_API_KEY = '"Bearer test-openai-key"';
+  process.env.KNOWLEDGE_EMBEDDING_PROVIDER = "openai";
+  global.fetch = async (_url, options) => {
+    authorizationHeader = options.headers.Authorization;
+
+    return {
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            embedding: [1, 2, 3],
+            index: 0,
+          },
+        ],
+      }),
+    };
+  };
+
+  try {
+    const { createEmbedding } = loadEmbeddingService();
+    const embedding = await createEmbedding("credential normalization test");
+
+    assert.deepStrictEqual(embedding, [1, 2, 3]);
+    assert.strictEqual(authorizationHeader, "Bearer test-openai-key");
+  } finally {
+    global.fetch = originalFetch;
+
+    if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalApiKey;
+
+    if (originalProvider === undefined) {
+      delete process.env.KNOWLEDGE_EMBEDDING_PROVIDER;
+    } else {
+      process.env.KNOWLEDGE_EMBEDDING_PROVIDER = originalProvider;
+    }
+  }
+});
+
 test("embedding provider validation rejects unsupported providers safely", async () => {
   const originalProvider = process.env.KNOWLEDGE_EMBEDDING_PROVIDER;
   process.env.KNOWLEDGE_EMBEDDING_PROVIDER = "openrouter";

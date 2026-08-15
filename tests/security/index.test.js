@@ -1,3 +1,8 @@
 require("./requireAdmin.test.js");
 require("./errorHandler.test.js");
 require("./knowledgeRls.test.js");
+require("./frontendApiUrl.test.js");
+require("./aiResponseValidator.test.js");
+require("./frontendMockHygiene.test.js");
+require("./aiRouter.test.js");
+require("./aiRouteCompatibility.test.js");

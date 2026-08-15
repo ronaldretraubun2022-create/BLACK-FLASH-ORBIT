@@ -26,18 +26,17 @@ import { AiKnowledgeCopilot } from "../components/knowledge/AiKnowledgeCopilot.j
 import {
   initialKnowledgeActivityLog,
   knowledgeCollections,
-  knowledgeDocuments,
   knowledgeReleaseState,
-} from "../data/knowledgeMock.js";
+} from "../data/knowledgeUiConfig.js";
 import { useProfile } from "../hooks/useProfile.js";
 import { useKnowledgeCopilot } from "../hooks/useKnowledgeCopilot.js";
-import { searchKnowledge } from "../lib/mockRagEngine.js";
 import {
   deleteKnowledgeDocument,
   formatKnowledgeFileSize,
   getKnowledgeDocument,
   getKnowledgeDocuments,
   isKnowledgeMockFallbackEnabled,
+  loadKnowledgeMockDocuments,
   searchKnowledgeDocuments,
   uploadKnowledgeDocument,
 } from "../services/knowledgeService.js";
@@ -81,6 +80,63 @@ function mergeKnowledgeDocuments(primaryDocuments, secondaryDocuments = []) {
   });
 
   return Array.from(documentsById.values());
+}
+
+function normalizeKnowledgeSearchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getKnowledgeSearchTokens(query) {
+  return normalizeKnowledgeSearchText(query)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 2);
+}
+
+function getKnowledgeDocumentSearchText(document) {
+  return normalizeKnowledgeSearchText(
+    [
+      document?.title,
+      document?.source,
+      document?.type,
+      document?.status,
+      document?.owner,
+      document?.summary,
+      document?.excerpt,
+      ...(document?.tags || []),
+      ...(document?.contextChunks || []),
+    ].join(" "),
+  );
+}
+
+function searchKnowledgeDocumentsLocally(query, documents = []) {
+  const tokens = getKnowledgeSearchTokens(query);
+
+  return documents
+    .map((document, index) => {
+      const searchText = getKnowledgeDocumentSearchText(document);
+      const matchedTerms = tokens.filter((token) => searchText.includes(token));
+      const score = tokens.length
+        ? Math.min(99, Math.round((matchedTerms.length / tokens.length) * 80))
+        : Math.max(
+            72,
+            Math.min(98, Number(document?.confidence || 82) - index),
+          );
+
+      return {
+        document,
+        matchedTerms,
+        score,
+        snippet:
+          document?.summary || document?.excerpt || "No summary available.",
+      };
+    })
+    .filter((result) => !tokens.length || result.matchedTerms.length > 0)
+    .sort((first, second) => second.score - first.score);
 }
 
 export function KnowledgeBase() {
@@ -144,7 +200,9 @@ export function KnowledgeBase() {
       }
 
       if (isKnowledgeMockFallbackEnabled()) {
-        setDocuments(knowledgeDocuments);
+        const mockDocuments = await loadKnowledgeMockDocuments();
+
+        setDocuments(mockDocuments);
         setIsUsingMockFallback(true);
         setLibraryError(
           "Development fallback active. Knowledge RAG API belum tersedia.",
@@ -239,139 +297,148 @@ export function KnowledgeBase() {
   // Keep these handlers above useKnowledgeKeyboardShortcuts.
   // The hook reads them during render; moving the hook above this block
   // reintroduces the TDZ crash that previously broke the page.
-  const handleSelectDocument = useCallback(async (document) => {
-    setSelectedDocumentId(document.id);
-    addActivity(
-      "Document preview opened",
-      `${document.title} loaded in preview panel.`,
-      "green",
-    );
-
-    if (!document?.id || isUsingMockFallback) return;
-
-    try {
-      const previewDocument = await getKnowledgeDocument(document.id);
-
-      setDocuments((currentDocuments) =>
-        mergeKnowledgeDocuments([previewDocument], currentDocuments),
+  const handleSelectDocument = useCallback(
+    async (document) => {
+      setSelectedDocumentId(document.id);
+      addActivity(
+        "Document preview opened",
+        `${document.title} loaded in preview panel.`,
+        "green",
       );
-    } catch (error) {
-      setLibraryError(
-        error?.message || "Gagal mengambil preview knowledge document.",
-      );
-    }
-  }, [addActivity, isUsingMockFallback]);
 
-  const toggleFavorite = useCallback((document) => {
-    if (!document?.id) return;
+      if (!document?.id || isUsingMockFallback) return;
 
-    const isFavorite = favoriteIds.has(document.id);
+      try {
+        const previewDocument = await getKnowledgeDocument(document.id);
 
-    setFavoriteIds((currentIds) => {
-      const nextIds = new Set(currentIds);
-
-      if (isFavorite) {
-        nextIds.delete(document.id);
-      } else {
-        nextIds.add(document.id);
+        setDocuments((currentDocuments) =>
+          mergeKnowledgeDocuments([previewDocument], currentDocuments),
+        );
+      } catch (error) {
+        setLibraryError(
+          error?.message || "Gagal mengambil preview knowledge document.",
+        );
       }
+    },
+    [addActivity, isUsingMockFallback],
+  );
 
-      return nextIds;
-    });
-    addActivity(
-      isFavorite ? "Favorite removed" : "Favorite pinned",
-      document.title,
-      isFavorite ? "maroon" : "gold",
-    );
-  }, [addActivity, favoriteIds]);
+  const toggleFavorite = useCallback(
+    (document) => {
+      if (!document?.id) return;
+
+      const isFavorite = favoriteIds.has(document.id);
+
+      setFavoriteIds((currentIds) => {
+        const nextIds = new Set(currentIds);
+
+        if (isFavorite) {
+          nextIds.delete(document.id);
+        } else {
+          nextIds.add(document.id);
+        }
+
+        return nextIds;
+      });
+      addActivity(
+        isFavorite ? "Favorite removed" : "Favorite pinned",
+        document.title,
+        isFavorite ? "maroon" : "gold",
+      );
+    },
+    [addActivity, favoriteIds],
+  );
 
   const openUploadPicker = useCallback(() => {
     uploadInputRef.current?.click();
   }, []);
 
-  const handleKnowledgeUpload = useCallback(async (fileList) => {
-    const files = Array.from(fileList || []);
-    if (!files.length || uploadState.isUploading) return;
+  const handleKnowledgeUpload = useCallback(
+    async (fileList) => {
+      const files = Array.from(fileList || []);
+      if (!files.length || uploadState.isUploading) return;
 
-    failedUploadFilesRef.current = files;
-    setUploadState((currentState) => ({
-      ...currentState,
-      error: "",
-      isUploading: true,
-      phase: "Uploading",
-      progress: 0,
-      queueCount: files.length,
-    }));
-
-    try {
-      for (const [index, file] of files.entries()) {
-        failedUploadFilesRef.current = files.slice(index);
-        const uploadedDocument = await uploadKnowledgeDocument({
-          file,
-          onProgress: (progress) => {
-            setUploadState((currentState) => ({
-              ...currentState,
-              progress: Math.min(100, progress),
-            }));
-          },
-          title: file.name.replace(/\.[^.]+$/, ""),
-        });
-
-        if (uploadedDocument?.id) {
-          setDocuments((currentDocuments) =>
-            mergeKnowledgeDocuments([uploadedDocument], currentDocuments),
-          );
-          setSelectedDocumentId(uploadedDocument.id);
-        }
-
-        addActivity(
-          "Knowledge document indexed",
-          `${file.name} uploaded to RAG API (${index + 1}/${files.length}).`,
-          "green",
-        );
-        failedUploadFilesRef.current = files.slice(index + 1);
-      }
-
-      await loadKnowledgeDocuments();
-      failedUploadFilesRef.current = [];
+      failedUploadFilesRef.current = files;
       setUploadState((currentState) => ({
         ...currentState,
         error: "",
-        isUploading: false,
-        lastUploaded: files[files.length - 1]?.name || "",
-        phase: "Indexed",
-        progress: 100,
-        queueCount: 0,
+        isUploading: true,
+        phase: "Uploading",
+        progress: 0,
+        queueCount: files.length,
       }));
-    } catch (error) {
-      if (String(error?.message || "").includes("Session token missing")) {
+
+      try {
+        for (const [index, file] of files.entries()) {
+          failedUploadFilesRef.current = files.slice(index);
+          const uploadedDocument = await uploadKnowledgeDocument({
+            file,
+            onProgress: (progress) => {
+              setUploadState((currentState) => ({
+                ...currentState,
+                progress: Math.min(100, progress),
+              }));
+            },
+            title: file.name.replace(/\.[^.]+$/, ""),
+          });
+
+          if (uploadedDocument?.id) {
+            setDocuments((currentDocuments) =>
+              mergeKnowledgeDocuments([uploadedDocument], currentDocuments),
+            );
+            setSelectedDocumentId(uploadedDocument.id);
+          }
+
+          addActivity(
+            "Knowledge document indexed",
+            `${file.name} uploaded to RAG API (${index + 1}/${files.length}).`,
+            "green",
+          );
+          failedUploadFilesRef.current = files.slice(index + 1);
+        }
+
+        await loadKnowledgeDocuments();
+        failedUploadFilesRef.current = [];
         setUploadState((currentState) => ({
           ...currentState,
-          error: "Session token missing. Please login again.",
+          error: "",
+          isUploading: false,
+          lastUploaded: files[files.length - 1]?.name || "",
+          phase: "Indexed",
+          progress: 100,
+          queueCount: 0,
+        }));
+      } catch (error) {
+        if (String(error?.message || "").includes("Session token missing")) {
+          setUploadState((currentState) => ({
+            ...currentState,
+            error: "Session token missing. Please login again.",
+            isUploading: false,
+            phase: "Failed",
+          }));
+          addActivity(
+            "Knowledge upload failed",
+            "Session token missing. Please login again.",
+            "maroon",
+          );
+          return;
+        }
+
+        setUploadState((currentState) => ({
+          ...currentState,
+          error: error?.message || "Upload knowledge gagal.",
           isUploading: false,
           phase: "Failed",
         }));
         addActivity(
           "Knowledge upload failed",
-          "Session token missing. Please login again.",
+          error?.message || "Upload knowledge gagal.",
           "maroon",
         );
-        return;
       }
-
-      setUploadState((currentState) => ({
-        ...currentState,
-        error: error?.message || "Upload knowledge gagal.",
-        isUploading: false,
-        phase: "Failed",
-      }));
-      addActivity(
-        "Knowledge upload failed",
-        error?.message || "Upload knowledge gagal.",
-        "maroon",
-      );
-    }
-  }, [addActivity, loadKnowledgeDocuments, uploadState.isUploading]);
+    },
+    [addActivity, loadKnowledgeDocuments, uploadState.isUploading],
+  );
 
   const retryKnowledgeUpload = useCallback(() => {
     if (!failedUploadFilesRef.current.length || uploadState.isUploading) return;
@@ -379,46 +446,45 @@ export function KnowledgeBase() {
     handleKnowledgeUpload(failedUploadFilesRef.current);
   }, [handleKnowledgeUpload, uploadState.isUploading]);
 
-  const handleDeleteDocument = useCallback(async (document) => {
-    if (!document?.id || isUsingMockFallback) return;
-    if (deletingDocumentId === document.id) return;
-    if (!window.confirm(`Hapus "${document.title}" dari Knowledge RAG?`)) {
-      return;
-    }
-
-    setDeletingDocumentId(document.id);
-    setLibraryError("");
-
-    try {
-      await deleteKnowledgeDocument(document.id);
-      addActivity(
-        "Knowledge document deleted",
-        document.title,
-        "maroon",
-      );
-      if (selectedDocumentId === document.id) {
-        setSelectedDocumentId("");
+  const handleDeleteDocument = useCallback(
+    async (document) => {
+      if (!document?.id || isUsingMockFallback) return;
+      if (deletingDocumentId === document.id) return;
+      if (!window.confirm(`Hapus "${document.title}" dari Knowledge RAG?`)) {
+        return;
       }
-      await loadKnowledgeDocuments();
-    } catch (error) {
-      setLibraryError(
-        error?.message || "Gagal menghapus knowledge document.",
-      );
-      addActivity(
-        "Knowledge delete failed",
-        error?.message || "Gagal menghapus knowledge document.",
-        "maroon",
-      );
-    } finally {
-      setDeletingDocumentId("");
-    }
-  }, [
-    addActivity,
-    deletingDocumentId,
-    isUsingMockFallback,
-    loadKnowledgeDocuments,
-    selectedDocumentId,
-  ]);
+
+      setDeletingDocumentId(document.id);
+      setLibraryError("");
+
+      try {
+        await deleteKnowledgeDocument(document.id);
+        addActivity("Knowledge document deleted", document.title, "maroon");
+        if (selectedDocumentId === document.id) {
+          setSelectedDocumentId("");
+        }
+        await loadKnowledgeDocuments();
+      } catch (error) {
+        setLibraryError(
+          error?.message || "Gagal menghapus knowledge document.",
+        );
+        addActivity(
+          "Knowledge delete failed",
+          error?.message || "Gagal menghapus knowledge document.",
+          "maroon",
+        );
+      } finally {
+        setDeletingDocumentId("");
+      }
+    },
+    [
+      addActivity,
+      deletingDocumentId,
+      isUsingMockFallback,
+      loadKnowledgeDocuments,
+      selectedDocumentId,
+    ],
+  );
 
   const copilot = useKnowledgeCopilot({
     activeDocument: selectedDocument,
@@ -426,24 +492,22 @@ export function KnowledgeBase() {
     onActivity: addActivity,
   });
 
-  const semanticResults = useMemo(
-    () => {
-      const query = searchQuery.trim();
-      const remoteResults =
-        query && remoteSearchDocuments.length
-          ? remoteSearchDocuments.map((document) => ({
-              document,
-              score: Math.max(65, Number(document.confidence || 0)),
-            }))
-          : [];
+  const semanticResults = useMemo(() => {
+    const query = searchQuery.trim();
+    const remoteResults =
+      query && remoteSearchDocuments.length
+        ? remoteSearchDocuments.map((document) => ({
+            document,
+            score: Math.max(65, Number(document.confidence || 0)),
+          }))
+        : [];
 
-      return (remoteResults.length
+    return (
+      remoteResults.length
         ? remoteResults
-        : searchKnowledge(searchQuery, filteredDocuments)
-      ).slice(0, 4);
-    },
-    [filteredDocuments, remoteSearchDocuments, searchQuery],
-  );
+        : searchKnowledgeDocumentsLocally(searchQuery, filteredDocuments)
+    ).slice(0, 4);
+  }, [filteredDocuments, remoteSearchDocuments, searchQuery]);
 
   const favoriteDocuments = useMemo(
     () => documents.filter((document) => favoriteIds.has(document.id)),
@@ -456,7 +520,9 @@ export function KnowledgeBase() {
       return;
     }
 
-    if (filteredDocuments.some((document) => document.id === selectedDocumentId)) {
+    if (
+      filteredDocuments.some((document) => document.id === selectedDocumentId)
+    ) {
       return;
     }
 
@@ -491,7 +557,12 @@ export function KnowledgeBase() {
         detail: "pinned docs",
       },
     ],
-    [copilot.citations.length, documents, favoriteDocuments.length, isUsingMockFallback],
+    [
+      copilot.citations.length,
+      documents,
+      favoriteDocuments.length,
+      isUsingMockFallback,
+    ],
   );
 
   useEffect(() => {
@@ -575,10 +646,7 @@ export function KnowledgeBase() {
   return (
     <main className="min-h-screen bg-[#050506] text-zinc-100">
       <div className="orbit-shell">
-        <CommandCenterSidebar
-          releaseState={releaseState}
-          userRole={userRole}
-        />
+        <CommandCenterSidebar releaseState={releaseState} userRole={userRole} />
 
         <section className="min-w-0 flex-1">
           <header className="orbit-topbar">
@@ -593,7 +661,8 @@ export function KnowledgeBase() {
               <button
                 aria-label="Knowledge notifications"
                 className="orbit-icon-button"
-                type="button">
+                type="button"
+              >
                 <Bell size={18} />
               </button>
               <UserMenu />
@@ -683,7 +752,8 @@ export function KnowledgeBase() {
         aria-label="Open AI Knowledge Copilot"
         className="fixed bottom-4 right-4 z-40 inline-flex min-h-12 items-center gap-2 rounded-lg border border-[#d9ad57]/35 bg-[#d9ad57] px-4 text-sm font-black text-black shadow-2xl shadow-black/40 xl:hidden"
         onClick={() => setIsCopilotOpen(true)}
-        type="button">
+        type="button"
+      >
         <BrainCircuit size={18} />
         AI Copilot
       </button>
@@ -829,7 +899,8 @@ function KnowledgeHero({
             aria-label="Open AI Knowledge Copilot panel"
             className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-lg border border-[#d9ad57]/35 bg-[#d9ad57]/15 px-4 text-sm font-black text-[#f1c36f] transition hover:bg-[#d9ad57]/20 xl:hidden"
             onClick={onOpenCopilot}
-            type="button">
+            type="button"
+          >
             <Sparkles size={16} />
             Open AI Copilot
           </button>
@@ -847,7 +918,10 @@ function KnowledgeHero({
             </div>
             <Gauge className="text-[#d9ad57]" size={24} />
           </div>
-          <StatusLine label="Confidence" value={`${selectedDocument.confidence}%`} />
+          <StatusLine
+            label="Confidence"
+            value={`${selectedDocument.confidence}%`}
+          />
           <StatusLine label="Owner" value={selectedDocument.owner} />
           <StatusLine label="Updated" value={selectedDocument.updatedAt} />
           <StatusLine
@@ -920,7 +994,8 @@ function CollectionSidebar({
               }`}
               key={collection.id}
               onClick={() => onSelectCollection(collection.id)}
-              type="button">
+              type="button"
+            >
               <span className="min-w-0 truncate">{collection.label}</span>
               <span className="shrink-0 text-[10px] font-black uppercase text-zinc-500">
                 {collection.countLabel}
@@ -954,7 +1029,8 @@ function SemanticSearchPanel({
   return (
     <section
       className="scroll-mt-24 rounded-lg border border-white/10 bg-white/[0.035] p-4"
-      id={id}>
+      id={id}
+    >
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="orbit-kicker">Search Knowledge</p>
@@ -984,7 +1060,8 @@ function SemanticSearchPanel({
               className="rounded-lg border border-white/10 bg-black/20 p-3 text-left transition hover:border-[#d9ad57]/35 hover:bg-[#d9ad57]/8"
               key={document.id}
               onClick={() => onSelectDocument(document)}
-              type="button">
+              type="button"
+            >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-black text-white">
@@ -1051,13 +1128,15 @@ function DocumentLibrary({
                     ? "border-[#d9ad57]/40 bg-[#d9ad57]/10"
                     : "border-white/10 bg-black/20 hover:border-white/20"
                 }`}
-                key={document.id}>
+                key={document.id}
+              >
                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <button
                     aria-label={`Preview ${document.title}`}
                     className="min-w-0 flex-1 text-left"
                     onClick={() => onSelectDocument(document)}
-                    type="button">
+                    type="button"
+                  >
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase text-zinc-400">
                         {document.type}
@@ -1085,7 +1164,8 @@ function DocumentLibrary({
                           : "border-white/10 bg-white/[0.04] text-zinc-500 hover:border-[#d9ad57]/30 hover:text-[#f1c36f]"
                       }`}
                       onClick={() => onToggleFavorite(document)}
-                      type="button">
+                      type="button"
+                    >
                       <Star
                         fill={isFavorite ? "currentColor" : "none"}
                         size={17}
@@ -1095,7 +1175,8 @@ function DocumentLibrary({
                       aria-label={`Open ${document.title}`}
                       className="grid size-10 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-zinc-400 transition hover:border-[#d9ad57]/30 hover:text-white"
                       onClick={() => onSelectDocument(document)}
-                      type="button">
+                      type="button"
+                    >
                       <ChevronRight size={17} />
                     </button>
                     <button
@@ -1106,7 +1187,8 @@ function DocumentLibrary({
                         deletingDocumentId === document.id
                       }
                       onClick={() => onDeleteDocument(document)}
-                      type="button">
+                      type="button"
+                    >
                       <Trash2 size={16} />
                     </button>
                   </div>
@@ -1171,8 +1253,14 @@ function UploadPanel({
         />
         <div className="mt-4 grid gap-2 sm:grid-cols-2">
           <StatusLine label="Upload phase" value={uploadState.phase} />
-          <StatusLine label="Indexed docs" value={String(uploadState.indexedCount)} />
-          <StatusLine label="Queue size" value={String(uploadState.queueCount)} />
+          <StatusLine
+            label="Indexed docs"
+            value={String(uploadState.indexedCount)}
+          />
+          <StatusLine
+            label="Queue size"
+            value={String(uploadState.queueCount)}
+          />
           <StatusLine
             label="Mode"
             value={
@@ -1188,7 +1276,9 @@ function UploadPanel({
         <div className="mt-4 overflow-hidden rounded-full border border-white/10 bg-black/40">
           <div
             className="h-2 bg-[#d9ad57] transition-all"
-            style={{ width: `${Math.max(0, Math.min(100, uploadState.progress))}%` }}
+            style={{
+              width: `${Math.max(0, Math.min(100, uploadState.progress))}%`,
+            }}
           />
         </div>
 
@@ -1212,7 +1302,8 @@ function UploadPanel({
               Supported files
             </p>
             <p className="mt-1 text-xs font-bold text-zinc-500">
-              PDF, TXT, MD, DOCX up to {formatKnowledgeFileSize(10 * 1024 * 1024)}
+              PDF, TXT, MD, DOCX up to{" "}
+              {formatKnowledgeFileSize(10 * 1024 * 1024)}
             </p>
           </div>
           <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase text-zinc-400">
@@ -1233,7 +1324,8 @@ function UploadPanel({
         className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#d9ad57]/35 bg-[#d9ad57]/15 px-4 text-sm font-black text-[#f1c36f] transition hover:bg-[#d9ad57]/20 disabled:cursor-not-allowed disabled:opacity-50"
         disabled={uploadState.isUploading || isUsingMockFallback}
         onClick={onTriggerUpload}
-        type="button">
+        type="button"
+      >
         <CheckCircle2 size={16} />
         {uploadState.isUploading ? "Indexing..." : "Upload & Index Document"}
       </button>
@@ -1242,7 +1334,8 @@ function UploadPanel({
           className="mt-2 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-white/15 bg-white/[0.04] px-4 text-sm font-black text-white transition hover:border-[#d9ad57]/30 hover:text-[#f1c36f] disabled:cursor-not-allowed disabled:opacity-50"
           disabled={uploadState.isUploading || isUsingMockFallback}
           onClick={onRetryUpload}
-          type="button">
+          type="button"
+        >
           Retry Failed Upload
         </button>
       ) : null}
@@ -1254,7 +1347,8 @@ function FavoritesPanel({ documents, id, onSelectDocument }) {
   return (
     <section
       className="scroll-mt-24 rounded-lg border border-white/10 bg-white/[0.035] p-4"
-      id={id}>
+      id={id}
+    >
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="orbit-kicker">Favorites</p>
@@ -1271,7 +1365,8 @@ function FavoritesPanel({ documents, id, onSelectDocument }) {
               className="rounded-lg border border-white/10 bg-black/20 p-3 text-left transition hover:border-[#d9ad57]/30"
               key={document.id}
               onClick={() => onSelectDocument(document)}
-              type="button">
+              type="button"
+            >
               <p className="text-sm font-black text-white">{document.title}</p>
               <p className="mt-1 text-xs font-bold text-zinc-500">
                 {document.owner}
@@ -1332,7 +1427,8 @@ function DocumentPreview({ document }) {
         {document.tags.map((tag) => (
           <span
             className="rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-zinc-400"
-            key={tag}>
+            key={tag}
+          >
             {tag}
           </span>
         ))}
@@ -1361,7 +1457,8 @@ function SourceCitationCards({ citations = [], document }) {
           displayedCitations.map((citation) => (
             <article
               className="rounded-lg border border-white/10 bg-black/20 p-3"
-              key={citation.id}>
+              key={citation.id}
+            >
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-black text-white">
@@ -1398,11 +1495,14 @@ function RagContextPreview({ document, id, selectedContext = [] }) {
   return (
     <section
       className="scroll-mt-24 rounded-lg border border-white/10 bg-white/[0.035] p-4"
-      id={id}>
+      id={id}
+    >
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="orbit-kicker">RAG Context Preview</p>
-          <h2 className="mt-1 text-lg font-black text-white">Injected Context</h2>
+          <h2 className="mt-1 text-lg font-black text-white">
+            Injected Context
+          </h2>
         </div>
         <Layers3 className="text-[#d9ad57]" size={21} />
       </div>
@@ -1412,7 +1512,8 @@ function RagContextPreview({ document, id, selectedContext = [] }) {
           contextChunks.map((chunk, index) => (
             <div
               className="rounded-lg border border-white/10 bg-black/25 p-3"
-              key={chunk}>
+              key={chunk}
+            >
               <p className="text-[10px] font-black uppercase tracking-[0.14em] text-[#f1c36f]">
                 Chunk {index + 1}
               </p>
@@ -1444,7 +1545,8 @@ function ActivityLog({ entries }) {
         {entries.map((entry) => (
           <article
             className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-lg border border-white/10 bg-black/20 p-3"
-            key={entry.id}>
+            key={entry.id}
+          >
             <span
               className={`mt-1 size-2 rounded-full ${getActivityTone(entry.tone)}`}
             />
@@ -1500,7 +1602,8 @@ function StatusBadge({ status }) {
 
   return (
     <span
-      className={`rounded-md border px-2 py-1 text-[10px] font-black uppercase ${className}`}>
+      className={`rounded-md border px-2 py-1 text-[10px] font-black uppercase ${className}`}
+    >
       {status}
     </span>
   );
