@@ -199,6 +199,7 @@ export function isAuthProviderUnavailableError(error) {
 async function request(path, options = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const startedAt = Date.now();
   const requestUrl = resolveApiUrl(path);
   const hasFormDataBody =
     typeof FormData !== "undefined" && options.body instanceof FormData;
@@ -225,7 +226,7 @@ async function request(path, options = {}) {
     }
   }
 
-  logApiRequestUrl(path, requestUrl);
+  logApiRequestStart({ path, requestUrl });
 
   try {
     if (isKnowledgeApiRequestUrl(requestUrl)) {
@@ -257,6 +258,13 @@ async function request(path, options = {}) {
         signal: controller.signal,
       });
       const data = await parseJsonResponse(response);
+      logApiRequestResult({
+        durationMs: Date.now() - startedAt,
+        headers,
+        path,
+        requestUrl,
+        status: response.status,
+      });
 
       if (isKnowledgeApiRequestUrl(requestUrl) && import.meta.env.DEV) {
         console.info("[Knowledge API]", {
@@ -306,6 +314,26 @@ async function request(path, options = {}) {
       }
 
       throw new Error("API request timed out.");
+    }
+
+    logApiRequestFailure({
+      durationMs: Date.now() - startedAt,
+      error,
+      path,
+      requestUrl,
+    });
+
+    if (isFetchNetworkError(error)) {
+      const message = "API network request failed.";
+
+      throw new ApiRequestError(message, {
+        body: {
+          success: false,
+          code: "API_NETWORK_ERROR",
+          message,
+        },
+        status: 0,
+      });
     }
 
     throw error;
@@ -531,10 +559,65 @@ function getPrintableRequestUrl(requestUrl) {
   return requestUrl;
 }
 
-function logApiRequestUrl(path, requestUrl) {
+function isFetchNetworkError(error) {
+  if (!error || error.name === "AbortError") return false;
+
+  const values = [
+    error.code,
+    error.name,
+    error.message,
+    error.cause?.code,
+    error.cause?.name,
+    error.cause?.message,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+
+  return values.some((value) =>
+    [
+      "failed to fetch",
+      "fetch failed",
+      "networkerror",
+      "network error",
+      "load failed",
+    ].some((pattern) => value.includes(pattern)),
+  );
+}
+
+function logApiRequestStart({ path, requestUrl }) {
   if (import.meta.env.VITE_ENABLE_API_DEBUG !== "true") return;
 
   console.info("[ORBIT API Request]", {
+    path,
+    url: getPrintableRequestUrl(requestUrl),
+  });
+}
+
+function logApiRequestResult({
+  durationMs,
+  headers,
+  path,
+  requestUrl,
+  status,
+}) {
+  if (import.meta.env.VITE_ENABLE_API_DEBUG !== "true") return;
+
+  console.info("[ORBIT API Response]", {
+    durationMs,
+    hasAuthorization: headers?.has?.("Authorization") || false,
+    path,
+    status,
+    url: getPrintableRequestUrl(requestUrl),
+  });
+}
+
+function logApiRequestFailure({ durationMs, error, path, requestUrl }) {
+  if (import.meta.env.VITE_ENABLE_API_DEBUG !== "true") return;
+
+  console.warn("[ORBIT API Failure]", {
+    durationMs,
+    errorName: error?.name || "Error",
+    message: error?.message || "Request failed",
     path,
     url: getPrintableRequestUrl(requestUrl),
   });

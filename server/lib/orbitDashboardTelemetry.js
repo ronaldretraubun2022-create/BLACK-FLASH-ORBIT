@@ -92,6 +92,46 @@ function logTelemetryAuthEvent(req, reason, metadata = {}) {
   });
 }
 
+function getNestedErrorValues(error) {
+  const values = [];
+  let currentError = error;
+
+  while (currentError && values.length < 8) {
+    values.push(
+      currentError.code,
+      currentError.name,
+      currentError.message,
+      currentError.cause?.code,
+      currentError.cause?.name,
+      currentError.cause?.message,
+    );
+    currentError = currentError.cause;
+  }
+
+  return values
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+}
+
+function isTelemetryAuthProviderNetworkError(error) {
+  return getNestedErrorValues(error).some((value) =>
+    [
+      "aborterror",
+      "aborted",
+      "connect timeout",
+      "connection timeout",
+      "econnreset",
+      "etimedout",
+      "fetch failed",
+      "networkerror",
+      "timeout",
+      "und_err_connect_timeout",
+      "und_err_headers_timeout",
+      "und_err_socket",
+    ].some((pattern) => value.includes(pattern)),
+  );
+}
+
 function getTelemetryAuthConfig() {
   const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
   const supabaseAnonKey =
@@ -176,11 +216,17 @@ async function requireTelemetryAuth(req, res) {
 
     return data.user;
   } catch (error) {
-    const statusCode = error.statusCode || error.status || 500;
+    const isProviderUnavailable = isTelemetryAuthProviderNetworkError(error);
+    const statusCode = isProviderUnavailable
+      ? 503
+      : error.statusCode || error.status || 500;
     const safeStatusCode =
       statusCode >= 400 && statusCode < 600 ? statusCode : 500;
+    const code = isProviderUnavailable
+      ? "AUTH_PROVIDER_UNAVAILABLE"
+      : error.code || "telemetry_auth_failed";
 
-    logTelemetryAuthEvent(req, error.code || "telemetry_auth_failed", {
+    logTelemetryAuthEvent(req, code, {
       status: safeStatusCode,
     });
 
@@ -188,11 +234,13 @@ async function requireTelemetryAuth(req, res) {
       res,
       {
         success: false,
-        code: error.code || "telemetry_auth_failed",
+        code,
         message:
           safeStatusCode === 401
             ? "Autentikasi diperlukan."
-            : "Telemetry auth gagal.",
+            : isProviderUnavailable
+              ? "Auth provider temporarily unavailable. Try again."
+              : "Telemetry auth gagal.",
       },
       safeStatusCode,
     );

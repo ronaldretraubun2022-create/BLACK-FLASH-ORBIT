@@ -49,6 +49,10 @@ import {
   api,
   isAuthProviderUnavailableError,
 } from "./services/api.js";
+import dashboardTelemetryState from "./services/dashboardTelemetryState.cjs";
+
+const { getObjectValues, resolveCommandCenterTelemetryState } =
+  dashboardTelemetryState;
 
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
 
@@ -185,11 +189,6 @@ function formatTime(value, fallback) {
   });
 }
 
-function getObjectValues(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-  return Object.values(value);
-}
-
 function CommandCenterDashboard({ onOpenCommandPalette }) {
   const [dashboardData, setDashboardData] = useState(null);
   const [isTelemetryLoading, setIsTelemetryLoading] = useState(true);
@@ -245,27 +244,18 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
     return () => controller.abort();
   }, []);
 
-  const hasTelemetryData = Boolean(dashboardData);
-  const hasActivity =
-    Array.isArray(dashboardData?.activity) && dashboardData.activity.length > 0;
-  const hasProjects =
-    Array.isArray(dashboardData?.projects) && dashboardData.projects.length > 0;
-  const hasAutomation = getObjectValues(dashboardData?.automation).length > 0;
-  const isTelemetryConnected =
-    hasTelemetryData && !isTelemetryLoading && !telemetryError;
-  const isUsingFallback =
-    isTelemetryLoading ||
-    Boolean(telemetryError) ||
-    !hasTelemetryData ||
-    (isTelemetryConnected && (!hasActivity || !hasProjects || !hasAutomation));
-
-  const telemetryStatusText = isTelemetryLoading
-    ? "Syncing backend telemetry..."
-    : telemetryError
-      ? `Telemetry fallback active: ${telemetryError}`
-      : isTelemetryConnected && !hasActivity && !hasProjects && !hasAutomation
-        ? "Telemetry connected, waiting for records."
-        : "Backend telemetry live.";
+  const {
+    hasActivity,
+    hasAutomation,
+    hasProjects,
+    isTelemetryConnected,
+    isUsingFallback,
+    telemetryStatusText,
+  } = resolveCommandCenterTelemetryState({
+    dashboardData,
+    isTelemetryLoading,
+    telemetryError,
+  });
 
   const telemetryLabels = [
     {
