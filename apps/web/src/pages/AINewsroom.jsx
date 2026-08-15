@@ -1,12 +1,20 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { AudienceSelector } from "../components/newsroom/AudienceSelector.jsx";
 import { ChannelSelector } from "../components/newsroom/ChannelSelector.jsx";
+import { EditorialDecisionPanel } from "../components/newsroom/history/EditorialDecisionPanel.jsx";
+import { GenerationHistory } from "../components/newsroom/history/GenerationHistory.jsx";
 import { IntelligenceSummary } from "../components/newsroom/IntelligenceSummary.jsx";
 import { IntelligenceSummaryPanel } from "../components/newsroom/intelligence/IntelligenceSummaryPanel.jsx";
 import { VerificationPanel } from "../components/newsroom/verification/VerificationPanel.jsx";
 import {
+  deleteNewsroomGeneration,
+  exportNewsroomGeneration,
   generateIntelligenceDraft,
+  getNewsroomGeneration,
   isNewsroomLocalFallbackEnabled,
+  listNewsroomHistory,
+  saveNewsroomGeneration,
+  submitNewsroomDecision,
 } from "../services/newsroomAI.js";
 
 const INTELLIGENCE_LAYERS = {
@@ -964,6 +972,51 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function createClientIdempotencyKey() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+
+  return `newsroom-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function writeClipboardText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    const copied = document.execCommand("copy");
+
+    if (!copied) throw new Error("Copy command failed.");
+  } finally {
+    textarea.remove();
+  }
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+
+  a.href = url;
+  a.download = filename;
+
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  URL.revokeObjectURL(url);
+}
+
 export function AINewsroom() {
   const [topic, setTopic] = useState("");
   const [layer, setLayer] = useState(DEFAULT_LAYER);
@@ -987,6 +1040,20 @@ export function AINewsroom() {
   const [generatedIntelligenceSummary, setGeneratedIntelligenceSummary] =
     useState(null);
   const [editorialReviewReport, setEditorialReviewReport] = useState(null);
+  const [savedGeneration, setSavedGeneration] = useState(null);
+  const [historyItems, setHistoryItems] = useState([]);
+  const [historyFilters, setHistoryFilters] = useState({
+    reviewStatus: "",
+    search: "",
+  });
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [saveStatus, setSaveStatus] = useState("");
+  const [exportStatus, setExportStatus] = useState("");
+  const [decisionStatus, setDecisionStatus] = useState("");
+  const [isDecisionSubmitting, setIsDecisionSubmitting] = useState(false);
+  const [editorNotes, setEditorNotes] = useState("");
+  const [overrideBlockers, setOverrideBlockers] = useState(false);
+  const [overrideReason, setOverrideReason] = useState("");
 
   const modes = INTELLIGENCE_LAYERS[layer] || [];
   const expectedOutput = useMemo(
@@ -1116,6 +1183,206 @@ export function AINewsroom() {
     return draft.trim() ? draft.trim().split(/\s+/).length : 0;
   }, [draft]);
 
+  useEffect(() => {
+    loadHistory();
+  }, []);
+
+  async function loadHistory(nextFilters = historyFilters) {
+    setHistoryLoading(true);
+
+    try {
+      const response = await listNewsroomHistory({
+        ...nextFilters,
+        limit: 12,
+      });
+
+      setHistoryItems(response.items || response.data?.items || []);
+    } catch {
+      setGenerationError("Gagal membaca generation history.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  function buildGenerationPayload({
+    response,
+    safeTopic,
+    savedDraft = draft,
+  } = {}) {
+    return {
+      audience,
+      channel,
+      complexity,
+      draft: savedDraft,
+      editorial: response?.editorial || editorial,
+      editorialReviewReport:
+        response?.editorialReviewReport || editorialReviewReport,
+      intelligenceSummary:
+        response?.intelligenceSummary || generatedIntelligenceSummary,
+      metadata: response?.metadata || {
+        audience,
+        channel,
+        complexity,
+        mode,
+        promptVersion: editorialReviewReport?.safeMetadata?.promptVersion,
+      },
+      mode,
+      publicationReadiness:
+        response?.intelligenceSummary?.publicationReadiness ||
+        generatedIntelligenceSummary?.publicationReadiness ||
+        confidence.publicationReadiness,
+      reviewStatus:
+        response?.editorial?.reviewStatus ||
+        generatedIntelligenceSummary?.editorialStatus ||
+        editorial?.reviewStatus,
+      sourceInputSummary: safeTopic || topic,
+      topic: safeTopic || topic,
+      verification: response?.verification || verification,
+    };
+  }
+
+  async function saveGeneratedResponse({ response, safeTopic }) {
+    const nextDraft = String(response.draft || "").trim();
+    const payload = buildGenerationPayload({
+      response,
+      safeTopic,
+      savedDraft: nextDraft,
+    });
+    const idempotencyKey = createClientIdempotencyKey();
+
+    setSaveStatus("Saving...");
+
+    try {
+      const saved = await saveNewsroomGeneration(payload, idempotencyKey);
+      const generation = saved.generation || saved.data?.generation;
+
+      setSavedGeneration(generation || null);
+      setEditorNotes(generation?.editorNotes || "");
+      setSaveStatus("Saved");
+      await loadHistory();
+    } catch (error) {
+      setSaveStatus(error?.message || "Auto-save failed");
+    }
+  }
+
+  async function handleManualSave() {
+    if (!draft.trim()) return;
+
+    setSaveStatus("Saving...");
+
+    try {
+      const saved = await saveNewsroomGeneration(
+        buildGenerationPayload({ savedDraft: draft }),
+        createClientIdempotencyKey(),
+      );
+      const generation = saved.generation || saved.data?.generation;
+
+      setSavedGeneration(generation || null);
+      setEditorNotes(generation?.editorNotes || "");
+      setSaveStatus("Saved");
+      await loadHistory();
+    } catch (error) {
+      setSaveStatus(error?.message || "Save failed");
+    }
+  }
+
+  async function handleOpenHistory(item) {
+    try {
+      const response = await getNewsroomGeneration(item.id);
+      const generation = response.generation || response.data?.generation;
+
+      if (!generation) return;
+
+      setSavedGeneration(generation);
+      setTopic(generation.topic || "");
+      setMode(generation.mode || DEFAULT_MODE);
+      setAudience(generation.audience || DEFAULT_AUDIENCE);
+      setComplexity(generation.complexity || "Strategic");
+      setChannel(generation.channel || DEFAULT_CHANNEL);
+      setDraft(generation.draft || "");
+      setVerification(generation.verification || null);
+      setGeneratedIntelligenceSummary(generation.intelligenceSummary || null);
+      setEditorialReviewReport(generation.editorialReviewReport || null);
+      setEditorial({
+        reviewStatus: generation.reviewStatus,
+        requiresHumanApproval: true,
+      });
+      setConfidence({
+        score: Number(generation.intelligenceSummary?.confidence?.score) || 0,
+        publicationReadiness:
+          generation.publicationReadiness || "Verification Required",
+      });
+      setEditorNotes(generation.editorNotes || "");
+      setGenerationError("");
+    } catch (error) {
+      setGenerationError(error?.message || "Gagal membuka history.");
+    }
+  }
+
+  async function handleDeleteHistory(item) {
+    if (!window.confirm("Hapus generation history ini?")) return;
+
+    try {
+      await deleteNewsroomGeneration(item.id);
+      if (savedGeneration?.id === item.id) setSavedGeneration(null);
+      await loadHistory();
+    } catch (error) {
+      setGenerationError(error?.message || "Gagal menghapus history.");
+    }
+  }
+
+  async function handleDecision(decision) {
+    if (!savedGeneration?.id) return;
+
+    setIsDecisionSubmitting(true);
+    setDecisionStatus("");
+
+    try {
+      const response = await submitNewsroomDecision(savedGeneration.id, {
+        decision,
+        notes: editorNotes,
+        overrideBlockers,
+        overrideReason,
+      });
+      const generation = response.generation || response.data?.generation;
+
+      setSavedGeneration(generation || savedGeneration);
+      setEditorial({
+        reviewStatus: generation?.reviewStatus || savedGeneration.reviewStatus,
+        requiresHumanApproval: true,
+      });
+      setDecisionStatus("Decision saved");
+      setOverrideBlockers(false);
+      setOverrideReason("");
+      await loadHistory();
+    } catch (error) {
+      setDecisionStatus(error?.message || "Decision failed");
+    } finally {
+      setIsDecisionSubmitting(false);
+    }
+  }
+
+  async function handleServerExport(type, format) {
+    if (!savedGeneration?.id) {
+      setExportStatus("Save generation before export.");
+      return;
+    }
+
+    setExportStatus("Exporting...");
+
+    try {
+      const artifact = await exportNewsroomGeneration(savedGeneration.id, {
+        format,
+        type,
+      });
+
+      downloadBlob(artifact.blob, artifact.filename);
+      setExportStatus("Export ready");
+    } catch (error) {
+      setExportStatus(error?.message || "Export failed");
+    }
+  }
+
   function handleLayerChange(event) {
     const nextLayer = event.target.value;
     const nextModes = INTELLIGENCE_LAYERS[nextLayer] || [];
@@ -1161,6 +1428,10 @@ export function AINewsroom() {
 
     setIsGenerating(true);
     setGenerationError("");
+    setSavedGeneration(null);
+    setSaveStatus("");
+    setExportStatus("");
+    setDecisionStatus("");
 
     try {
       const response = await generateIntelligenceDraft(payload);
@@ -1177,6 +1448,7 @@ export function AINewsroom() {
         setEditorial(response.editorial || null);
         setGeneratedIntelligenceSummary(response.intelligenceSummary || null);
         setEditorialReviewReport(response.editorialReviewReport || null);
+        await saveGeneratedResponse({ response, safeTopic });
       } else {
         throw new Error("AI response missing draft");
       }
@@ -1211,15 +1483,36 @@ export function AINewsroom() {
     }
   }
 
-  async function handleCopy() {
-    if (!draft.trim()) return;
+  function getCopyPayload(type = "draft") {
+    if (type === "summary") {
+      return JSON.stringify(generatedIntelligenceSummary || {}, null, 2);
+    }
+
+    if (type === "review") {
+      return JSON.stringify(editorialReviewReport || {}, null, 2);
+    }
+
+    if (type === "headline") {
+      return draft
+        .split("\n")
+        .map((line) => line.trim())
+        .find(Boolean);
+    }
+
+    return draft;
+  }
+
+  async function handleCopy(type = "draft") {
+    const text = getCopyPayload(type);
+
+    if (!String(text || "").trim()) return;
 
     try {
-      await navigator.clipboard.writeText(draft);
-      setCopyStatus("Tersalin");
+      await writeClipboardText(text);
+      setCopyStatus("Copied");
       setTimeout(() => setCopyStatus(""), 2000);
     } catch {
-      setCopyStatus("Gagal menyalin");
+      setCopyStatus("Copy failed");
       setTimeout(() => setCopyStatus(""), 2000);
     }
   }
@@ -1571,6 +1864,26 @@ export function AINewsroom() {
             >
               {isGenerating ? "Generating..." : "Generate Intelligence Draft"}
             </button>
+
+            {saveStatus && (
+              <p className="mt-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-xs font-bold text-slate-300">
+                {saveStatus}
+              </p>
+            )}
+
+            <GenerationHistory
+              activeId={savedGeneration?.id}
+              filters={historyFilters}
+              isLoading={historyLoading}
+              items={historyItems}
+              onDelete={handleDeleteHistory}
+              onFiltersChange={(nextFilters) => {
+                setHistoryFilters(nextFilters);
+                loadHistory(nextFilters);
+              }}
+              onOpen={handleOpenHistory}
+              onRefresh={() => loadHistory()}
+            />
           </section>
 
           <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 shadow-2xl backdrop-blur-xl">
@@ -1632,11 +1945,47 @@ export function AINewsroom() {
 
                 <button
                   type="button"
-                  onClick={handleCopy}
+                  onClick={handleManualSave}
+                  disabled={!draft.trim()}
+                  className="rounded-full border border-[#f1c36f]/40 bg-[#f1c36f]/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-[#f1c36f] transition hover:bg-[#f1c36f] hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Save
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleCopy("draft")}
                   disabled={!draft.trim()}
                   className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Copy
+                  Copy Draft
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleCopy("headline")}
+                  disabled={!draft.trim()}
+                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Headline
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleCopy("summary")}
+                  disabled={!generatedIntelligenceSummary}
+                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Copy Summary
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleCopy("review")}
+                  disabled={!editorialReviewReport}
+                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Copy Review
                 </button>
 
                 <button
@@ -1659,18 +2008,56 @@ export function AINewsroom() {
 
                 <button
                   type="button"
-                  onClick={handlePrint}
-                  disabled={!draft.trim()}
+                  onClick={() => handleServerExport("draft", "pdf")}
+                  disabled={!savedGeneration?.id}
                   className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  PRINT
+                  Draft PDF
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleServerExport("draft", "docx")}
+                  disabled={!savedGeneration?.id}
+                  className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Draft DOCX
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleServerExport("review", "pdf")}
+                  disabled={!savedGeneration?.id}
+                  className="rounded-full border border-[#f1c36f]/40 bg-[#f1c36f]/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-[#f1c36f] transition hover:bg-[#f1c36f] hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Review PDF
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleServerExport("review", "docx")}
+                  disabled={!savedGeneration?.id}
+                  className="rounded-full border border-[#f1c36f]/40 bg-[#f1c36f]/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-[#f1c36f] transition hover:bg-[#f1c36f] hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Review DOCX
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleServerExport("review", "json")}
+                  disabled={!savedGeneration?.id}
+                  className="rounded-full border border-[#f1c36f]/40 bg-[#f1c36f]/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-[#f1c36f] transition hover:bg-[#f1c36f] hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Review JSON
                 </button>
               </div>
             </div>
 
-            {copyStatus && (
+            {(copyStatus || exportStatus || decisionStatus) && (
               <p className="mb-3 text-sm font-bold text-cyan-200">
-                {copyStatus}
+                {[copyStatus, exportStatus, decisionStatus]
+                  .filter(Boolean)
+                  .join(" / ")}
               </p>
             )}
 
@@ -1679,6 +2066,20 @@ export function AINewsroom() {
                 {generationError}
               </div>
             )}
+
+            <EditorialDecisionPanel
+              generation={savedGeneration}
+              isSubmitting={isDecisionSubmitting}
+              notes={editorNotes}
+              onDecision={handleDecision}
+              onNotesChange={setEditorNotes}
+              onOverrideBlockersChange={setOverrideBlockers}
+              onOverrideReasonChange={setOverrideReason}
+              overrideBlockers={overrideBlockers}
+              overrideReason={overrideReason}
+              summary={generatedIntelligenceSummary}
+              verification={verification}
+            />
 
             <VerificationPanel
               editorial={editorial}

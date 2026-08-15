@@ -11,6 +11,15 @@ const {
 const {
   buildIntelligenceSummary,
 } = require("../services/newsroom/intelligenceSummary");
+const { createExportArtifact } = require("../services/newsroom/export");
+const {
+  createGeneration,
+  deleteGeneration,
+  getGenerationById,
+  listGenerations,
+  recordEditorialDecision,
+  updateGeneration,
+} = require("../services/newsroom/historyRepository");
 const { createPromptContract } = require("../services/newsroom/promptContract");
 const { buildNewsroomPromptV2 } = require("../services/newsroom/prompts");
 const { verifyNewsroomDraft } = require("../services/newsroom/verification");
@@ -156,6 +165,18 @@ function logNewsroomError(error) {
       name: error?.name || "Error",
     });
   }
+}
+
+function sendHistoryError(res, error, fallbackMessage) {
+  const statusCode = error.statusCode || error.status || 500;
+  const message =
+    statusCode >= 500 ? fallbackMessage : error.message || fallbackMessage;
+
+  return res.status(statusCode).json({
+    success: false,
+    code: error.code || "newsroom_history_failed",
+    message,
+  });
 }
 
 function sanitizeText(value) {
@@ -1324,6 +1345,142 @@ router.post("/", requireAuth, async (req, res) => {
       error: "ai_newsroom_failed",
       message: "Gagal menghasilkan draf AI Newsroom. Silakan coba lagi nanti.",
     });
+  }
+});
+
+router.get("/history", requireAuth, async (req, res) => {
+  try {
+    const result = await listGenerations({
+      ownerId: req.userId,
+      queryParams: req.query || {},
+    });
+
+    return res.json({
+      success: true,
+      data: result,
+      items: result.items,
+      pagination: result.pagination,
+    });
+  } catch (error) {
+    return sendHistoryError(res, error, "Gagal membaca generation history.");
+  }
+});
+
+router.post("/history", requireAuth, async (req, res) => {
+  try {
+    const result = await createGeneration({
+      body: req.body || {},
+      idempotencyKey: req.headers["idempotency-key"],
+      ownerId: req.userId,
+    });
+
+    return res.status(result.created ? 201 : 200).json({
+      success: true,
+      data: {
+        generation: result.generation,
+      },
+      generation: result.generation,
+    });
+  } catch (error) {
+    return sendHistoryError(res, error, "Gagal menyimpan generation history.");
+  }
+});
+
+router.get("/history/:id/export", requireAuth, async (req, res) => {
+  try {
+    const generation = await getGenerationById({
+      generationId: req.params.id,
+      ownerId: req.userId,
+    });
+    const artifact = createExportArtifact(generation, {
+      format: req.query?.format,
+      type: req.query?.type,
+    });
+
+    res.setHeader("Content-Type", artifact.contentType);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${artifact.filename}"`,
+    );
+    res.setHeader("X-Content-Type-Options", "nosniff");
+
+    return res.status(200).send(artifact.buffer);
+  } catch (error) {
+    return sendHistoryError(res, error, "Gagal membuat export newsroom.");
+  }
+});
+
+router.get("/history/:id", requireAuth, async (req, res) => {
+  try {
+    const generation = await getGenerationById({
+      generationId: req.params.id,
+      ownerId: req.userId,
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        generation,
+      },
+      generation,
+    });
+  } catch (error) {
+    return sendHistoryError(res, error, "Generation tidak ditemukan.");
+  }
+});
+
+router.patch("/history/:id", requireAuth, async (req, res) => {
+  try {
+    const generation = await updateGeneration({
+      body: req.body || {},
+      generationId: req.params.id,
+      ownerId: req.userId,
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        generation,
+      },
+      generation,
+    });
+  } catch (error) {
+    return sendHistoryError(res, error, "Gagal memperbarui generation.");
+  }
+});
+
+router.post("/history/:id/decision", requireAuth, async (req, res) => {
+  try {
+    const result = await recordEditorialDecision({
+      body: req.body || {},
+      generationId: req.params.id,
+      ownerId: req.userId,
+    });
+
+    return res.json({
+      success: true,
+      data: result,
+      decision: result.decision,
+      generation: result.generation,
+    });
+  } catch (error) {
+    return sendHistoryError(res, error, "Gagal menyimpan keputusan editorial.");
+  }
+});
+
+router.delete("/history/:id", requireAuth, async (req, res) => {
+  try {
+    const deleted = await deleteGeneration({
+      generationId: req.params.id,
+      ownerId: req.userId,
+    });
+
+    return res.json({
+      success: true,
+      data: deleted,
+    });
+  } catch (error) {
+    return sendHistoryError(res, error, "Gagal menghapus generation.");
   }
 });
 
