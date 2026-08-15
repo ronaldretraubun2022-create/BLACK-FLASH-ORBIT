@@ -17,26 +17,50 @@ function getOpenRouterModels() {
 }
 
 async function generateWithOpenRouter(prompt, options = {}) {
-  const result = await generateCompletion({
-    maxTokens: options.maxTokens || 1500,
-    messages: [
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
+  const result = await generateNewsroomCompletion({
+    maxTokens: options.maxTokens,
+    metadata: options.metadata,
     model: options.model,
     requestId: options.requestId,
-    systemPrompt: NEWSROOM_SYSTEM_PROMPT,
-    temperature: options.temperature ?? 0.2,
-    timeout: options.timeout || 45000,
-    useCase: AI_USE_CASES.NEWSROOM,
+    systemPrompt: options.systemPrompt || NEWSROOM_SYSTEM_PROMPT,
+    temperature: options.temperature,
+    timeout: options.timeout,
+    userPrompt: prompt,
   });
 
   return result.content;
 }
 
+async function generateNewsroomCompletion({
+  maxTokens = 1500,
+  metadata,
+  model,
+  requestId,
+  systemPrompt = NEWSROOM_SYSTEM_PROMPT,
+  temperature = 0.2,
+  timeout = 45000,
+  userPrompt,
+} = {}) {
+  return generateCompletion({
+    maxTokens,
+    messages: [
+      {
+        role: "user",
+        content: userPrompt,
+      },
+    ],
+    metadata,
+    model,
+    requestId,
+    systemPrompt,
+    temperature,
+    timeout,
+    useCase: AI_USE_CASES.NEWSROOM,
+  });
+}
+
 module.exports = {
+  generateNewsroomCompletion,
   generateWithOpenRouter,
   getOpenRouterModels,
   isValidOpenRouterModel,

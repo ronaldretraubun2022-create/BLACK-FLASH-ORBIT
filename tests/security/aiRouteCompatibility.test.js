@@ -50,7 +50,15 @@ test("POST /api/ai/newsroom preserves response schema through AI Router wrapper"
         requireAuth: createAuthMiddleware(),
       },
       "../services/openrouter": {
-        generateWithOpenRouter: async () => "Provider newsroom draft.",
+        generateNewsroomCompletion: async () => ({
+          content: "Provider newsroom draft.",
+          metadata: {
+            durationMs: 12,
+            fallbackUsed: false,
+          },
+          model: "resolved/newsroom-model",
+          provider: "openrouter",
+        }),
       },
     },
   );
@@ -81,6 +89,7 @@ test("POST /api/ai/newsroom preserves response schema through AI Router wrapper"
     assert(result.body.confidenceAnalysis);
     assert(result.body.confidence);
     assert(result.body.metadata);
+    assert.strictEqual(result.body.metadata.promptVersion, "newsroom-v2");
   } finally {
     await server.close();
   }

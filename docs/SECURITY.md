@@ -147,6 +147,8 @@ Target tambahan:
 
 - System instruction tidak boleh menerima override langsung dari dokumen.
 - Tandai knowledge content sebagai untrusted context.
+- Newsroom Prompt Engine v2 wajib memperlakukan source text sebagai data tidak tepercaya; instruksi di dalam source material tidak boleh mengubah system/editorial rules.
+- Newsroom audience/channel/complexity harus lewat prompt contract terverifikasi, bukan konfigurasi bebas dari client.
 - Batasi retrieved chunks dan ukuran prompt.
 - Jangan mengirim secret atau data lain milik user ke prompt.
 - Catat provider/model dan status tanpa full sensitive prompt.

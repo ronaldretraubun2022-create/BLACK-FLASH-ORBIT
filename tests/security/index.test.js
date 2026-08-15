@@ -6,3 +6,4 @@ require("./aiResponseValidator.test.js");
 require("./frontendMockHygiene.test.js");
 require("./aiRouter.test.js");
 require("./aiRouteCompatibility.test.js");
+require("./newsroomPromptEngine.test.js");

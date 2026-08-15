@@ -1,7 +1,12 @@
 const express = require("express");
 const { requireAuth } = require("../middleware/requireAuth");
-const { buildNewsroomPrompt } = require("../services/promptBuilder");
-const { generateWithOpenRouter } = require("../services/openrouter");
+const {
+  getProviderCapability,
+} = require("../services/ai/providerCapabilities");
+const { AI_USE_CASES } = require("../services/ai/modelRegistry");
+const { generateNewsroomCompletion } = require("../services/openrouter");
+const { createPromptContract } = require("../services/newsroom/promptContract");
+const { buildNewsroomPromptV2 } = require("../services/newsroom/prompts");
 
 const router = express.Router();
 const MAX_TOPIC_LENGTH = 3000;
@@ -56,22 +61,26 @@ const SOURCE_QUALITY_RULES = [
   {
     level: "Official institution statement",
     score: 90,
-    pattern: /\b(?:official statement|official statement|siaran pers resmi|pernyataan resmi|official statement)\b/i,
+    pattern:
+      /\b(?:official statement|official statement|siaran pers resmi|pernyataan resmi|official statement)\b/i,
   },
   {
     level: "Government website",
     score: 90,
-    pattern: /\b(?:government website|portal data pemerintah|go\.id|situs resmi pemerintah)\b/i,
+    pattern:
+      /\b(?:government website|portal data pemerintah|go\.id|situs resmi pemerintah)\b/i,
   },
   {
     level: "Independent report",
     score: 75,
-    pattern: /\b(?:independent report|laporan independen|lembaga riset|universitas|ngo|lsm)\b/i,
+    pattern:
+      /\b(?:independent report|laporan independen|lembaga riset|universitas|ngo|lsm)\b/i,
   },
   {
     level: "Established news media",
     score: 70,
-    pattern: /\b(?:kompas|tempo|antara|reuters|bbc|cnn|detik|established news media)\b/i,
+    pattern:
+      /\b(?:kompas|tempo|antara|reuters|bbc|cnn|detik|established news media)\b/i,
   },
   {
     level: "Local media",
@@ -81,7 +90,8 @@ const SOURCE_QUALITY_RULES = [
   {
     level: "Social media",
     score: 35,
-    pattern: /\b(?:social media|media sosial|facebook|instagram|twitter|x\.com|tiktok|youtube|whatsapp|telegram)\b/i,
+    pattern:
+      /\b(?:social media|media sosial|facebook|instagram|twitter|x\.com|tiktok|youtube|whatsapp|telegram)\b/i,
   },
   {
     level: "User input only",
@@ -195,7 +205,9 @@ function getRecommendedSources(statement, classification) {
     sources.push("Kemendagri", "Pemerintah Provinsi", "Diskominfo");
   }
 
-  if (/bps|statistik|penduduk|kemiskinan|inflasi|ekonomi|tenaga kerja/.test(text)) {
+  if (
+    /bps|statistik|penduduk|kemiskinan|inflasi|ekonomi|tenaga kerja/.test(text)
+  ) {
     sources.push("BPS", "Laporan Statistik Resmi");
   }
 
@@ -386,11 +398,15 @@ function classifyNewsroomFact(statement, context = {}) {
     });
   }
 
-  if (context.userInput === true || isUserProvidedStatement(cleanStatement, context)) {
+  if (
+    context.userInput === true ||
+    isUserProvidedStatement(cleanStatement, context)
+  ) {
     return createFactClassification({
       classification: "USER_INPUT",
       confidence: 80,
-      reason: "Pernyataan berasal dari input pengguna dan belum berdiri sebagai fakta terverifikasi.",
+      reason:
+        "Pernyataan berasal dari input pengguna dan belum berdiri sebagai fakta terverifikasi.",
       statement: cleanStatement,
       verificationNeeded: true,
     });
@@ -399,7 +415,8 @@ function classifyNewsroomFact(statement, context = {}) {
   return createFactClassification({
     classification: "UNVERIFIED",
     confidence: 40,
-    reason: "Pernyataan belum memiliki sumber atau status verifikasi yang jelas.",
+    reason:
+      "Pernyataan belum memiliki sumber atau status verifikasi yang jelas.",
     statement: cleanStatement,
     verificationNeeded: true,
   });
@@ -467,19 +484,34 @@ function detectEvidenceTypes(statement, context = {}) {
     found.push("Statistical Data");
   }
 
-  if (/(laporan independen|lembaga riset|peneliti|universitas|ngo|lsm)/.test(hints)) {
+  if (
+    /(laporan independen|lembaga riset|peneliti|universitas|ngo|lsm)/.test(
+      hints,
+    )
+  ) {
     found.push("Independent Report");
   }
 
-  if (/(media|berita|koran|majalah|redaksi|wartawan|jurnalis|\.com\b|\.id\b)/.test(hints)) {
+  if (
+    /(media|berita|koran|majalah|redaksi|wartawan|jurnalis|\.com\b|\.id\b)/.test(
+      hints,
+    )
+  ) {
     found.push("News Media");
   }
 
-  if (/(facebook|instagram|twitter|x\.com|tiktok|youtube|whatsapp|telegram|media sosial)/.test(hints)) {
+  if (
+    /(facebook|instagram|twitter|x\.com|tiktok|youtube|whatsapp|telegram|media sosial)/.test(
+      hints,
+    )
+  ) {
     found.push("Social Media");
   }
 
-  if (context.userInput === true || isUserProvidedStatement(statement, context)) {
+  if (
+    context.userInput === true ||
+    isUserProvidedStatement(statement, context)
+  ) {
     found.push("User Input");
   }
 
@@ -497,7 +529,10 @@ function getMissingEvidenceTypes(statement, foundTypes, classification) {
     missing.push("Official Document", "Official Statement");
   }
 
-  if (hasNumberLikeClaim(statement) && !foundTypes.includes("Statistical Data")) {
+  if (
+    hasNumberLikeClaim(statement) &&
+    !foundTypes.includes("Statistical Data")
+  ) {
     missing.push("Statistical Data");
   }
 
@@ -531,11 +566,16 @@ function getEvidenceStrength(score) {
 
 function getMissingEvidenceRecommendations(missingTypes) {
   const recommendations = {
-    "Official Document": "Tambahkan dokumen resmi seperti regulasi, APBD, RKPD, atau laporan OPD.",
-    "Official Statement": "Konfirmasi melalui pernyataan resmi lembaga terkait.",
-    "Government Website": "Cek situs resmi pemerintah atau portal data pemerintah.",
-    "Statistical Data": "Validasi angka melalui BPS atau laporan statistik resmi.",
-    "Independent Report": "Bandingkan dengan laporan lembaga riset atau kajian independen.",
+    "Official Document":
+      "Tambahkan dokumen resmi seperti regulasi, APBD, RKPD, atau laporan OPD.",
+    "Official Statement":
+      "Konfirmasi melalui pernyataan resmi lembaga terkait.",
+    "Government Website":
+      "Cek situs resmi pemerintah atau portal data pemerintah.",
+    "Statistical Data":
+      "Validasi angka melalui BPS atau laporan statistik resmi.",
+    "Independent Report":
+      "Bandingkan dengan laporan lembaga riset atau kajian independen.",
     "News Media": "Cari pembanding dari media kredibel dan arsip berita.",
     "Social Media": "Gunakan unggahan media sosial hanya sebagai sinyal awal.",
     "User Input": "Pisahkan input pengguna dari fakta terverifikasi.",
@@ -586,8 +626,7 @@ function buildEvidenceEngine(factClassifications, context = {}) {
     evidence_score: evidenceScore,
     evidence_strength: getEvidenceStrength(evidenceScore),
     evidence_missing: missingEvidence,
-    missing_recommendations:
-      getMissingEvidenceRecommendations(missingEvidence),
+    missing_recommendations: getMissingEvidenceRecommendations(missingEvidence),
   };
 }
 
@@ -662,7 +701,9 @@ function buildSourceQualityEngine(factClassifications, evidence) {
       : factClassifications.flatMap((fact) => fact.recommended_sources || []);
   const sourceNames = [...recommendedSources, ...evidenceSources];
   const uniqueSources = [...new Set(sourceNames.filter(Boolean))];
-  const qualityItems = (uniqueSources.length > 0 ? uniqueSources : ["User Input"])
+  const qualityItems = (
+    uniqueSources.length > 0 ? uniqueSources : ["User Input"]
+  )
     .map(classifySourceQuality)
     .sort(
       (first, second) =>
@@ -744,7 +785,11 @@ function calculateVerificationScore(factClassifications, evidence) {
   return clampScore(100 - verificationPenalty - missingEvidencePenalty);
 }
 
-function buildConfidenceEngine({ evidence, sourceQuality, factClassifications }) {
+function buildConfidenceEngine({
+  evidence,
+  sourceQuality,
+  factClassifications,
+}) {
   const evidenceScore = clampScore(evidence?.evidence_score || 0);
   const sourceQualityScore = clampScore(
     sourceQuality?.source_quality_score || 0,
@@ -760,8 +805,7 @@ function buildConfidenceEngine({ evidence, sourceQuality, factClassifications })
   const sourceQualityContribution =
     (sourceQualityScore * CONFIDENCE_WEIGHTS.source_quality_weight) / 100;
   const factClassificationContribution =
-    (factClassificationScore *
-      CONFIDENCE_WEIGHTS.fact_classification_weight) /
+    (factClassificationScore * CONFIDENCE_WEIGHTS.fact_classification_weight) /
     100;
   const verificationContribution =
     (verificationScore * CONFIDENCE_WEIGHTS.verification_weight) / 100;
@@ -789,8 +833,7 @@ function buildConfidenceEngine({ evidence, sourceQuality, factClassifications })
       source_quality_weight: CONFIDENCE_WEIGHTS.source_quality_weight,
       source_quality_contribution: clampScore(sourceQualityContribution),
       fact_classification_score: factClassificationScore,
-      fact_classification_weight:
-        CONFIDENCE_WEIGHTS.fact_classification_weight,
+      fact_classification_weight: CONFIDENCE_WEIGHTS.fact_classification_weight,
       fact_classification_contribution: clampScore(
         factClassificationContribution,
       ),
@@ -864,7 +907,10 @@ function formatFactClassificationTable(items) {
 }
 
 function escapeMarkdownCell(value) {
-  return String(value || "").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+  return String(value || "")
+    .replace(/\|/g, "\\|")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function hasTemporalReference(value) {
@@ -907,11 +953,13 @@ function normalizeNewsroomDraft(text, userProvidedTemporalInfo = false) {
       replacement: "Dokumen RPJMD/RKPD",
     },
     {
-      pattern: /\bDiskominfo\s+(?:Provinsi(?:\s+Papua\s+Selatan)?|Papua\s+Selatan)\b/gi,
+      pattern:
+        /\bDiskominfo\s+(?:Provinsi(?:\s+Papua\s+Selatan)?|Papua\s+Selatan)\b/gi,
       replacement: "Diskominfo",
     },
     {
-      pattern: /\bBPS\s+(?:Provinsi(?:\s+Papua\s+Selatan)?|Papua\s+Selatan)\b/gi,
+      pattern:
+        /\bBPS\s+(?:Provinsi(?:\s+Papua\s+Selatan)?|Papua\s+Selatan)\b/gi,
       replacement: "BPS",
     },
     {
@@ -919,7 +967,8 @@ function normalizeNewsroomDraft(text, userProvidedTemporalInfo = false) {
       replacement: "Pemerintah Provinsi",
     },
     {
-      pattern: /\bLaporan\s+Statistik(?:\s+(?:Resmi|Daerah|Provinsi))?(?:\s+\d{4})?\b/gi,
+      pattern:
+        /\bLaporan\s+Statistik(?:\s+(?:Resmi|Daerah|Provinsi))?(?:\s+\d{4})?\b/gi,
       replacement: "Laporan Statistik Resmi",
     },
     {
@@ -956,29 +1005,37 @@ function normalizeNewsroomDraft(text, userProvidedTemporalInfo = false) {
 router.post("/", requireAuth, async (req, res) => {
   try {
     const {
+      input,
       topic,
       layer,
       mode,
       audience,
       complexity,
+      channel,
+      language,
+      sourceText,
+      sources,
+      additionalInstructions,
       factGuard = true,
       citationEngine = true,
       sourceConfidence = true,
       assessment,
       priority,
     } = req.body || {};
+    const rawTopic = topic || input;
 
     logNewsroomDebug("[AI Newsroom Route] request received", {
       layer,
       mode,
       audience,
       complexity,
+      channel,
       factGuard,
       citationEngine,
       sourceConfidence,
     });
 
-    if (!isValidString(topic)) {
+    if (!isValidString(rawTopic)) {
       return res.status(400).json({
         success: false,
         error: "invalid_payload",
@@ -986,7 +1043,7 @@ router.post("/", requireAuth, async (req, res) => {
       });
     }
 
-    const trimmedTopic = String(topic).trim();
+    const trimmedTopic = String(rawTopic).trim();
 
     if (trimmedTopic.length > MAX_TOPIC_LENGTH) {
       return res.status(400).json({
@@ -1033,12 +1090,34 @@ router.post("/", requireAuth, async (req, res) => {
     const assessmentData =
       assessment && typeof assessment === "object" ? assessment : {};
 
+    const promptContract = createPromptContract({
+      additionalInstructions,
+      audience,
+      channel,
+      citationEngine,
+      complexity,
+      factGuard,
+      input: trimmedTopic,
+      language,
+      layer,
+      mode,
+      sourceConfidence,
+      sourceText,
+      sources,
+      topic: trimmedTopic,
+    });
     const promptPayload = {
-      topic: sanitizeText(trimmedTopic),
-      layer: sanitizeText(layer),
-      mode: sanitizeText(mode),
-      audience: sanitizeText(audience),
-      complexity: sanitizeText(complexity),
+      topic: promptContract.topic,
+      layer: promptContract.layer,
+      mode: promptContract.mode,
+      audience: promptContract.audience,
+      audienceLabel: promptContract.audienceProfile.label,
+      complexity: promptContract.complexity,
+      complexityLabel: promptContract.complexityLevel.label,
+      channel: promptContract.channel,
+      channelLabel: promptContract.channelTarget.label,
+      language: promptContract.language,
+      promptVersion: promptContract.promptVersion,
       factGuard: factGuard !== false,
       citationEngine: citationEngine !== false,
       sourceConfidence: sourceConfidence !== false,
@@ -1070,12 +1149,23 @@ router.post("/", requireAuth, async (req, res) => {
     });
     const confidenceAnalysisSection =
       formatConfidenceAnalysis(confidenceAnalysis);
-    const prompt = buildNewsroomPrompt({
-      ...promptPayload,
-      evidenceMatrix,
-      factClassificationTable,
+    const prompt = buildNewsroomPromptV2(promptContract);
+    const providerCapability = getProviderCapability({
+      useCase: AI_USE_CASES.NEWSROOM,
     });
-    const draft = await generateWithOpenRouter(prompt);
+    const aiResult = await generateNewsroomCompletion({
+      metadata: {
+        audience: promptPayload.audience,
+        channel: promptPayload.channel,
+        complexity: promptPayload.complexity,
+        mode: promptPayload.mode,
+        promptVersion: promptPayload.promptVersion,
+      },
+      requestId: req.headers["x-request-id"] || req.id || null,
+      systemPrompt: prompt.systemPrompt,
+      userPrompt: prompt.userPrompt,
+    });
+    const draft = aiResult.content;
     const userProvidedTemporalInfo = hasTemporalReference(trimmedTopic);
     const normalizedDraft = normalizeNewsroomDraft(
       String(draft || "").trim(),
@@ -1135,12 +1225,31 @@ router.post("/", requireAuth, async (req, res) => {
         confidence_breakdown: confidenceAnalysis.confidence_breakdown,
         verifiedFactsCount,
         verificationItemsCount,
-        promptVersion: "2.8.0",
+        promptVersion: promptPayload.promptVersion,
+        provider: aiResult.provider || null,
+        model: aiResult.model || null,
+        fallbackUsed: Boolean(aiResult.metadata?.fallbackUsed),
+        durationMs: aiResult.metadata?.durationMs || null,
+        providerCapability: {
+          fallbackEligibleModels:
+            providerCapability.fallbackEligibleModels.length,
+          modelConfigured: providerCapability.modelConfigured,
+          provider: providerCapability.provider,
+          providerConfigured: providerCapability.providerConfigured,
+        },
         createdAt: new Date().toISOString(),
       },
     });
   } catch (error) {
     logNewsroomError(error);
+
+    if (error?.statusCode === 400) {
+      return res.status(400).json({
+        success: false,
+        error: error.code || "invalid_payload",
+        message: error.message || "Payload Newsroom tidak valid.",
+      });
+    }
 
     return res.status(500).json({
       success: false,

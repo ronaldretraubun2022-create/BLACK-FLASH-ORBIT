@@ -2,6 +2,27 @@
 
 Keputusan baru ditambahkan di bagian paling atas. Jangan menghapus keputusan lama; tandai `Superseded` dan tautkan penggantinya.
 
+## ADR-011 — Newsroom Prompt Engine v2 is audience-aware and versioned
+
+- Status: Accepted
+- Date: 2026-08-15
+
+### Context
+
+AI Newsroom membutuhkan output yang berbeda untuk publik, reporter, editor, pemerintah, eksekutif, dan analisis strategis. Sebelumnya audience, mode, dan complexity dikirim sebagai teks langsung ke prompt, sehingga sulit diuji dan rentan drift antar UI/backend.
+
+### Decision
+
+Newsroom memakai registry audience, channel target, complexity level, prompt contract, dan prompt builder v2 dengan versi `newsroom-v2`. Route tetap mempertahankan kontrak response publik, tetapi metadata sekarang memuat promptVersion, audience, mode, complexity, channel, provider, model, fallbackUsed, dan durationMs.
+
+Source text diperlakukan sebagai data tidak tepercaya. Instruksi di dalam source material tidak boleh mengubah system/editorial rules.
+
+### Consequences
+
+- Audience dan channel memengaruhi prompt secara deterministik dan dapat dites.
+- Legacy payload audience/complexity lama tetap dinormalisasi bila dikenal.
+- P3 Fact Guard dan Citation Guard dapat dibangun di atas contract yang sama.
+
 ## ADR-010 — AI Router v2 centralizes generative provider requests
 
 - Status: Accepted

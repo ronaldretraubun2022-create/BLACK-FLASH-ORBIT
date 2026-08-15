@@ -1,4 +1,7 @@
 ﻿import { useMemo, useState } from "react";
+import { AudienceSelector } from "../components/newsroom/AudienceSelector.jsx";
+import { ChannelSelector } from "../components/newsroom/ChannelSelector.jsx";
+import { IntelligenceSummary } from "../components/newsroom/IntelligenceSummary.jsx";
 import {
   generateIntelligenceDraft,
   isNewsroomLocalFallbackEnabled,
@@ -96,18 +99,48 @@ const INTELLIGENCE_LAYERS = {
 };
 
 const AUDIENCES = [
-  "Masyarakat",
-  "Media",
-  "ASN",
-  "Kepala OPD",
-  "Bupati",
-  "Gubernur",
-  "Menteri",
-  "Investor",
-  "Akademisi",
-  "Pelajar",
-  "Pelaku Usaha",
-  "Komunitas Lokal",
+  {
+    id: "GENERAL_PUBLIC",
+    label: "General Public",
+    description: "Bahasa jelas untuk publik luas.",
+  },
+  {
+    id: "JOURNALIST",
+    label: "Journalist",
+    description: "Angle, lead, 5W+1H, dan kebutuhan liputan.",
+  },
+  {
+    id: "EDITOR",
+    label: "Editor",
+    description: "Kelayakan publikasi, risiko, dan gap bukti.",
+  },
+  {
+    id: "GOVERNMENT",
+    label: "Government",
+    description: "Komunikasi formal kelembagaan, bukan propaganda.",
+  },
+  {
+    id: "EXECUTIVE",
+    label: "Executive",
+    description: "Implikasi, risiko utama, dan keputusan cepat.",
+  },
+  {
+    id: "STRATEGIC",
+    label: "Strategic",
+    description: "Stakeholder, skenario, risiko, dan relevansi keputusan.",
+  },
+];
+
+const CHANNEL_TARGETS = [
+  { id: "ARTICLE", label: "Article" },
+  { id: "BREAKING_NEWS", label: "Breaking News" },
+  { id: "FACEBOOK", label: "Facebook" },
+  { id: "INSTAGRAM", label: "Instagram" },
+  { id: "X", label: "X" },
+  { id: "PRESS_RELEASE", label: "Press Release" },
+  { id: "EDITOR_BRIEF", label: "Editor Brief" },
+  { id: "EXECUTIVE_BRIEF", label: "Executive Brief" },
+  { id: "ANALYSIS", label: "Analysis" },
 ];
 
 const COMPLEXITY_LEVELS = [
@@ -154,6 +187,45 @@ const COMPLEXITY_SECTIONS = {
 };
 
 const AUDIENCE_SECTIONS = {
+  GENERAL_PUBLIC: [
+    "Apa yang Terjadi",
+    "Mengapa Penting",
+    "Manfaat Bagi Warga",
+    "Potensi Dampak",
+    "Informasi Lanjutan",
+  ],
+  JOURNALIST: [
+    "Headline",
+    "Lead",
+    "5W+1H",
+    "News Angle",
+    "Quote Recommendation",
+  ],
+  EDITOR: [
+    "Editorial Decision",
+    "Evidence Gaps",
+    "Publication Risk",
+    "Recommended Edits",
+  ],
+  GOVERNMENT: [
+    "Public Communication",
+    "Institutional Context",
+    "Service Impact",
+    "Verification Needs",
+  ],
+  EXECUTIVE: [
+    "Decision Summary",
+    "Strategic Implications",
+    "Risks",
+    "Priority Actions",
+  ],
+  STRATEGIC: [
+    "Strategic Context",
+    "Stakeholders",
+    "Risk Matrix",
+    "Scenario Notes",
+    "Decision Relevance",
+  ],
   Gubernur: [
     "Strategic Context",
     "Regional Impact",
@@ -207,6 +279,12 @@ const LAYER_SCORE_WEIGHTS = {
 };
 
 const AUDIENCE_SCORE_WEIGHTS = {
+  EDITOR: { decisionSupport: 8 },
+  EXECUTIVE: { decisionSupport: 10 },
+  GENERAL_PUBLIC: { publicImpact: 10 },
+  GOVERNMENT: { decisionSupport: 6, publicImpact: 6 },
+  JOURNALIST: { publicImpact: 6 },
+  STRATEGIC: { strategicValue: 10 },
   Gubernur: { decisionSupport: 10 },
   Menteri: { decisionSupport: 10 },
   Investor: { strategicValue: 10 },
@@ -215,7 +293,22 @@ const AUDIENCE_SCORE_WEIGHTS = {
 
 const DEFAULT_LAYER = "Editorial Layer";
 const DEFAULT_MODE = "Artikel Berita";
-const DEFAULT_AUDIENCE = "Masyarakat";
+const DEFAULT_AUDIENCE = "GENERAL_PUBLIC";
+const DEFAULT_CHANNEL = "ARTICLE";
+
+function getAudienceLabel(audience) {
+  return (
+    AUDIENCES.find((item) => item.id === audience)?.label ||
+    String(audience || "General Public")
+  );
+}
+
+function getChannelLabel(channel) {
+  return (
+    CHANNEL_TARGETS.find((item) => item.id === channel)?.label ||
+    String(channel || "Article")
+  );
+}
 
 function getExpectedOutput(layer, mode, audience, complexity) {
   const expectedOutputs = {
@@ -335,7 +428,7 @@ function getIntelligenceAssessment({
       (layer === "Government Layer" ? 8 : 0) +
       Math.round(complexityWeight * 0.55) +
       (audienceWeight.publicImpact || 0) +
-      (audience === "Media" ? 6 : 0) +
+      (audience === "Media" || audience === "JOURNALIST" ? 6 : 0) +
       topicReadiness,
   );
   const readiness = clampScore(
@@ -416,6 +509,18 @@ function getPriorityEngine(assessment) {
 
 function getAudiencePerspective(audience) {
   switch (audience) {
+    case "GENERAL_PUBLIC":
+      return "Fokus pada manfaat langsung bagi masyarakat, kemudahan akses, transparansi, dan dampak layanan publik.";
+    case "JOURNALIST":
+      return "Fokus pada nilai berita, lead kuat, 5W+1H, angle liputan, kebutuhan narasumber, dan verifikasi kutipan.";
+    case "EDITOR":
+      return "Fokus pada kelayakan publikasi, gap bukti, risiko editorial, struktur naskah, dan keputusan review.";
+    case "GOVERNMENT":
+      return "Fokus pada komunikasi kelembagaan yang formal, transparan, akuntabel, dan tidak bersifat propaganda.";
+    case "EXECUTIVE":
+      return "Fokus pada implikasi keputusan, risiko utama, prioritas tindakan, dan ringkasan yang cepat dibaca.";
+    case "STRATEGIC":
+      return "Fokus pada stakeholder, risiko, skenario, implikasi strategis, dan relevansi pengambilan keputusan.";
     case "Media":
       return "Fokus pada nilai berita, fakta utama, lead yang kuat, kutipan layak publikasi, dan kepentingan publik.";
     case "ASN":
@@ -445,6 +550,18 @@ function getAudiencePerspective(audience) {
 
 function getAudienceRecommendation(audience) {
   switch (audience) {
+    case "GENERAL_PUBLIC":
+      return "Pastikan layanan mudah diakses, informasi jelas, dan manfaatnya dirasakan langsung oleh warga.";
+    case "JOURNALIST":
+      return "Siapkan rilis ringkas, data pendukung, kutipan resmi, foto kegiatan, dan narahubung redaksi.";
+    case "EDITOR":
+      return "Tandai gap bukti, klaim berisiko, kebutuhan narasumber, dan rekomendasi keputusan publikasi.";
+    case "GOVERNMENT":
+      return "Gunakan bahasa formal, sumber resmi, konteks layanan publik, dan hindari klaim promosi tanpa data.";
+    case "EXECUTIVE":
+      return "Mulai dari keputusan yang dibutuhkan, risiko utama, opsi tindakan, dan konsekuensi operasional.";
+    case "STRATEGIC":
+      return "Petakan implikasi, stakeholder, skenario, risiko keputusan, dan sinyal yang perlu dipantau.";
     case "Media":
       return "Siapkan rilis ringkas, data pendukung, kutipan resmi, foto kegiatan, dan narahubung redaksi.";
     case "ASN":
@@ -480,7 +597,7 @@ Mode:
 ${mode}
 
 Target Audience:
-${audience}
+${getAudienceLabel(audience)}
 
 Audience Perspective:
 ${getAudiencePerspective(audience)}
@@ -851,6 +968,7 @@ export function AINewsroom() {
   const [mode, setMode] = useState(DEFAULT_MODE);
   const [audience, setAudience] = useState(DEFAULT_AUDIENCE);
   const [complexity, setComplexity] = useState("Strategic");
+  const [channel, setChannel] = useState(DEFAULT_CHANNEL);
   const [factGuardEnabled, setFactGuardEnabled] = useState(true);
   const [citationEngineEnabled, setCitationEngineEnabled] = useState(true);
   const [sourceConfidenceEnabled, setSourceConfidenceEnabled] = useState(true);
@@ -868,6 +986,22 @@ export function AINewsroom() {
     () => getExpectedOutput(layer, mode, audience, complexity),
     [layer, mode, audience, complexity],
   );
+  const intelligenceSummaryItems = [
+    { label: "Audience", value: getAudienceLabel(audience) },
+    { label: "Mode", value: mode },
+    { label: "Complexity", value: complexity },
+    { label: "Target", value: getChannelLabel(channel) },
+    { label: "Fact Guard", value: factGuardEnabled ? "Enabled" : "Disabled" },
+    {
+      label: "Citation Engine",
+      value: citationEngineEnabled ? "Enabled" : "Disabled",
+    },
+    {
+      label: "Source Confidence",
+      value: sourceConfidenceEnabled ? "Enabled" : "Disabled",
+    },
+    { label: "Expected Output", value: expectedOutput },
+  ];
   const intelligenceAssessment = useMemo(
     () =>
       getIntelligenceAssessment({
@@ -1001,11 +1135,14 @@ export function AINewsroom() {
     }
 
     const payload = {
+      input: safeTopic,
       topic: safeTopic,
       layer,
       mode,
       audience,
       complexity,
+      channel,
+      language: "id-ID",
       factGuard: factGuardEnabled,
       citationEngine: citationEngineEnabled,
       sourceConfidence: sourceConfidenceEnabled,
@@ -1103,6 +1240,7 @@ export function AINewsroom() {
       mode,
       audience,
       complexity,
+      channel,
       assessment: intelligenceAssessment,
       priority: priorityEngine,
       confidence: {
@@ -1222,21 +1360,19 @@ export function AINewsroom() {
               ))}
             </select>
 
-            <label className="mb-2 block text-xs font-black uppercase tracking-[0.2em] text-slate-400">
-              Target Audience
-            </label>
+            <ChannelSelector
+              options={CHANNEL_TARGETS}
+              value={channel}
+              onChange={setChannel}
+              disabled={isGenerating}
+            />
 
-            <select
+            <AudienceSelector
+              options={AUDIENCES}
               value={audience}
-              onChange={(event) => setAudience(event.target.value)}
-              className="mb-5 w-full rounded-2xl border border-white/10 bg-[#070d1a] px-4 py-3 text-sm font-bold text-white outline-none focus:border-cyan-300/60 focus:ring-4 focus:ring-cyan-300/10"
-            >
-              {AUDIENCES.map((item) => (
-                <option key={item} value={item} className="bg-[#070d1a]">
-                  {item}
-                </option>
-              ))}
-            </select>
+              onChange={setAudience}
+              disabled={isGenerating}
+            />
 
             <label className="mb-2 block text-xs font-black uppercase tracking-[0.2em] text-slate-400">
               Complexity Level
@@ -1316,62 +1452,7 @@ export function AINewsroom() {
               direkomendasikan.
             </p>
 
-            <div className="mb-5 rounded-3xl border border-cyan-300/15 bg-cyan-300/[0.04] p-4">
-              <p className="mb-3 text-xs font-black uppercase tracking-[0.25em] text-cyan-300">
-                Selected Intelligence
-              </p>
-
-              <div className="grid gap-3 text-sm text-slate-300">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-500">Layer</span>
-                  <span className="text-right font-bold text-white">
-                    {layer}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-500">Mode</span>
-                  <span className="text-right font-bold text-white">
-                    {mode}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-500">Audience</span>
-                  <span className="text-right font-bold text-white">
-                    {audience}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-500">Complexity</span>
-                  <span className="text-right font-bold text-white">
-                    {complexity}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-500">Fact Guard</span>
-                  <span className="text-right font-bold text-white">
-                    {factGuardEnabled ? "Enabled" : "Disabled"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-500">Citation Engine</span>
-                  <span className="text-right font-bold text-white">
-                    {citationEngineEnabled ? "Enabled" : "Disabled"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-500">Source Confidence</span>
-                  <span className="text-right font-bold text-white">
-                    {sourceConfidenceEnabled ? "Enabled" : "Disabled"}
-                  </span>
-                </div>
-                <div className="flex items-start justify-between gap-3">
-                  <span className="text-slate-500">Expected Output</span>
-                  <span className="max-w-[220px] text-right font-bold text-white">
-                    {expectedOutput}
-                  </span>
-                </div>
-              </div>
-            </div>
+            <IntelligenceSummary items={intelligenceSummaryItems} />
 
             <div className="mb-5 rounded-3xl border border-white/10 bg-[#070d1a]/90 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
               <div className="mb-4 flex items-center justify-between gap-3">

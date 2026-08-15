@@ -1,3 +1,6 @@
+const { createPromptContract } = require("./newsroom/promptContract");
+const { buildNewsroomPromptV2 } = require("./newsroom/prompts");
+
 function sanitizeText(value) {
   return String(value || "")
     .replace(/[\x00-\x1f\x7f<>]/g, " ")
@@ -5,6 +8,33 @@ function sanitizeText(value) {
 }
 
 function buildNewsroomPrompt({
+  topic,
+  layer,
+  mode,
+  audience,
+  complexity,
+  factGuard = true,
+  citationEngine = true,
+  sourceConfidence = true,
+}) {
+  const contract = createPromptContract({
+    audience,
+    citationEngine,
+    complexity,
+    factGuard,
+    layer,
+    mode,
+    sourceConfidence,
+    topic,
+  });
+  const prompt = buildNewsroomPromptV2(contract);
+
+  return `${prompt.systemPrompt}
+
+${prompt.userPrompt}`;
+}
+
+function buildLegacyNewsroomPrompt({
   topic,
   layer,
   mode,
@@ -173,4 +203,5 @@ ${enableFactGuard ? "- Jangan tampilkan asumsi sebagai fakta. Tandai semua asums
 
 module.exports = {
   buildNewsroomPrompt,
+  buildLegacyNewsroomPrompt,
 };
