@@ -2,6 +2,7 @@
 import { AudienceSelector } from "../components/newsroom/AudienceSelector.jsx";
 import { ChannelSelector } from "../components/newsroom/ChannelSelector.jsx";
 import { IntelligenceSummary } from "../components/newsroom/IntelligenceSummary.jsx";
+import { IntelligenceSummaryPanel } from "../components/newsroom/intelligence/IntelligenceSummaryPanel.jsx";
 import { VerificationPanel } from "../components/newsroom/verification/VerificationPanel.jsx";
 import {
   generateIntelligenceDraft,
@@ -983,6 +984,9 @@ export function AINewsroom() {
   });
   const [verification, setVerification] = useState(null);
   const [editorial, setEditorial] = useState(null);
+  const [generatedIntelligenceSummary, setGeneratedIntelligenceSummary] =
+    useState(null);
+  const [editorialReviewReport, setEditorialReviewReport] = useState(null);
 
   const modes = INTELLIGENCE_LAYERS[layer] || [];
   const expectedOutput = useMemo(
@@ -1171,6 +1175,8 @@ export function AINewsroom() {
         });
         setVerification(response.verification || null);
         setEditorial(response.editorial || null);
+        setGeneratedIntelligenceSummary(response.intelligenceSummary || null);
+        setEditorialReviewReport(response.editorialReviewReport || null);
       } else {
         throw new Error("AI response missing draft");
       }
@@ -1198,6 +1204,8 @@ export function AINewsroom() {
       });
       setVerification(null);
       setEditorial(null);
+      setGeneratedIntelligenceSummary(null);
+      setEditorialReviewReport(null);
     } finally {
       setIsGenerating(false);
     }
@@ -1255,6 +1263,8 @@ export function AINewsroom() {
         publicationReadiness: confidence.publicationReadiness,
       },
       editorial,
+      editorialReviewReport,
+      intelligenceSummary: generatedIntelligenceSummary,
       verification,
       draft,
     };
@@ -1674,6 +1684,8 @@ export function AINewsroom() {
               editorial={editorial}
               verification={verification}
             />
+
+            <IntelligenceSummaryPanel summary={generatedIntelligenceSummary} />
 
             <div className="min-h-[500px] rounded-3xl border border-white/10 bg-[#070d1a] p-5">
               {draft ? (

@@ -5,6 +5,12 @@ const {
 } = require("../services/ai/providerCapabilities");
 const { AI_USE_CASES } = require("../services/ai/modelRegistry");
 const { generateNewsroomCompletion } = require("../services/openrouter");
+const {
+  buildEditorialReviewReport,
+} = require("../services/newsroom/editorialReviewReport");
+const {
+  buildIntelligenceSummary,
+} = require("../services/newsroom/intelligenceSummary");
 const { createPromptContract } = require("../services/newsroom/promptContract");
 const { buildNewsroomPromptV2 } = require("../services/newsroom/prompts");
 const { verifyNewsroomDraft } = require("../services/newsroom/verification");
@@ -1210,10 +1216,33 @@ router.post("/", requireAuth, async (req, res) => {
       reviewReasons: verification.review.reviewReasons,
       reviewStatus: verification.review.reviewStatus,
     };
+    const safeNewsroomMetadata = {
+      audience: promptPayload.audience,
+      channel: promptPayload.channel,
+      complexity: promptPayload.complexity,
+      durationMs: aiResult.metadata?.durationMs || null,
+      fallbackUsed: Boolean(aiResult.metadata?.fallbackUsed),
+      mode: promptPayload.mode,
+      model: aiResult.model || null,
+      promptVersion: promptPayload.promptVersion,
+      provider: aiResult.provider || null,
+    };
+    const intelligenceSummary = buildIntelligenceSummary({
+      editorial,
+      metadata: safeNewsroomMetadata,
+      verification,
+    });
+    const editorialReviewReport = buildEditorialReviewReport({
+      configuration: promptPayload,
+      intelligenceSummary,
+      metadata: safeNewsroomMetadata,
+      verification,
+    });
 
     logNewsroomDebug("[AI Newsroom Route] verification completed", {
       claims: verification.claims.length,
       citationCoverage: verification.citationGuard.coverage,
+      publicationReadiness: intelligenceSummary.publicationReadiness,
       reviewStatus: editorial.reviewStatus,
       unsupported: verification.factGuard.unsupportedCount,
     });
@@ -1244,6 +1273,8 @@ router.post("/", requireAuth, async (req, res) => {
         publicationBlockers: verification.publicationBlockers,
       },
       editorial,
+      intelligenceSummary,
+      editorialReviewReport,
       metadata: {
         ...promptPayload,
         assessment: assessment || null,
@@ -1257,15 +1288,16 @@ router.post("/", requireAuth, async (req, res) => {
         verifiedFactsCount,
         verificationItemsCount,
         promptVersion: promptPayload.promptVersion,
-        provider: aiResult.provider || null,
-        model: aiResult.model || null,
-        fallbackUsed: Boolean(aiResult.metadata?.fallbackUsed),
-        durationMs: aiResult.metadata?.durationMs || null,
+        provider: safeNewsroomMetadata.provider,
+        model: safeNewsroomMetadata.model,
+        fallbackUsed: safeNewsroomMetadata.fallbackUsed,
+        durationMs: safeNewsroomMetadata.durationMs,
         claimCount: verification.claims.length,
         unsupportedClaimCount: verification.factGuard.unsupportedCount,
         citationCoverage: verification.citationGuard.coverage,
         reviewStatus: editorial.reviewStatus,
         publicationReady: verification.publicationReady,
+        publicationReadiness: intelligenceSummary.publicationReadiness,
         providerCapability: {
           fallbackEligibleModels:
             providerCapability.fallbackEligibleModels.length,

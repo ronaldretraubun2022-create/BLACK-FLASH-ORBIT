@@ -8,3 +8,4 @@ require("./aiRouter.test.js");
 require("./aiRouteCompatibility.test.js");
 require("./newsroomPromptEngine.test.js");
 require("./newsroomVerification.test.js");
+require("./newsroomIntelligenceSummary.test.js");

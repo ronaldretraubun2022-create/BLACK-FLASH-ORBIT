@@ -2,6 +2,27 @@
 
 Keputusan baru ditambahkan di bagian paling atas. Jangan menghapus keputusan lama; tandai `Superseded` dan tautkan penggantinya.
 
+## ADR-013 - Intelligence Summary aggregates verification without approving publication
+
+- Status: Accepted
+- Date: 2026-08-15
+
+### Context
+
+P3 menghasilkan claim status, citation coverage, source confidence, editorial confidence, review status, dan publication blockers. Editor membutuhkan ringkasan keputusan yang ringkas tanpa membuat klaim bahwa sistem otomatis telah membuktikan kebenaran absolut.
+
+### Decision
+
+Tambahkan Intelligence Summary deterministik dan Editorial Review Report JSON setelah verification layer. Summary hanya mengagregasi hasil P3 menjadi overview, key findings, blockers, source gaps, editor actions, dan publication readiness `BLOCKED`, `NEEDS_REVIEW`, atau `READY_FOR_EDITOR`.
+
+Editorial Review Report memakai whitelist metadata aman: promptVersion, provider, model, fallbackUsed, durationMs, audience, mode, complexity, dan channel. Report tidak menyertakan system prompt, raw prompt, authorization header, API key, service-role key, raw provider payload, atau isi dokumen privat.
+
+### Consequences
+
+- Response Newsroom bertambah field `intelligenceSummary` dan `editorialReviewReport` secara backward-compatible.
+- Tidak ada panggilan AI tambahan untuk meringkas data yang sudah terstruktur.
+- PDF/Word/download formal dapat dibangun di P5 dari report JSON tanpa mengubah Fact Guard.
+
 ## ADR-012 — Fact Guard v2 adds automated editorial review, not approval
 
 - Status: Accepted
