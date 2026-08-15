@@ -4,6 +4,14 @@
   "installCommand": "npm install",
   "routes": [
     {
+      "src": "/api/health",
+      "dest": "/api/v1/health"
+    },
+    {
+      "src": "/api/v1/dashboard",
+      "dest": "/api/v1/dashboard/status"
+    },
+    {
       "handle": "filesystem"
     },
     {
