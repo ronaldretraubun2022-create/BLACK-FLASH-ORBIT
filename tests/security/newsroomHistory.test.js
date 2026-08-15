@@ -21,6 +21,20 @@ const migrationPath = path.join(
   "20260815010000_newsroom_generation_history.sql",
 );
 
+const newsroomFunctionPath = path.join(
+  __dirname,
+  "..",
+  "..",
+  "api",
+  "ai",
+  "newsroom",
+  "[...path].js",
+);
+
+function nowForTest() {
+  return new Date().toISOString();
+}
+
 function createMemorySupabase() {
   const store = {
     newsroom_editorial_decisions: [],
@@ -188,6 +202,13 @@ function createMemorySupabase() {
 
 function createAuthMiddleware(getUserId) {
   return function requireTestAuth(req, res, next) {
+    if (!req.headers.authorization) {
+      return res.status(401).json({
+        success: false,
+        message: "Missing bearer token.",
+      });
+    }
+
     req.user = {
       email: `${getUserId()}@example.com`,
       id: getUserId(),
@@ -225,6 +246,7 @@ function createNewsroomApp({ getUserId, supabase }) {
     },
     "../supabaseAdmin": {
       getSupabaseAdmin: () => supabase,
+      isSupabaseServiceConfigured: () => Boolean(supabase),
     },
   });
   const app = express();
@@ -276,6 +298,64 @@ test("newsroom history migration enables owner scoped RLS", () => {
   const sql = fs.readFileSync(migrationPath, "utf8");
 
   assert.match(
+    fs.readFileSync(newsroomFunctionPath, "utf8"),
+    /server\/index\.js/,
+  );
+  const generationColumns = [
+    "id",
+    "owner_id",
+    "created_at",
+    "updated_at",
+    "topic",
+    "source_input_summary",
+    "audience",
+    "mode",
+    "complexity",
+    "channel",
+    "provider",
+    "model",
+    "prompt_version",
+    "review_status",
+    "publication_readiness",
+    "approved_at",
+    "approved_by",
+    "rejected_at",
+    "rejected_by",
+    "editor_notes",
+    "draft",
+    "verification",
+    "intelligence_summary",
+    "editorial_review_report",
+    "idempotency_key",
+  ];
+
+  generationColumns.forEach((column) => {
+    assert.match(
+      sql,
+      new RegExp(`\\b${column}\\b`, "i"),
+      `missing generation column: ${column}`,
+    );
+  });
+  [
+    "generation_id",
+    "owner_id",
+    "actor_id",
+    "decision",
+    "previous_status",
+    "next_status",
+    "notes",
+    "override_blockers",
+    "override_reason",
+    "created_at",
+  ].forEach((column) => {
+    assert.match(
+      sql,
+      new RegExp(`\\b${column}\\b`, "i"),
+      `missing decision column: ${column}`,
+    );
+  });
+
+  assert.match(
     sql,
     /alter table public\.newsroom_generations enable row level security/i,
   );
@@ -286,6 +366,153 @@ test("newsroom history migration enables owner scoped RLS", () => {
   assert.match(sql, /owner_id = auth\.uid\(\)/i);
   assert.match(sql, /with check \(owner_id = auth\.uid\(\)\)/i);
   assert.match(sql, /using \(false\)/i);
+});
+
+test("newsroom history requires auth and returns empty history as HTTP 200", async () => {
+  const app = createNewsroomApp({
+    getUserId: () => "user-empty",
+    supabase: createMemorySupabase(),
+  });
+  const server = await startServer(app);
+
+  try {
+    const unauthorized = await requestJson(
+      server.baseUrl,
+      "/api/ai/newsroom/history",
+    );
+    assert.strictEqual(unauthorized.status, 401);
+
+    const empty = await requestJson(
+      server.baseUrl,
+      "/api/ai/newsroom/history",
+      { headers: createAuthHeader() },
+    );
+    assert.strictEqual(empty.status, 200);
+    assert.deepStrictEqual(empty.body, {
+      success: true,
+      data: {
+        items: [],
+        pagination: {
+          hasMore: false,
+          limit: 12,
+          nextCursor: null,
+        },
+      },
+      items: [],
+      pagination: {
+        hasMore: false,
+        limit: 12,
+        nextCursor: null,
+      },
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test("newsroom history list scopes rows to the authenticated owner", async () => {
+  const supabase = createMemorySupabase();
+  const app = createNewsroomApp({
+    getUserId: () => "owner-a",
+    supabase,
+  });
+  const server = await startServer(app);
+
+  try {
+    await requestJson(server.baseUrl, "/api/ai/newsroom/history", {
+      body: JSON.stringify(createGenerationPayload()),
+      headers: {
+        ...createAuthHeader(),
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+    supabase.store.newsroom_generations.push({
+      id: randomUUID(),
+      owner_id: "owner-b",
+      created_at: nowForTest(),
+      updated_at: nowForTest(),
+      topic: "Other owner",
+    });
+
+    const result = await requestJson(
+      server.baseUrl,
+      "/api/ai/newsroom/history",
+      { headers: createAuthHeader() },
+    );
+    assert.strictEqual(result.status, 200);
+    assert.strictEqual(result.body.items.length, 1);
+    assert(result.body.items.every((item) => item.ownerId === "owner-a"));
+  } finally {
+    await server.close();
+  }
+});
+
+test("newsroom history service configuration and database failures stay controlled", async () => {
+  const configApp = createNewsroomApp({
+    getUserId: () => "owner-a",
+    supabase: null,
+  });
+  const configServer = await startServer(configApp);
+
+  try {
+    const result = await requestJson(
+      configServer.baseUrl,
+      "/api/ai/newsroom/history",
+      { headers: createAuthHeader() },
+    );
+    assert.strictEqual(result.status, 503);
+    assert.strictEqual(result.body.code, "supabase_not_configured");
+    assert.strictEqual(result.body.message, "Gagal membaca generation history.");
+    assert(!JSON.stringify(result.body).includes("SUPABASE_SERVICE_ROLE_KEY"));
+  } finally {
+    await configServer.close();
+  }
+
+  const queryErrorSupabase = {
+    from() {
+      return {
+        select() {
+          return this;
+        },
+        eq() {
+          return this;
+        },
+        order() {
+          return this;
+        },
+        limit() {
+          return Promise.resolve({
+            data: null,
+            error: {
+              code: "42P01",
+              message: "relation newsroom_generations does not exist",
+            },
+          });
+        },
+      };
+    },
+  };
+  const queryApp = createNewsroomApp({
+    getUserId: () => "owner-a",
+    supabase: queryErrorSupabase,
+  });
+  const queryServer = await startServer(queryApp);
+
+  try {
+    const result = await requestJson(
+      queryServer.baseUrl,
+      "/api/ai/newsroom/history",
+      { headers: createAuthHeader() },
+    );
+    assert.strictEqual(result.status, 500);
+    assert.strictEqual(result.body.code, "history_list_failed");
+    assert.strictEqual(result.body.message, "Gagal membaca generation history.");
+    assert(!JSON.stringify(result.body).includes("42P01"));
+    assert(!JSON.stringify(result.body).includes("relation newsroom_generations"));
+  } finally {
+    await queryServer.close();
+  }
 });
 
 test("newsroom history save ties owner to authenticated user and blocks AI approved status", async () => {

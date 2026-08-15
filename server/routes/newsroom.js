@@ -12,6 +12,7 @@ const {
   buildIntelligenceSummary,
 } = require("../services/newsroom/intelligenceSummary");
 const { createExportArtifact } = require("../services/newsroom/export");
+const { isSupabaseServiceConfigured } = require("../services/supabaseAdmin");
 const {
   createGeneration,
   deleteGeneration,
@@ -167,10 +168,20 @@ function logNewsroomError(error) {
   }
 }
 
-function sendHistoryError(res, error, fallbackMessage) {
+function sendHistoryError(res, error, fallbackMessage, operation = "history") {
   const statusCode = error.statusCode || error.status || 500;
   const message =
     statusCode >= 500 ? fallbackMessage : error.message || fallbackMessage;
+
+  if (DEBUG_NEWSROOM_AI) {
+    console.warn("[AI Newsroom History] error", {
+      errorCode: error.code || "newsroom_history_failed",
+      operation,
+      route: res.req?.originalUrl || res.req?.url || "unknown",
+      status: statusCode,
+      supabaseConfigured: isSupabaseServiceConfigured(),
+    });
+  }
 
   return res.status(statusCode).json({
     success: false,
@@ -1362,7 +1373,12 @@ router.get("/history", requireAuth, async (req, res) => {
       pagination: result.pagination,
     });
   } catch (error) {
-    return sendHistoryError(res, error, "Gagal membaca generation history.");
+    return sendHistoryError(
+      res,
+      error,
+      "Gagal membaca generation history.",
+      "list",
+    );
   }
 });
 
@@ -1382,7 +1398,12 @@ router.post("/history", requireAuth, async (req, res) => {
       generation: result.generation,
     });
   } catch (error) {
-    return sendHistoryError(res, error, "Gagal menyimpan generation history.");
+    return sendHistoryError(
+      res,
+      error,
+      "Gagal menyimpan generation history.",
+      "create",
+    );
   }
 });
 

@@ -12,3 +12,4 @@ require("./newsroomPromptEngine.test.js");
 require("./newsroomVerification.test.js");
 require("./newsroomIntelligenceSummary.test.js");
 require("./newsroomHistory.test.js");
+require("./newsroomHistoryClient.test.js");
