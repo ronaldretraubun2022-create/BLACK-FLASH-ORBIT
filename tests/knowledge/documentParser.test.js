@@ -49,17 +49,27 @@ test("validateUploadedFile rejects unsupported file types", () => {
 test("parseUploadedDocument parses PDF and DOCX text with mocked readers", async () => {
   const parser = loadParser({
     mammoth: {
-      extractRawText: async () => ({ value: "DOCX newsroom text with enough length" }),
+      extractRawText: async () => ({
+        value: "DOCX newsroom text with enough length",
+      }),
     },
-    "pdf-parse": {
-      PDFParse: class MockPdfParse {
-        async destroy() {}
+  });
 
-        async getText() {
-          return { text: "PDF newsroom text with enough length" };
-        }
-      },
-    },
+  class MockPdfParse {
+    async destroy() {}
+
+    async getText() {
+      return {
+        text: "PDF newsroom text with enough length",
+      };
+    }
+  }
+
+  class MockCanvasFactory {}
+
+  parser.setPdfRuntimeForTests({
+    CanvasFactory: MockCanvasFactory,
+    PDFParse: MockPdfParse,
   });
 
   const pdfResult = await parser.parseUploadedDocument({

@@ -12,6 +12,10 @@
       "dest": "/api/v1/dashboard/status"
     },
     {
+      "src": "/api/ai/newsroom/(.*)",
+      "dest": "/api/ai/newsroom?__orbit_path=$1"
+    },
+    {
       "handle": "filesystem"
     },
     {

@@ -27,8 +27,7 @@ const newsroomFunctionPath = path.join(
   "..",
   "api",
   "ai",
-  "newsroom",
-  "[...path].js",
+  "newsroom.js",
 );
 
 function nowForTest() {

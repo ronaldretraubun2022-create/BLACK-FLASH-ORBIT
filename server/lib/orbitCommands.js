@@ -1,4 +1,4 @@
-const { createDashboardData } = require("../../api/v1/dashboard");
+const { createDashboardData } = require("./orbitDashboardTelemetry");
 
 function formatBytes(value) {
   const bytes = Number(value || 0);

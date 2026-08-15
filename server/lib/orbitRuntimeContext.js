@@ -1,4 +1,4 @@
-const { createDashboardData } = require("../../api/v1/dashboard");
+const { createDashboardData } = require("./orbitDashboardTelemetry");
 
 function formatBytesForPrompt(value) {
   const bytes = Number(value || 0);
@@ -26,9 +26,13 @@ function buildOrbitRuntimeContext() {
     "BLACK FLASH ORBIT LIVE RUNTIME CONTEXT:",
     `- API Status: ${health.status || "unknown"}`,
     `- Service: ${health.service || "BLACK FLASH ORBIT API"}`,
-    `- Environment: ${system.environment || process.env.NODE_ENV || "development"}`,
+    `- Environment: ${
+      system.environment || process.env.NODE_ENV || "development"
+    }`,
     `- Runtime: ${system.runtime || (process.env.VERCEL ? "vercel" : "node")}`,
-    `- Uptime: ${Math.round(metrics.uptime || health.uptime || process.uptime())} seconds`,
+    `- Uptime: ${Math.round(
+      metrics.uptime || health.uptime || process.uptime(),
+    )} seconds`,
     `- Memory RSS: ${formatBytesForPrompt(memory.rss)}`,
     `- Memory Heap Used: ${formatBytesForPrompt(memory.heapUsed)}`,
     `- Security Posture: ${security.helmet || "protected"}`,
