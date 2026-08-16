@@ -4,6 +4,7 @@ const {
   hasTemporalReference,
   classifyNewsroomFact,
   splitFactStatements,
+  buildAllowedFactualClaims,
   buildEvidenceEngine,
   buildSourceQualityEngine,
   buildConfidenceEngine,
@@ -18,6 +19,12 @@ const {
   isValidOpenRouterModel,
 } = require("../server/services/openrouter.js");
 const { buildNewsroomPrompt } = require("../server/services/promptBuilder.js");
+const {
+  buildNewsroomPromptV2,
+} = require("../server/services/newsroom/prompts/newsroomPrompt.v2.js");
+const {
+  createPromptContract,
+} = require("../server/services/newsroom/promptContract.js");
 
 function runTest(name, fn) {
   try {
@@ -198,6 +205,42 @@ Ketentuan:
   },
 );
 
+runTest(
+  "buildAllowedFactualClaims excludes inference and assumption classifications",
+  () => {
+    const facts = [
+      {
+        statement:
+          "Pemerintah Provinsi melakukan simulasi portal layanan publik",
+        classification: "USER_INPUT",
+      },
+      {
+        statement: "Portal ini akan meningkatkan transparansi",
+        classification: "ASSUMPTION",
+      },
+      {
+        statement: "Pemerintah sebaiknya menambah fitur real-time",
+        classification: "INFERENCE",
+      },
+      {
+        statement: "Anggaran program Rp3 miliar",
+        classification: "UNVERIFIED",
+      },
+    ];
+
+    const allowed = buildAllowedFactualClaims(facts);
+
+    assert(
+      allowed.includes(
+        "Pemerintah Provinsi melakukan simulasi portal layanan publik",
+      ),
+    );
+    assert(allowed.includes("Anggaran program Rp3 miliar"));
+    assert(!allowed.includes("Portal ini akan meningkatkan transparansi"));
+    assert(!allowed.includes("Pemerintah sebaiknya menambah fitur real-time"));
+  },
+);
+
 runTest("classifyNewsroomFact marks unsourced numbers as UNVERIFIED", () => {
   const result = classifyNewsroomFact(
     "Papua Selatan memperoleh penghargaan Rp3 miliar",
@@ -368,6 +411,55 @@ runTest(
     assert(
       prompt.includes("AI_INFERENCE or ASSUMPTION"),
       "unsupported analysis must be explicitly labeled",
+    );
+  },
+);
+
+runTest(
+  "buildNewsroomPromptV2 injects backend strict factual whitelist",
+  () => {
+    const contract = createPromptContract({
+      topic:
+        "Pemerintah Provinsi Papua Selatan melakukan simulasi portal layanan publik.",
+      layer: "Editorial Layer",
+      mode: "Artikel Berita",
+      audience: "GENERAL_PUBLIC",
+      complexity: "Strategic",
+      channel: "ARTICLE",
+      factGuard: true,
+    });
+    const allowedFactualClaims = [
+      "Pemerintah Provinsi Papua Selatan melakukan simulasi portal layanan publik",
+      "Portal dirancang untuk membantu masyarakat memantau status pelayanan",
+    ];
+
+    const prompt = buildNewsroomPromptV2(contract, {
+      allowedFactualClaims,
+    });
+
+    assert(
+      prompt.systemPrompt.includes("STRICT FACTUAL WHITELIST POLICY"),
+      "system prompt must define strict whitelist behavior",
+    );
+    assert(
+      prompt.userPrompt.includes("<<<ALLOWED_FACTUAL_CLAIMS_BEGIN"),
+      "user prompt must contain a delimited whitelist data block",
+    );
+    assert(
+      prompt.userPrompt.includes(allowedFactualClaims[0]),
+      "first allowed claim must be present",
+    );
+    assert(
+      prompt.userPrompt.includes(allowedFactualClaims[1]),
+      "second allowed claim must be present",
+    );
+    assert(
+      prompt.systemPrompt.includes('prefix the sentence with exactly "AI_INFERENCE:" or "ASSUMPTION:"'),
+      "unsupported analysis must require explicit provenance labels",
+    );
+    assert(
+      prompt.systemPrompt.includes("real-time capability"),
+      "known unsupported detail expansions must be explicitly guarded",
     );
   },
 );

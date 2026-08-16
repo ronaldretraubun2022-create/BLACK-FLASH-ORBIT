@@ -518,7 +518,7 @@ function splitFactStatements(value) {
     })
     .map((statement) =>
       normalizeStatement(statement)
-        .replace(/[;:]+$/, "")
+        .replace(/[.!?;:]+$/, "")
         .trim(),
     )
     .filter(Boolean)
@@ -533,6 +533,20 @@ function classifyNewsroomFacts(statements, context = {}) {
       topic: context.topic,
     }),
   );
+}
+
+function buildAllowedFactualClaims(factClassifications = []) {
+  const excludedClassifications = new Set(["INFERENCE", "ASSUMPTION"]);
+
+  return (Array.isArray(factClassifications) ? factClassifications : [])
+    .filter(
+      (fact) =>
+        fact &&
+        !excludedClassifications.has(String(fact.classification || "")),
+    )
+    .map((fact) => normalizeStatement(fact.statement))
+    .filter(Boolean)
+    .slice(0, 12);
 }
 
 function getProvidedSourceHints(context = {}) {
@@ -1246,6 +1260,8 @@ router.post("/", requireAuth, async (req, res) => {
         userInput: true,
       },
     );
+    const allowedFactualClaims =
+      buildAllowedFactualClaims(factClassifications);
     const factClassificationTable =
       formatFactClassificationTable(factClassifications);
     const evidence = buildEvidenceEngine(factClassifications, {
@@ -1267,7 +1283,9 @@ router.post("/", requireAuth, async (req, res) => {
     });
     const confidenceAnalysisSection =
       formatConfidenceAnalysis(confidenceAnalysis);
-    const prompt = buildNewsroomPromptV2(promptContract);
+    const prompt = buildNewsroomPromptV2(promptContract, {
+      allowedFactualClaims,
+    });
     const providerCapability = getProviderCapability({
       useCase: AI_USE_CASES.NEWSROOM,
     });
@@ -1590,6 +1608,7 @@ module.exports.hasTemporalReference = hasTemporalReference;
 module.exports.classifyNewsroomFact = classifyNewsroomFact;
 module.exports.classifyNewsroomFacts = classifyNewsroomFacts;
 module.exports.splitFactStatements = splitFactStatements;
+module.exports.buildAllowedFactualClaims = buildAllowedFactualClaims;
 module.exports.buildEvidenceEngine = buildEvidenceEngine;
 module.exports.buildSourceQualityEngine = buildSourceQualityEngine;
 module.exports.buildConfidenceEngine = buildConfidenceEngine;
