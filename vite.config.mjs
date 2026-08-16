@@ -70,7 +70,7 @@ export default defineConfig(({ command }) => {
       outDir: resolve(rootDir, "dist/web"),
       emptyOutDir: true,
       sourcemap: false,
-      minify: false,
+      minify: true,
       cssCodeSplit: true,
       chunkSizeWarningLimit: 900,
       reportCompressedSize: true,
