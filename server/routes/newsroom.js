@@ -461,11 +461,68 @@ function classifyNewsroomFact(statement, context = {}) {
   });
 }
 
+function stripStatementListMarker(value) {
+  return String(value || "")
+    .replace(/^\s*(?:[-*•]\s+|\d{1,2}[.)]\s+)/, "")
+    .trim();
+}
+
+function isInstructionStatement(value) {
+  const statement = normalizeStatement(value);
+
+  if (!statement) return true;
+  if (/^\d{1,3}$/.test(statement)) return true;
+
+  if (
+    /^(?:ketentuan|instruksi|petunjuk|format|struktur)(?:\s*:)?$/i.test(
+      statement,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /simulasi\s+internal/i.test(statement) &&
+    /jangan\s+dipublikasikan/i.test(statement)
+  ) {
+    return true;
+  }
+
+  if (
+    /^(?:buat|tulis|tuliskan|pastikan|jangan|bedakan|tandai|gunakan|sertakan|hindari|sebutkan|jelaskan|susun|ubah|jadikan)\b/i.test(
+      statement,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /^jika\b.*\b(?:tulis|tuliskan|gunakan|pastikan|jangan|tandai|sertakan)\b/i.test(
+      statement,
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function splitFactStatements(value) {
   return String(value || "")
-    .split(/(?:[.!?]\s+|\n+|;\s+)/)
-    .map(normalizeStatement)
+    .split(/\n+/)
+    .flatMap((line) => {
+      const cleanedLine = stripStatementListMarker(line);
+      if (!cleanedLine) return [];
+
+      return cleanedLine.split(/(?:[.!?]\s+|;\s+)/);
+    })
+    .map((statement) =>
+      normalizeStatement(statement)
+        .replace(/[;:]+$/, "")
+        .trim(),
+    )
     .filter(Boolean)
+    .filter((statement) => !isInstructionStatement(statement))
     .slice(0, 12);
 }
 
@@ -1532,6 +1589,7 @@ module.exports.normalizeNewsroomDraft = normalizeNewsroomDraft;
 module.exports.hasTemporalReference = hasTemporalReference;
 module.exports.classifyNewsroomFact = classifyNewsroomFact;
 module.exports.classifyNewsroomFacts = classifyNewsroomFacts;
+module.exports.splitFactStatements = splitFactStatements;
 module.exports.buildEvidenceEngine = buildEvidenceEngine;
 module.exports.buildSourceQualityEngine = buildSourceQualityEngine;
 module.exports.buildConfidenceEngine = buildConfidenceEngine;

@@ -3,6 +3,7 @@ const {
   normalizeNewsroomDraft,
   hasTemporalReference,
   classifyNewsroomFact,
+  splitFactStatements,
   buildEvidenceEngine,
   buildSourceQualityEngine,
   buildConfidenceEngine,
@@ -141,6 +142,62 @@ runTest("classifyNewsroomFact marks user-provided topic as USER_INPUT", () => {
   assert(Array.isArray(result.recommended_sources));
 });
 
+runTest(
+  "splitFactStatements excludes writing instructions and list numbering",
+  () => {
+    const input = `SIMULASI INTERNAL — JANGAN DIPUBLIKASIKAN.
+
+Pemerintah Provinsi Papua Selatan pada 16 Agustus 2026 melakukan simulasi peluncuran Portal Layanan Publik Digital Papua Selatan.
+
+Dalam skenario uji ini, portal dirancang untuk membantu masyarakat:
+- memperoleh informasi layanan pemerintahan;
+- memantau status pelayanan;
+- menemukan kontak OPD terkait dalam satu platform.
+
+Buat artikel berita uji internal dengan gaya jurnalistik yang jelas.
+Ketentuan:
+1. Jangan menambahkan angka yang tidak diberikan.
+2. Jangan membuat kutipan pejabat.
+3. Bedakan fakta input, asumsi, dan rekomendasi.
+4. Tandai informasi yang masih membutuhkan verifikasi.
+5. Gunakan struktur berita yang jelas.
+6. Jika sumber resmi belum tersedia, tuliskan bahwa informasi masih memerlukan konfirmasi.`;
+
+    const statements = splitFactStatements(input);
+
+    assert(
+      statements.some((item) =>
+        item.includes("Pemerintah Provinsi Papua Selatan pada 16 Agustus 2026"),
+      ),
+      "main user-supplied claim must remain",
+    );
+    assert(
+      statements.includes("memperoleh informasi layanan pemerintahan"),
+      "factual portal capability must remain",
+    );
+    assert(
+      statements.includes("memantau status pelayanan"),
+      "factual portal capability must remain",
+    );
+    assert(
+      statements.includes("menemukan kontak OPD terkait dalam satu platform"),
+      "factual portal capability must remain",
+    );
+
+    const joined = statements.join("\n");
+    assert(!/Buat artikel/i.test(joined));
+    assert(!/Ketentuan/i.test(joined));
+    assert(!/Jangan menambahkan/i.test(joined));
+    assert(!/Jangan membuat/i.test(joined));
+    assert(!/Bedakan fakta/i.test(joined));
+    assert(!/Tandai informasi/i.test(joined));
+    assert(!/Gunakan struktur/i.test(joined));
+    assert(!/Jika sumber resmi/i.test(joined));
+    assert(!/^\d+$/m.test(joined));
+    assert(!/JANGAN DIPUBLIKASIKAN/i.test(joined));
+  },
+);
+
 runTest("classifyNewsroomFact marks unsourced numbers as UNVERIFIED", () => {
   const result = classifyNewsroomFact(
     "Papua Selatan memperoleh penghargaan Rp3 miliar",
@@ -275,6 +332,42 @@ runTest(
     assert(
       prompt.includes("Jangan tulis ulang section Confidence Analysis."),
       "prompt must forbid duplicated Confidence Analysis output",
+    );
+  },
+);
+
+runTest(
+  "buildNewsroomPrompt forbids unsupported detail expansion",
+  () => {
+    const prompt = buildNewsroomPrompt({
+      topic:
+        "Pemerintah Provinsi Papua Selatan pada 16 Agustus 2026 melakukan simulasi portal layanan publik.",
+      layer: "Editorial Layer",
+      mode: "Artikel Berita",
+      audience: "GENERAL_PUBLIC",
+      complexity: "Strategic",
+      factGuard: true,
+    });
+
+    assert(
+      prompt.includes("Writing instructions guide format only"),
+      "prompt must separate writing instructions from factual claims",
+    );
+    assert(
+      prompt.includes("USER_SUPPLIED_CLAIM"),
+      "prompt must preserve provenance of unverified user claims",
+    );
+    assert(
+      prompt.includes("do not add specific examples"),
+      "prompt must forbid unsupported detail expansion",
+    );
+    assert(
+      prompt.includes("do not silently turn \"melakukan\" into \"merencanakan\""),
+      "prompt must preserve claim status and tense",
+    );
+    assert(
+      prompt.includes("AI_INFERENCE or ASSUMPTION"),
+      "unsupported analysis must be explicitly labeled",
     );
   },
 );
