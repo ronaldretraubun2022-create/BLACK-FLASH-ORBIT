@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import {
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import { UserMenu } from "./components/auth/UserMenu.jsx";
 import { useProfile } from "./hooks/useProfile.js";
-import { AINewsroom } from "./pages/AINewsroom.jsx";
 import {
   Archive,
   Bell,
@@ -39,17 +44,51 @@ import { CommandCenterReleasePanel } from "./components/CommandCenterReleasePane
 import { CommandCenterSecurityPanel } from "./components/CommandCenterSecurityPanel.jsx";
 import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 import { CommandPalette } from "./components/CommandPalette.jsx";
-import { Login } from "./pages/Login.jsx";
-import { AIWorkspace } from "./pages/AIWorkspace.jsx";
-import { KnowledgeBase } from "./pages/KnowledgeBase.jsx";
-import { Register } from "./pages/Register.jsx";
-import { WorkflowAutomation } from "./pages/WorkflowAutomation.jsx";
-import { WebBuilder } from "./pages/WebBuilder.jsx";
-import {
-  api,
-  isAuthProviderUnavailableError,
-} from "./services/api.js";
+import { api, isAuthProviderUnavailableError } from "./services/api.js";
 import dashboardTelemetryState from "./services/dashboardTelemetryState.cjs";
+
+
+const AINewsroom = lazy(() =>
+  import("./pages/AINewsroom.jsx").then((module) => ({
+    default: module.AINewsroom,
+  })),
+);
+
+const AIWorkspace = lazy(() =>
+  import("./pages/AIWorkspace.jsx").then((module) => ({
+    default: module.AIWorkspace,
+  })),
+);
+
+const KnowledgeBase = lazy(() =>
+  import("./pages/KnowledgeBase.jsx").then((module) => ({
+    default: module.KnowledgeBase,
+  })),
+);
+
+const WorkflowAutomation = lazy(() =>
+  import("./pages/WorkflowAutomation.jsx").then((module) => ({
+    default: module.WorkflowAutomation,
+  })),
+);
+
+const WebBuilder = lazy(() =>
+  import("./pages/WebBuilder.jsx").then((module) => ({
+    default: module.WebBuilder,
+  })),
+);
+
+const Login = lazy(() =>
+  import("./pages/Login.jsx").then((module) => ({
+    default: module.Login,
+  })),
+);
+
+const Register = lazy(() =>
+  import("./pages/Register.jsx").then((module) => ({
+    default: module.Register,
+  })),
+);
 
 const { getObjectValues, resolveCommandCenterTelemetryState } =
   dashboardTelemetryState;
@@ -57,7 +96,11 @@ const { getObjectValues, resolveCommandCenterTelemetryState } =
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
 
 const releaseState = [
-  { label: "Branch", value: "feature/project-health-v0.7", tone: "text-amber-300" },
+  {
+    label: "Branch",
+    value: "feature/project-health-v0.7",
+    tone: "text-amber-300",
+  },
   { label: "Tag", value: "Project Health Monitor v0.7", tone: "text-white" },
   { label: "Status", value: "deployment-aware", tone: "text-emerald-300" },
 ];
@@ -478,6 +521,26 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
   );
 }
 
+
+function RouteLoadingFallback() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[#050506] px-4 text-zinc-100">
+      <div className="text-center">
+        <div
+          aria-hidden="true"
+          className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-zinc-700 border-t-white"
+        />
+        <p className="mt-3 text-sm font-medium text-zinc-300">
+          Loading ORBIT module...
+        </p>
+        <p className="mt-1 text-xs text-zinc-500">
+          Menyiapkan workspace yang Anda buka.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -513,7 +576,8 @@ function AppShell() {
         keywords: ["security", "audit", "policy", "protection"],
         kind: "slash",
         closeOnExecute: false,
-        mockResult: "Mock security summary prepared. No live changes were made.",
+        mockResult:
+          "Mock security summary prepared. No live changes were made.",
       },
       {
         id: "slash-report",
@@ -523,7 +587,8 @@ function AppShell() {
         keywords: ["report", "system", "summary", "status"],
         kind: "slash",
         closeOnExecute: false,
-        mockResult: "Mock report generated. Dashboard telemetry remains unchanged.",
+        mockResult:
+          "Mock report generated. Dashboard telemetry remains unchanged.",
       },
       {
         id: "slash-release",
@@ -657,7 +722,8 @@ function AppShell() {
 
   useEffect(() => {
     const handleKeyDown = (event) => {
-      const isShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k";
+      const isShortcut =
+        (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k";
       if (!isShortcut) return;
 
       const target = event.target;
@@ -699,7 +765,8 @@ function AppShell() {
 
   return (
     <>
-      <Routes>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <Routes>
         <Route element={<PublicOnlyRoute />}>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
@@ -717,7 +784,10 @@ function AppShell() {
           <Route path="/ai-workspace" element={<AIWorkspace />} />
           <Route path="/ai-newsroom" element={<AINewsroom />} />
           <Route path="/knowledge-base" element={<KnowledgeBase />} />
-          <Route path="/knowledge" element={<Navigate replace to="/knowledge-base" />} />
+          <Route
+            path="/knowledge"
+            element={<Navigate replace to="/knowledge-base" />}
+          />
           <Route path="/web-builder" element={<WebBuilder />} />
           <Route path="/workflow-automation" element={<WorkflowAutomation />} />
           <Route
@@ -738,8 +808,9 @@ function AppShell() {
           />
         </Route>
 
-        <Route path="*" element={<Navigate replace to="/" />} />
-      </Routes>
+          <Route path="*" element={<Navigate replace to="/" />} />
+        </Routes>
+      </Suspense>
 
       <CommandPalette
         commands={commands}
