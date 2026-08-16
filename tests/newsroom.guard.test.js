@@ -201,7 +201,9 @@ runTest("formatEvidenceMatrix renders Evidence Matrix", () => {
   const fact = classifyNewsroomFact(
     "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
   );
-  const evidence = buildEvidenceEngine([fact]);
+  const evidence = buildEvidenceEngine([fact], {
+    sources: [{ label: "Kemendagri", type: "official_statement" }],
+  });
   const matrix = formatEvidenceMatrix(evidence);
 
   assert(matrix.includes("## Evidence Matrix"));
@@ -294,8 +296,9 @@ runTest("buildSourceQualityEngine scores official source high", () => {
   const fact = classifyNewsroomFact(
     "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
   );
-  const evidence = buildEvidenceEngine([fact]);
-  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+  const sources = [{ label: "Kemendagri", type: "official_statement" }];
+  const evidence = buildEvidenceEngine([fact], { sources });
+  const sourceQuality = buildSourceQualityEngine([fact], evidence, sources);
 
   assert(sourceQuality.source_quality_score >= 90);
   assert.strictEqual(sourceQuality.source_quality_level, "HIGH");
@@ -322,6 +325,48 @@ runTest("buildSourceQualityEngine scores social media low", () => {
   assert.strictEqual(sourceQuality.source_quality_level, "LOW");
 });
 
+runTest(
+  "buildSourceQualityEngine does not treat recommended sources as supplied evidence",
+  () => {
+    const fact = classifyNewsroomFact(
+      "Pemerintah Provinsi melakukan simulasi layanan digital",
+      {
+        topic: "Pemerintah Provinsi melakukan simulasi layanan digital",
+        userInput: true,
+      },
+    );
+    const evidence = buildEvidenceEngine([fact], { userInput: true });
+    const sourceQuality = buildSourceQualityEngine([fact], evidence);
+    const sourceNames = sourceQuality.source_quality_items.map(
+      (item) => item.source,
+    );
+
+    assert(sourceQuality.source_quality_score <= 20);
+    assert.strictEqual(sourceQuality.source_quality_level, "LOW");
+    assert(!sourceNames.includes("BPS"));
+    assert(!sourceNames.includes("Kemendagri"));
+    assert(!sourceNames.includes("Pemerintah Provinsi"));
+  },
+);
+
+runTest(
+  "claim wording alone does not count as supplied official evidence",
+  () => {
+    const fact = classifyNewsroomFact(
+      "Menurut Kemendagri, Papua Selatan memperoleh penghargaan Rp3 miliar",
+    );
+    const evidence = buildEvidenceEngine([fact]);
+    const evidenceTypes = evidence.items.flatMap(
+      (item) => item.evidence_found || [],
+    );
+
+    assert(!evidenceTypes.includes("Official Document"));
+    assert(!evidenceTypes.includes("Official Statement"));
+    assert(!evidenceTypes.includes("Government Website"));
+    assert(!evidenceTypes.includes("Statistical Data"));
+  },
+);
+
 runTest("formatConfidenceAnalysis renders Confidence Analysis", () => {
   const fact = classifyNewsroomFact(
     "Menurut BPS dan Kemendagri, angka kemiskinan turun 2 persen berdasarkan data statistik pada portal bps.go.id",
@@ -345,8 +390,13 @@ runTest("buildConfidenceEngine scores official sources as high confidence", () =
   const fact = classifyNewsroomFact(
     "Menurut BPS dan Kemendagri, angka kemiskinan turun 2 persen berdasarkan data statistik pada portal bps.go.id",
   );
-  const evidence = buildEvidenceEngine([fact]);
-  const sourceQuality = buildSourceQualityEngine([fact], evidence);
+  const sources = [
+    { label: "Dokumen Resmi BPS", type: "official_document" },
+    { label: "bps.go.id", type: "government_website" },
+    { label: "Kemendagri", type: "official_statement" },
+  ];
+  const evidence = buildEvidenceEngine([fact], { sources });
+  const sourceQuality = buildSourceQualityEngine([fact], evidence, sources);
   const confidence = buildConfidenceEngine({
     evidence,
     sourceQuality,
@@ -434,7 +484,7 @@ runTest(
       assert(Array.isArray(models), "models should be an array");
       assert.strictEqual(
         models[0],
-        "deepseek/deepseek-chat-v3",
+        "deepseek/deepseek-chat",
         "default model should be used when configured model is invalid",
       );
       assert(

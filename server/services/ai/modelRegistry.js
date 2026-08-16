@@ -7,7 +7,7 @@ const AI_USE_CASES = {
 const DEFAULT_MODELS = {
   [AI_USE_CASES.GENERAL_CHAT]: "openrouter/auto",
   [AI_USE_CASES.KNOWLEDGE_CHAT]: "openrouter/auto",
-  [AI_USE_CASES.NEWSROOM]: "deepseek/deepseek-chat-v3",
+  [AI_USE_CASES.NEWSROOM]: "deepseek/deepseek-chat",
 };
 
 const FALLBACK_ENV_KEYS = {

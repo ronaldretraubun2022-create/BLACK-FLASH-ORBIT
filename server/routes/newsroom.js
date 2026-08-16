@@ -478,15 +478,27 @@ function classifyNewsroomFacts(statements, context = {}) {
   );
 }
 
-function detectEvidenceTypes(statement, context = {}) {
-  const text = String(statement || "").toLowerCase();
-  const hints = [
-    statement,
-    context.source,
-    ...(Array.isArray(context.sources) ? context.sources : []),
-  ]
+function getProvidedSourceHints(context = {}) {
+  const normalizedSources = (
+    Array.isArray(context.sources) ? context.sources : []
+  )
+    .map((source) => {
+      if (typeof source === "string") return source;
+      if (!source || typeof source !== "object") return "";
+
+      return [source.label, source.type].filter(Boolean).join(" ");
+    })
+    .filter(Boolean);
+
+  return [context.source, ...normalizedSources]
+    .filter(Boolean)
     .join(" ")
     .toLowerCase();
+}
+
+function detectEvidenceTypes(statement, context = {}) {
+  const text = String(statement || "").toLowerCase();
+  const hints = getProvidedSourceHints(context);
   const found = [];
 
   if (
@@ -499,7 +511,7 @@ function detectEvidenceTypes(statement, context = {}) {
 
   if (
     /(menurut|menyatakan|menyampaikan|diumumkan|rilis|siaran pers|keterangan resmi)/.test(
-      hints,
+      text,
     ) &&
     hasOfficialSource(hints, context)
   ) {
@@ -725,20 +737,28 @@ function getConfidenceLevel(score) {
   return "VERY LOW";
 }
 
-function buildSourceQualityEngine(factClassifications, evidence) {
+function buildSourceQualityEngine(
+  _factClassifications,
+  evidence,
+  providedSources = [],
+) {
   const evidenceSources = (evidence?.items || []).flatMap(
     (item) => item.evidence_found || [],
   );
-  const hasSubstantiveEvidence = evidenceSources.some(
-    (source) => !["Social Media", "User Input"].includes(source),
-  );
-  const hasSocialOnlyEvidence =
-    evidenceSources.includes("Social Media") && !hasSubstantiveEvidence;
-  const recommendedSources =
-    hasSocialOnlyEvidence || !hasSubstantiveEvidence
-      ? []
-      : factClassifications.flatMap((fact) => fact.recommended_sources || []);
-  const sourceNames = [...recommendedSources, ...evidenceSources];
+  const providedSourceNames = (
+    Array.isArray(providedSources) ? providedSources : []
+  )
+    .map((source) => {
+      if (typeof source === "string") return normalizeStatement(source);
+      if (!source || typeof source !== "object") return "";
+
+      return normalizeStatement(
+        [source.label, source.type].filter(Boolean).join(" "),
+      );
+    })
+    .filter(Boolean);
+  const sourceNames =
+    providedSourceNames.length > 0 ? providedSourceNames : evidenceSources;
   const uniqueSources = [...new Set(sourceNames.filter(Boolean))];
   const qualityItems = (
     uniqueSources.length > 0 ? uniqueSources : ["User Input"]
@@ -1174,11 +1194,13 @@ router.post("/", requireAuth, async (req, res) => {
     const evidence = buildEvidenceEngine(factClassifications, {
       topic: trimmedTopic,
       userInput: true,
+      sources: promptContract.sources,
     });
     const evidenceMatrix = formatEvidenceMatrix(evidence);
     const sourceQuality = buildSourceQualityEngine(
       factClassifications,
       evidence,
+      promptContract.sources,
     );
     const sourceQualityMatrix = formatSourceQualityMatrix(sourceQuality);
     const confidenceAnalysis = buildConfidenceEngine({
