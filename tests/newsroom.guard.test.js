@@ -1,6 +1,7 @@
 const assert = require("assert");
 const {
   normalizeNewsroomDraft,
+  buildResponseConfidence,
   enforceAnalyticalProvenance,
   hasTemporalReference,
   classifyNewsroomFact,
@@ -301,6 +302,54 @@ runTest(
         (blocker) => blocker.code === "UNSUPPORTED_SERIOUS_ALLEGATION",
       ),
       "unlabeled serious allegation must remain blocked",
+    );
+  },
+);
+
+runTest(
+  "buildResponseConfidence separates input readiness from source confidence",
+  () => {
+    const result = buildResponseConfidence({
+      legacyConfidenceScore: 65,
+      verification: {
+        sourceConfidence: { score: 0, level: "INSUFFICIENT" },
+      },
+      confidenceAnalysis: {
+        confidence_score: 22,
+        confidence_level: "VERY LOW",
+        confidence_breakdown: { evidence_score: 0 },
+        confidence_explanation: "Evidence-aware confidence.",
+      },
+      editorial: {
+        confidence: { score: 8, level: "INSUFFICIENT" },
+      },
+      intelligenceSummary: { publicationReadiness: "BLOCKED" },
+    });
+
+    assert.strictEqual(result.score, 65);
+    assert.strictEqual(result.input_readiness_score, 65);
+    assert.strictEqual(result.source_confidence_score, 0);
+    assert.strictEqual(result.source_confidence_level, "INSUFFICIENT");
+    assert.strictEqual(result.confidence_score, 22);
+    assert.strictEqual(result.publication_readiness, "BLOCKED");
+  },
+);
+
+runTest(
+  "AI Newsroom dashboard uses evidence-aware source confidence fields",
+  () => {
+    const source = require("fs").readFileSync(
+      require("path").join(__dirname, "../apps/web/src/pages/AINewsroom.jsx"),
+      "utf8",
+    );
+
+    assert(source.includes('label: "Input Readiness"'));
+    assert(source.includes("source_confidence_score"));
+    assert(source.includes("source_confidence_level"));
+    assert(source.includes('label: "Publication Readiness"'));
+    assert(
+      !source.includes("score: Number(response.confidence?.score) || 0"),
+      "dashboard must not map legacy assessment score to Source Confidence",
     );
   },
 );

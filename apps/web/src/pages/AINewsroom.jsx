@@ -957,7 +957,8 @@ Periksa kembali nama pejabat, data angka, lokasi, tanggal, dan kutipan resmi seb
 
 function buildPlainTextExport({ confidence, draft }) {
   return `Source Confidence Assessment
-Confidence Score: ${confidence.score}/100
+Source Confidence Score: ${confidence.score}/100
+Source Confidence Level: ${confidence.level}
 Publication Readiness: ${confidence.publicationReadiness}
 
 ${draft}`;
@@ -1033,6 +1034,7 @@ export function AINewsroom() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [confidence, setConfidence] = useState({
     score: 0,
+    level: "INSUFFICIENT",
     publicationReadiness: "Verification Required",
   });
   const [verification, setVerification] = useState(null);
@@ -1108,7 +1110,7 @@ export function AINewsroom() {
       barValue: intelligenceAssessment.publicImpact,
     },
     {
-      label: "Readiness",
+      label: "Input Readiness",
       value: intelligenceAssessment.readiness,
       barValue: intelligenceAssessment.readiness,
     },
@@ -1150,7 +1152,7 @@ export function AINewsroom() {
       value: intelligenceAssessment.publicImpact,
     },
     {
-      label: "Readiness",
+      label: "Input Readiness",
       value: intelligenceAssessment.readiness,
     },
     {
@@ -1159,7 +1161,13 @@ export function AINewsroom() {
     },
     {
       label: "Source Confidence",
-      value: `${confidence.score}% / ${confidence.publicationReadiness}`,
+      value: sourceConfidenceEnabled
+        ? `${confidence.score}% / ${confidence.level}`
+        : "Disabled",
+    },
+    {
+      label: "Publication Readiness",
+      value: confidence.publicationReadiness,
     },
     {
       label: "Priority",
@@ -1308,9 +1316,13 @@ export function AINewsroom() {
         requiresHumanApproval: true,
       });
       setConfidence({
-        score: Number(generation.intelligenceSummary?.confidence?.score) || 0,
+        score: Number(generation.verification?.sourceConfidence?.score) || 0,
+        level:
+          generation.verification?.sourceConfidence?.level || "INSUFFICIENT",
         publicationReadiness:
-          generation.publicationReadiness || "Verification Required",
+          generation.publicationReadiness ||
+          generation.intelligenceSummary?.publicationReadiness ||
+          "Verification Required",
       });
       setEditorNotes(generation.editorNotes || "");
       setGenerationError("");
@@ -1439,8 +1451,18 @@ export function AINewsroom() {
       if (response?.success && response?.draft) {
         setDraft(String(response.draft).trim());
         setConfidence({
-          score: Number(response.confidence?.score) || 0,
+          score:
+            Number(
+              response.confidence?.source_confidence_score ??
+                response.verification?.sourceConfidence?.score,
+            ) || 0,
+          level:
+            response.confidence?.source_confidence_level ||
+            response.verification?.sourceConfidence?.level ||
+            "INSUFFICIENT",
           publicationReadiness:
+            response.confidence?.publication_readiness ||
+            response.intelligenceSummary?.publicationReadiness ||
             response.confidence?.publicationReadiness ||
             "Verification Required",
         });
@@ -1472,6 +1494,7 @@ export function AINewsroom() {
 
       setConfidence({
         score: 0,
+        level: "INSUFFICIENT",
         publicationReadiness: "Verification Required",
       });
       setVerification(null);
@@ -1553,6 +1576,7 @@ export function AINewsroom() {
       priority: priorityEngine,
       confidence: {
         score: confidence.score,
+        level: confidence.level,
         publicationReadiness: confidence.publicationReadiness,
       },
       editorial,

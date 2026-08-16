@@ -210,6 +210,33 @@ function getPublicationReadiness(score) {
   return "Verification Required";
 }
 
+function buildResponseConfidence({
+  confidenceAnalysis = {},
+  editorial = {},
+  intelligenceSummary = {},
+  legacyConfidenceScore = 0,
+  verification = {},
+} = {}) {
+  const inputReadinessScore = clampScore(legacyConfidenceScore);
+  const sourceConfidence = verification?.sourceConfidence || {};
+
+  return {
+    score: inputReadinessScore,
+    publicationReadiness: getPublicationReadiness(inputReadinessScore),
+    input_readiness_score: inputReadinessScore,
+    source_confidence_score: clampScore(sourceConfidence.score || 0),
+    source_confidence_level: sourceConfidence.level || "INSUFFICIENT",
+    publication_readiness:
+      intelligenceSummary?.publicationReadiness || "BLOCKED",
+    editorial_score: clampScore(editorial?.confidence?.score || 0),
+    editorial_level: editorial?.confidence?.level || "INSUFFICIENT",
+    confidence_score: clampScore(confidenceAnalysis?.confidence_score || 0),
+    confidence_level: confidenceAnalysis?.confidence_level || "VERY LOW",
+    confidence_breakdown: confidenceAnalysis?.confidence_breakdown || {},
+    confidence_explanation: confidenceAnalysis?.confidence_explanation || "",
+  };
+}
+
 function normalizeStatement(value) {
   return sanitizeText(value).replace(/\s+/g, " ");
 }
@@ -1476,6 +1503,13 @@ router.post("/", requireAuth, async (req, res) => {
       metadata: safeNewsroomMetadata,
       verification,
     });
+    const responseConfidence = buildResponseConfidence({
+      confidenceAnalysis,
+      editorial,
+      intelligenceSummary,
+      legacyConfidenceScore: finalConfidenceScore,
+      verification,
+    });
 
     logNewsroomDebug("[AI Newsroom Route] verification completed", {
       claims: verification.claims.length,
@@ -1492,16 +1526,7 @@ router.post("/", requireAuth, async (req, res) => {
       factClassifications,
       sourceQuality,
       confidenceAnalysis,
-      confidence: {
-        score: finalConfidenceScore,
-        publicationReadiness,
-        editorial_score: editorial.confidence.score,
-        editorial_level: editorial.confidence.level,
-        confidence_score: confidenceAnalysis.confidence_score,
-        confidence_level: confidenceAnalysis.confidence_level,
-        confidence_breakdown: confidenceAnalysis.confidence_breakdown,
-        confidence_explanation: confidenceAnalysis.confidence_explanation,
-      },
+      confidence: responseConfidence,
       verification: {
         claims: verification.claims,
         factGuard: verification.factGuard,
@@ -1523,6 +1548,9 @@ router.post("/", requireAuth, async (req, res) => {
         confidence_score: confidenceAnalysis.confidence_score,
         confidence_level: confidenceAnalysis.confidence_level,
         confidence_breakdown: confidenceAnalysis.confidence_breakdown,
+        input_readiness_score: responseConfidence.input_readiness_score,
+        source_confidence_score: responseConfidence.source_confidence_score,
+        source_confidence_level: responseConfidence.source_confidence_level,
         verifiedFactsCount,
         verificationItemsCount,
         promptVersion: promptPayload.promptVersion,
@@ -1713,6 +1741,7 @@ router.delete("/history/:id", requireAuth, async (req, res) => {
 
 module.exports = router;
 module.exports.normalizeNewsroomDraft = normalizeNewsroomDraft;
+module.exports.buildResponseConfidence = buildResponseConfidence;
 module.exports.enforceAnalyticalProvenance = enforceAnalyticalProvenance;
 module.exports.hasTemporalReference = hasTemporalReference;
 module.exports.classifyNewsroomFact = classifyNewsroomFact;
