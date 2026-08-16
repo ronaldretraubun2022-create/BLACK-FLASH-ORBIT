@@ -1144,19 +1144,50 @@ const ANALYTICAL_PROVENANCE_BY_SECTION = new Map([
   ["action plan", "AI_INFERENCE"],
 ]);
 
-function getMarkdownSectionName(line) {
-  const raw = String(line || "").trim();
-  const isHashHeading = /^#{1,6}\s+/.test(raw);
-  const isBoldHeading = /^\*\*[^*]+\*\*\s*:?[\s]*$/.test(raw);
+const KNOWN_OUTPUT_SECTION_NAMES = new Set([
+  "executive summary",
+  "headline",
+  "lead",
+  "isi berita",
+  "factual narrative",
+  "narasi faktual",
+  "analisis",
+  "analysis",
+  "risiko",
+  "risk",
+  "risks",
+  "rekomendasi",
+  "recommendation",
+  "recommendations",
+  "action plan",
+  "verification status",
+  "catatan verifikasi",
+  "recommended sources",
+  "rekomendasi sumber",
+]);
 
-  if (!isHashHeading && !isBoldHeading) return null;
-
-  return raw
+function normalizeOutputSectionName(line) {
+  return String(line || "")
+    .trim()
     .replace(/^#{1,6}\s+/, "")
     .replace(/^\*\*|\*\*$/g, "")
     .replace(/[:：]+$/, "")
     .trim()
     .toLowerCase();
+}
+
+function getMarkdownSectionName(line) {
+  const raw = String(line || "").trim();
+  if (!raw) return null;
+
+  const isHashHeading = /^#{1,6}\s+/.test(raw);
+  const isBoldHeading = /^\*\*[^*]+\*\*\s*:?[\s]*$/.test(raw);
+  const sectionName = normalizeOutputSectionName(raw);
+
+  if (isHashHeading || isBoldHeading) return sectionName;
+  if (KNOWN_OUTPUT_SECTION_NAMES.has(sectionName)) return sectionName;
+
+  return null;
 }
 
 function hasAnalyticalProvenanceLabel(line) {

@@ -205,6 +205,56 @@ Informasi masih memerlukan verifikasi resmi.`;
 );
 
 runTest(
+  "enforceAnalyticalProvenance supports plain output section headings",
+  () => {
+    const draft = `Executive Summary
+Fakta input tetap tanpa label.
+
+Analisis
+Kalimat analitis tanpa sumber.
+
+Risiko
+1. Risiko keamanan data.
+
+Rekomendasi
+Lakukan verifikasi lanjutan.
+
+Action Plan
+1. Koordinasi dengan OPD.
+
+Verification Status
+Data memerlukan verifikasi resmi.`;
+
+    const normalized = enforceAnalyticalProvenance(draft);
+
+    assert(
+      normalized.includes("AI_INFERENCE: Kalimat analitis tanpa sumber."),
+    );
+    assert(
+      normalized.includes("1. ASSUMPTION: Risiko keamanan data."),
+    );
+    assert(
+      normalized.includes("AI_INFERENCE: Lakukan verifikasi lanjutan."),
+    );
+    assert(
+      normalized.includes("1. AI_INFERENCE: Koordinasi dengan OPD."),
+    );
+    assert(
+      normalized.includes(
+        "Verification Status\nData memerlukan verifikasi resmi.",
+      ),
+      "plain non-analytical section must reset provenance",
+    );
+    assert(
+      !normalized.includes(
+        "AI_INFERENCE: Data memerlukan verifikasi resmi.",
+      ),
+      "verification text must not inherit Action Plan provenance",
+    );
+  },
+);
+
+runTest(
   "labeled analytical allegation does not create serious-allegation blocker",
   () => {
     const result = verifyNewsroomDraft({
