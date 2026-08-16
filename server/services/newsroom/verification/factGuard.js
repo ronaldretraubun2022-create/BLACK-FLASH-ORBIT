@@ -143,6 +143,18 @@ function evaluateAllegationClaim(claim, corpus) {
 }
 
 function evaluateClaim(claim, corpus) {
+  if (claim.provenance) {
+    return {
+      ...claim,
+      confidence: 35,
+      evidenceRefs: [],
+      status: CLAIM_STATUSES.NOT_VERIFIABLE,
+      warnings: [
+        `${claim.provenance} is an analytical hypothesis, not a verified factual claim.`,
+      ],
+    };
+  }
+
   if (!corpus.length) {
     return {
       ...claim,

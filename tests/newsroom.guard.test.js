@@ -1,6 +1,7 @@
 const assert = require("assert");
 const {
   normalizeNewsroomDraft,
+  enforceAnalyticalProvenance,
   hasTemporalReference,
   classifyNewsroomFact,
   splitFactStatements,
@@ -25,6 +26,9 @@ const {
 const {
   createPromptContract,
 } = require("../server/services/newsroom/promptContract.js");
+const {
+  verifyNewsroomDraft,
+} = require("../server/services/newsroom/verification");
 
 function runTest(name, fn) {
   try {
@@ -133,6 +137,120 @@ runTest(
     assert(
       /Laporan Statistik Resmi/.test(normalized),
       "statistics source should be generic",
+    );
+  },
+);
+
+runTest(
+  "enforceAnalyticalProvenance labels every analytical paragraph and list item",
+  () => {
+    const draft = `### Executive Summary
+Pemerintah melakukan simulasi portal.
+
+### Analisis
+Simulasi ini menunjukkan peningkatan akses digital.
+AI_INFERENCE: Kalimat ini sudah memiliki label.
+
+### Risiko
+1. **Keamanan Data:** Portal berisiko terhadap pelanggaran data.
+2. Kesiapan masyarakat dapat memengaruhi penggunaan portal.
+
+### Rekomendasi
+- Pemerintah perlu melakukan sosialisasi.
+
+### Action Plan
+1. Koordinasi dengan OPD terkait.
+
+### Verification Status
+Informasi masih memerlukan verifikasi resmi.`;
+
+    const normalized = enforceAnalyticalProvenance(draft);
+
+    assert(
+      normalized.includes(
+        "AI_INFERENCE: Simulasi ini menunjukkan peningkatan akses digital.",
+      ),
+    );
+    assert.strictEqual(
+      (normalized.match(/AI_INFERENCE: Kalimat ini sudah memiliki label\./g) || [])
+        .length,
+      1,
+      "existing inference label must not be duplicated",
+    );
+    assert(
+      normalized.includes(
+        "1. ASSUMPTION: **Keamanan Data:** Portal berisiko terhadap pelanggaran data.",
+      ),
+    );
+    assert(
+      normalized.includes(
+        "2. ASSUMPTION: Kesiapan masyarakat dapat memengaruhi penggunaan portal.",
+      ),
+    );
+    assert(
+      normalized.includes(
+        "- AI_INFERENCE: Pemerintah perlu melakukan sosialisasi.",
+      ),
+    );
+    assert(
+      normalized.includes("1. AI_INFERENCE: Koordinasi dengan OPD terkait."),
+    );
+    assert(
+      normalized.includes(
+        "### Verification Status\nInformasi masih memerlukan verifikasi resmi.",
+      ),
+      "non-analytical verification section must remain unlabeled",
+    );
+  },
+);
+
+runTest(
+  "labeled analytical allegation does not create serious-allegation blocker",
+  () => {
+    const result = verifyNewsroomDraft({
+      draft:
+        "### Risiko\nASSUMPTION: Tanpa sistem keamanan yang kuat, portal berisiko terhadap pelanggaran data dan privasi pengguna.",
+      sourceText: "",
+      sources: [],
+    });
+
+    const allegation = result.claims.find(
+      (claim) => claim.type === "ALLEGATION",
+    );
+
+    assert(allegation, "allegation-like analytical sentence should be detected");
+    assert.strictEqual(allegation.provenance, "ASSUMPTION");
+    assert.strictEqual(allegation.status, "NOT_VERIFIABLE");
+    assert(
+      !result.publicationBlockers.some(
+        (blocker) => blocker.code === "UNSUPPORTED_SERIOUS_ALLEGATION",
+      ),
+      "labeled analytical hypothesis must not create serious allegation blocker",
+    );
+    assert(
+      !result.publicationBlockers.some(
+        (blocker) => blocker.code === "CRITICAL_CITATION_MISSING",
+      ),
+      "labeled analytical hypothesis must not create critical citation blocker",
+    );
+  },
+);
+
+runTest(
+  "unlabeled serious allegation still requires evidence",
+  () => {
+    const result = verifyNewsroomDraft({
+      draft:
+        "Portal pemerintah mengalami pelanggaran data yang merugikan pengguna.",
+      sourceText: "",
+      sources: [],
+    });
+
+    assert(
+      result.publicationBlockers.some(
+        (blocker) => blocker.code === "UNSUPPORTED_SERIOUS_ALLEGATION",
+      ),
+      "unlabeled serious allegation must remain blocked",
     );
   },
 );

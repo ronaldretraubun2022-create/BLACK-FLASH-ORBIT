@@ -1,3 +1,8 @@
+const ANALYTICAL_PROVENANCE = {
+  AI_INFERENCE: "AI_INFERENCE",
+  ASSUMPTION: "ASSUMPTION",
+};
+
 const CLAIM_TYPES = {
   ALLEGATION: "ALLEGATION",
   CAUSAL: "CAUSAL",
@@ -35,27 +40,51 @@ function normalizeText(value) {
 }
 
 function splitSentences(text) {
-  return normalizeText(text)
-    .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.trim())
+  return String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, " ")
+    .split(/\n+/)
+    .flatMap((line) =>
+      normalizeText(line)
+        .split(/(?<=[.!?])\s+/)
+        .map((sentence) => sentence.trim())
+        .filter(Boolean),
+    )
     .filter(Boolean);
 }
 
+function detectAnalyticalProvenance(text) {
+  const value = String(text || "");
+
+  if (/\bAI_INFERENCE\s*:/i.test(value)) {
+    return ANALYTICAL_PROVENANCE.AI_INFERENCE;
+  }
+
+  if (/\bASSUMPTION\s*:/i.test(value)) {
+    return ANALYTICAL_PROVENANCE.ASSUMPTION;
+  }
+
+  return null;
+}
+
 function createClaim({ index, text, type, evidenceRequired = true, value }) {
-  const importance =
-    type === CLAIM_TYPES.QUOTE ||
-    type === CLAIM_TYPES.ALLEGATION ||
-    type === CLAIM_TYPES.DATE ||
-    type === CLAIM_TYPES.NUMBER
+  const provenance = detectAnalyticalProvenance(text);
+  const importance = provenance
+    ? "LOW"
+    : type === CLAIM_TYPES.QUOTE ||
+        type === CLAIM_TYPES.ALLEGATION ||
+        type === CLAIM_TYPES.DATE ||
+        type === CLAIM_TYPES.NUMBER
       ? "HIGH"
       : "MEDIUM";
 
   return {
     confidence: 0,
     evidenceRefs: [],
-    evidenceRequired,
+    evidenceRequired: provenance ? false : evidenceRequired,
     id: `claim-${String(index + 1).padStart(3, "0")}`,
     importance,
+    provenance,
     status: "NOT_VERIFIABLE",
     text: normalizeText(text),
     type,
@@ -201,7 +230,9 @@ function hasAttributionLanguage(text) {
 }
 
 module.exports = {
+  ANALYTICAL_PROVENANCE,
   CLAIM_TYPES,
+  detectAnalyticalProvenance,
   extractClaims,
   hasAttributionLanguage,
   normalizeText,

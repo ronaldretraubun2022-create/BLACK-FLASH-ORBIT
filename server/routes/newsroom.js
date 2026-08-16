@@ -1132,6 +1132,80 @@ function normalizeNewsroomDraft(text, userProvidedTemporalInfo = false) {
   return normalized.trim();
 }
 
+const ANALYTICAL_PROVENANCE_BY_SECTION = new Map([
+  ["analisis", "AI_INFERENCE"],
+  ["analysis", "AI_INFERENCE"],
+  ["risiko", "ASSUMPTION"],
+  ["risk", "ASSUMPTION"],
+  ["risks", "ASSUMPTION"],
+  ["rekomendasi", "AI_INFERENCE"],
+  ["recommendation", "AI_INFERENCE"],
+  ["recommendations", "AI_INFERENCE"],
+  ["action plan", "AI_INFERENCE"],
+]);
+
+function getMarkdownSectionName(line) {
+  const raw = String(line || "").trim();
+  const isHashHeading = /^#{1,6}\s+/.test(raw);
+  const isBoldHeading = /^\*\*[^*]+\*\*\s*:?[\s]*$/.test(raw);
+
+  if (!isHashHeading && !isBoldHeading) return null;
+
+  return raw
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^\*\*|\*\*$/g, "")
+    .replace(/[:：]+$/, "")
+    .trim()
+    .toLowerCase();
+}
+
+function hasAnalyticalProvenanceLabel(line) {
+  return /(?:AI_INFERENCE|ASSUMPTION)\s*:/i.test(
+    String(line || "").slice(0, 120),
+  );
+}
+
+function prefixAnalyticalProvenance(line, provenance) {
+  const raw = String(line || "");
+  const trimmed = raw.trim();
+
+  if (!trimmed || /^-{3,}$/.test(trimmed)) return raw;
+  if (hasAnalyticalProvenanceLabel(raw)) return raw;
+
+  const listMatch = raw.match(/^(\s*(?:[-*+]\s+|\d{1,2}[.)]\s+))(.*)$/);
+  if (listMatch) {
+    const content = String(listMatch[2] || "").trim();
+    if (!content) return raw;
+    return `${listMatch[1]}${provenance}: ${content}`;
+  }
+
+  return `${provenance}: ${trimmed}`;
+}
+
+function enforceAnalyticalProvenance(text) {
+  if (typeof text !== "string") return "";
+
+  let activeProvenance = null;
+
+  return String(text)
+    .split(/\r?\n/)
+    .map((line) => {
+      const sectionName = getMarkdownSectionName(line);
+
+      if (sectionName !== null) {
+        activeProvenance =
+          ANALYTICAL_PROVENANCE_BY_SECTION.get(sectionName) || null;
+        return line;
+      }
+
+      if (!activeProvenance) return line;
+
+      return prefixAnalyticalProvenance(line, activeProvenance);
+    })
+    .join("\n")
+    .trim();
+}
+
 router.post("/", requireAuth, async (req, res) => {
   try {
     const {
@@ -1303,10 +1377,14 @@ router.post("/", requireAuth, async (req, res) => {
     });
     const draft = aiResult.content;
     const userProvidedTemporalInfo = hasTemporalReference(trimmedTopic);
-    const normalizedDraft = normalizeNewsroomDraft(
+    const normalizedBaseDraft = normalizeNewsroomDraft(
       String(draft || "").trim(),
       userProvidedTemporalInfo,
     );
+    const normalizedDraft =
+      factGuard !== false
+        ? enforceAnalyticalProvenance(normalizedBaseDraft)
+        : normalizedBaseDraft;
     const draftWithEvidence = [
       evidenceMatrix,
       factClassificationTable,
@@ -1604,6 +1682,7 @@ router.delete("/history/:id", requireAuth, async (req, res) => {
 
 module.exports = router;
 module.exports.normalizeNewsroomDraft = normalizeNewsroomDraft;
+module.exports.enforceAnalyticalProvenance = enforceAnalyticalProvenance;
 module.exports.hasTemporalReference = hasTemporalReference;
 module.exports.classifyNewsroomFact = classifyNewsroomFact;
 module.exports.classifyNewsroomFacts = classifyNewsroomFacts;

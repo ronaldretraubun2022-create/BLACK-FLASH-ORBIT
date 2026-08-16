@@ -9,6 +9,8 @@ const CITATION_STRENGTH = {
 };
 
 function isCitationRequired(claim) {
+  if (claim?.provenance) return false;
+
   return (
     claim.evidenceRequired === true ||
     [
