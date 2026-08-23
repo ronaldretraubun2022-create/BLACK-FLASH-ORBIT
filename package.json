@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "concurrently -k -n server,web -c blue,magenta \"npm:server\" \"npm:web\"",
     "start": "node server/index.js",
+    "lint": "node scripts/lint-project.mjs",
     "test": "npm run test:newsroom && npm run test:knowledge && npm run test:security",
     "test:newsroom": "node tests/newsroom.guard.test.js",
     "test:knowledge": "node --test tests/knowledge/index.test.js",

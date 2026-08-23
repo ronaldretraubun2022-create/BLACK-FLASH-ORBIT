@@ -5,14 +5,12 @@ import {
   recoverStaleRefreshToken,
 } from "../lib/authRecovery";
 import { normalizePromptCategory } from "../data/promptCategories";
-import apiUrlUtils from "./apiUrlUtils.cjs";
-
-const {
+import {
   getApiPathSuffix,
   joinApiUrl,
   normalizeApiBaseUrl,
   normalizeApiPath,
-} = apiUrlUtils;
+} from "./apiUrlUtils.mjs";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_WINDOW_MS = 60000;

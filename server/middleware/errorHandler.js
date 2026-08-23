@@ -1,3 +1,8 @@
+const {
+  error: logError,
+  getRequestContext,
+} = require("../services/observability/logger");
+
 function errorHandler(error, req, res, next) {
   const errorStatus = Number(error?.statusCode || error?.status || 0);
   const statusCode =
@@ -13,20 +18,28 @@ function errorHandler(error, req, res, next) {
         ? "Terjadi kesalahan server."
         : getSafeClientMessage(statusCode);
 
-  if (process.env.NODE_ENV !== "production") {
-    console.error("[ORBIT Error Handler]", {
+  const requestContext = getRequestContext(req);
+  req.requestId = requestContext.requestId;
+
+  logError("http_request_failed", {
+    ...requestContext,
+    code: error?.code || "REQUEST_FAILED",
+    statusCode,
+    error: {
+      name: error?.name || "Error",
       message: error?.message || "Unhandled server error",
-      method: req.method,
-      path: req.originalUrl,
-      stack: error?.stack || null,
-      statusCode,
-    });
-  }
+      stack:
+        process.env.NODE_ENV === "production"
+          ? undefined
+          : error?.stack || null,
+    },
+  });
 
   res.status(statusCode).json({
     success: false,
     code: error?.code || "REQUEST_FAILED",
     message,
+    requestId: requestContext.requestId,
   });
 }
 
