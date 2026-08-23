@@ -961,20 +961,51 @@ export const api = {
     });
   },
 
+<<<<<<< HEAD
   async getAutomationDefinitions() {
     return request("/api/v1/automation/definitions", {
       headers: await getAuthenticatedHeaders(),
     });
   },
 
+=======
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
   async getWorkflowDefinitions() {
     return request("/api/v1/workflows/definitions", {
       headers: await getAuthenticatedHeaders(),
     });
   },
 
+<<<<<<< HEAD
   async getAutomationRuns() {
     return request("/api/v1/automation/runs", {
+=======
+  async getWorkflowTemplates() {
+    return request("/api/v1/workflows/templates", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async createWorkflowTemplate(payload) {
+    return request("/api/v1/workflows/templates", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateWorkflowTemplate(id, payload) {
+    return request(`/api/v1/workflows/templates/${id}`, {
+      method: "PUT",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteWorkflowTemplate(id) {
+    return request(`/api/v1/workflows/templates/${id}`, {
+      method: "DELETE",
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
       headers: await getAuthenticatedHeaders(),
     });
   },
@@ -985,6 +1016,7 @@ export const api = {
     });
   },
 
+<<<<<<< HEAD
   async createAutomationRun(payload) {
     return request("/api/v1/automation/runs", {
       method: "POST",
@@ -993,6 +1025,8 @@ export const api = {
     });
   },
 
+=======
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
   async createWorkflowRun(payload) {
     return request("/api/v1/workflows/runs", {
       method: "POST",
@@ -1001,6 +1035,7 @@ export const api = {
     });
   },
 
+<<<<<<< HEAD
   async approveAutomationRun(id) {
     return request(`/api/v1/automation/runs/${encodeURIComponent(id)}/approve`, {
       method: "POST",
@@ -1010,11 +1045,16 @@ export const api = {
 
   async approveWorkflowRun(id) {
     return request(`/api/v1/workflows/runs/${encodeURIComponent(id)}/approve`, {
+=======
+  async approveWorkflowRun(id) {
+    return request(`/api/v1/workflows/runs/${id}/approve`, {
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
       method: "POST",
       headers: await getAuthenticatedHeaders(),
     });
   },
 
+<<<<<<< HEAD
   async cancelAutomationRun(id) {
     return request(`/api/v1/automation/runs/${encodeURIComponent(id)}/cancel`, {
       method: "POST",
@@ -1033,6 +1073,8 @@ export const api = {
     return request("/api/v1/readiness");
   },
 
+=======
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
   async getCommandCenter() {
     const [health, metrics, projects, security, automation, activity, system] =
       await Promise.all([

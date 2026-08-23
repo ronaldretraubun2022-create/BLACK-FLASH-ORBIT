@@ -11,8 +11,13 @@ const AI_STEP_ID = "ai_router_check";
 
 function createHttpError(message, statusCode = 500, code = "WORKFLOW_ERROR") {
   const error = new Error(message);
+<<<<<<< HEAD
   error.statusCode = statusCode;
   error.code = code;
+=======
+  error.code = code;
+  error.statusCode = statusCode;
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
   return error;
 }
 
@@ -47,10 +52,41 @@ function assertTransition(run, expectedStatus, action) {
   }
 }
 
+<<<<<<< HEAD
 async function createWorkflowRun({ definitionId, input, ownerId, requestId }) {
   assertOwner(ownerId);
 
   const definition = getWorkflowDefinition(definitionId);
+=======
+async function resolveRunDefinition({ definitionId, ownerId, templateId }) {
+  if (!templateId) {
+    return {
+      definition: getWorkflowDefinition(definitionId),
+      template: null,
+    };
+  }
+
+  const template = await repository.getTemplate({ ownerId, templateId });
+
+  if (!template) {
+    throw createHttpError("Workflow template tidak ditemukan.", 404, "WORKFLOW_TEMPLATE_NOT_FOUND");
+  }
+
+  return {
+    definition: getWorkflowDefinition(template.definitionId),
+    template,
+  };
+}
+
+async function createWorkflowRun({ definitionId, input, ownerId, requestId, templateId }) {
+  assertOwner(ownerId);
+
+  const { definition, template } = await resolveRunDefinition({
+    definitionId,
+    ownerId,
+    templateId,
+  });
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
   assertAllowedWorkflowDefinition(definition);
 
   const safeInput = sanitizeInput(input);
@@ -59,8 +95,16 @@ async function createWorkflowRun({ definitionId, input, ownerId, requestId }) {
     metadata: {
       input: safeInput,
       requestId,
+<<<<<<< HEAD
     },
     ownerId,
+=======
+      templateId: template?.id || null,
+      templateName: template?.name || null,
+    },
+    ownerId,
+    templateId: template?.id || null,
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
   });
 
   if (definition.sensitive) {
@@ -174,9 +218,15 @@ async function approveWorkflowRun({ approvedBy, ownerId, requestId, runId }) {
       maxTokens: 180,
       messages: [
         {
+<<<<<<< HEAD
           role: "user",
           content:
             "Return a concise BLACK FLASH ORBIT workflow readiness confirmation for a human-approved operational check. Do not include secrets or credentials.",
+=======
+          content:
+            "Return a concise BLACK FLASH ORBIT workflow readiness confirmation for a human-approved operational check. Do not include secrets or credentials.",
+          role: "user",
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
         },
       ],
       metadata: {

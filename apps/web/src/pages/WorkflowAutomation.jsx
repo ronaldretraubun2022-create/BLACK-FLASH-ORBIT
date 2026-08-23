@@ -6,8 +6,10 @@ import {
   Play,
   RefreshCcw,
   Rocket,
+  Save,
   ShieldCheck,
   TimerReset,
+  Trash2,
   Workflow,
 } from "lucide-react";
 import { api } from "../services/api";
@@ -33,7 +35,10 @@ const workflowTemplates = [
     action: "Run security checklist",
     definitionId: "ai_operational_check",
     description: "Audit env, route, dan readiness checklist melalui workflow terkontrol.",
+<<<<<<< HEAD
     id: "security-sweep",
+=======
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
     name: "Security Sweep",
     trigger: "Manual /security",
   },
@@ -110,7 +115,11 @@ export function WorkflowAutomation() {
   const [automationStatus, setAutomationStatus] = useState(null);
   const [automationJobs, setAutomationJobs] = useState([]);
   const [automationHistory, setAutomationHistory] = useState(fallbackHistory);
+<<<<<<< HEAD
   const [workflowDefinitions, setWorkflowDefinitions] = useState(workflowTemplates);
+=======
+  const [savedTemplates, setSavedTemplates] = useState([]);
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
   const [workflowRuns, setWorkflowRuns] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(workflowTemplates[0]);
   const [selectedScheduler, setSelectedScheduler] = useState("Hourly");
@@ -119,6 +128,7 @@ export function WorkflowAutomation() {
   );
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState("-");
 
@@ -156,6 +166,7 @@ export function WorkflowAutomation() {
         statusResult,
         jobsResult,
         historyResult,
+<<<<<<< HEAD
         automationDefinitionsResult,
         workflowDefinitionsResult,
         automationRunsResult,
@@ -170,6 +181,19 @@ export function WorkflowAutomation() {
         api.getAutomationRuns(),
         api.getWorkflowRuns(),
       ]);
+=======
+        templatesResult,
+        runsResult,
+      ] =
+        await Promise.allSettled([
+          api.getAutomation(),
+          api.getAutomationStatus(),
+          api.getAutomationJobs(),
+          api.getAutomationHistory(),
+          api.getWorkflowTemplates(),
+          api.getWorkflowRuns(),
+        ]);
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
 
       if (automationResult.status === "fulfilled") {
         setAutomation(automationResult.value || {});
@@ -199,6 +223,7 @@ export function WorkflowAutomation() {
         );
       }
 
+<<<<<<< HEAD
       const durableDefinitions =
         workflowDefinitionsResult.status === "fulfilled" &&
         Array.isArray(workflowDefinitionsResult.value?.data)
@@ -244,6 +269,17 @@ export function WorkflowAutomation() {
           (legacyRun) => !durableRuns.some((durableRun) => durableRun.id === legacyRun.id),
         ),
       ]);
+=======
+      if (templatesResult.status === "fulfilled") {
+        setSavedTemplates(
+          Array.isArray(templatesResult.value?.data) ? templatesResult.value.data : [],
+        );
+      }
+
+      if (runsResult.status === "fulfilled") {
+        setWorkflowRuns(Array.isArray(runsResult.value?.data) ? runsResult.value.data : []);
+      }
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
 
       setLastSync(new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }));
     } catch (loadError) {
@@ -252,6 +288,10 @@ export function WorkflowAutomation() {
       setAutomationStatus(null);
       setAutomationJobs([]);
       setAutomationHistory(fallbackHistory);
+<<<<<<< HEAD
+=======
+      setSavedTemplates([]);
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
       setWorkflowRuns([]);
     } finally {
       setIsLoading(false);
@@ -272,9 +312,15 @@ export function WorkflowAutomation() {
         input: {
           label: template.name,
         },
+<<<<<<< HEAD
       });
       const run = response?.data || response;
       const runStatus = getRunStatus(run) || "created";
+=======
+        templateId: template.id || undefined,
+      });
+      const run = response?.data || response;
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
       const timestamp = new Date().toLocaleTimeString("id-ID", {
         hour: "2-digit",
         minute: "2-digit",
@@ -282,23 +328,39 @@ export function WorkflowAutomation() {
 
       setSelectedTemplate(template);
       setMockRunOutput(
+<<<<<<< HEAD
         `[${timestamp}] Workflow ${runStatus}. ${
           runStatus === "waiting_approval"
+=======
+        `[${timestamp}] Workflow ${run.status}. ${
+          run.status === "waiting_approval"
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
             ? "Human approval required before AI Router execution."
             : "Durable history persisted."
         }`,
       );
+<<<<<<< HEAD
       setWorkflowRuns((current) => [run, ...current.filter((item) => item?.id !== run?.id)].filter(Boolean));
       setAutomationHistory((current) => [
         {
           detail: template.description,
           result: runStatus,
+=======
+      setWorkflowRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
+      setAutomationHistory((current) => [
+        {
+          detail: template.description,
+          result: run.status,
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
           time: timestamp,
           title: template.name,
         },
         ...current,
       ]);
+<<<<<<< HEAD
       await loadWorkflowData();
+=======
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
     } catch (runError) {
       setError(getErrorMessage(runError));
     } finally {
@@ -306,25 +368,38 @@ export function WorkflowAutomation() {
     }
   }
 
+<<<<<<< HEAD
   async function handleApproveRun(run) {
     if (!run?.id) return;
+=======
+  async function handleApproveLatestRun() {
+    const approvalRun = workflowRuns.find((run) => run.status === "waiting_approval");
+
+    if (!approvalRun) return;
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
 
     setIsRunning(true);
     setError("");
 
     try {
+<<<<<<< HEAD
       const response =
         run.definitionId || run.status
           ? await api.approveWorkflowRun(run.id)
           : await api.approveAutomationRun(run.id);
       const approvedRun = response?.data || response;
       const approvedStatus = getRunStatus(approvedRun) || "approved";
+=======
+      const response = await api.approveWorkflowRun(approvalRun.id);
+      const run = response?.data || response;
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
       const timestamp = new Date().toLocaleTimeString("id-ID", {
         hour: "2-digit",
         minute: "2-digit",
       });
 
       setMockRunOutput(
+<<<<<<< HEAD
         `[${timestamp}] Workflow ${approvedStatus}. Provider reached: ${
           approvedRun?.metadata?.providerReached ? "yes" : "no"
         }.`,
@@ -333,6 +408,13 @@ export function WorkflowAutomation() {
         approvedRun,
         ...current.filter((item) => item?.id !== approvedRun?.id),
       ].filter(Boolean));
+=======
+        `[${timestamp}] Workflow ${run.status}. Provider reached: ${
+          run.metadata?.providerReached ? "yes" : "no"
+        }.`,
+      );
+      setWorkflowRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
       await loadWorkflowData();
     } catch (approvalError) {
       setError(getErrorMessage(approvalError));
@@ -341,6 +423,7 @@ export function WorkflowAutomation() {
     }
   }
 
+<<<<<<< HEAD
   async function handleCancelRun(run) {
     if (!run?.id) return;
 
@@ -365,10 +448,67 @@ export function WorkflowAutomation() {
       setError(getErrorMessage(cancelError));
     } finally {
       setIsRunning(false);
+=======
+  async function handleSaveTemplate() {
+    setIsSavingTemplate(true);
+    setError("");
+
+    try {
+      const payload = {
+        action: selectedTemplate.action,
+        definitionId: selectedTemplate.definitionId || "telemetry_sync",
+        description: selectedTemplate.description,
+        name: selectedTemplate.name,
+        schedule: selectedScheduler,
+        trigger: selectedTemplate.trigger,
+      };
+      const existing = selectedTemplate.id
+        ? savedTemplates.find((template) => template.id === selectedTemplate.id)
+        : null;
+      const response = existing
+        ? await api.updateWorkflowTemplate(existing.id, payload)
+        : await api.createWorkflowTemplate(payload);
+      const saved = response?.data || response;
+
+      setSavedTemplates((current) => [
+        saved,
+        ...current.filter((template) => template.id !== saved.id),
+      ]);
+      setSelectedTemplate(saved);
+      setMockRunOutput(`Template saved: ${saved.name}. Loading it will not execute a run.`);
+    } catch (saveError) {
+      setError(getErrorMessage(saveError));
+    } finally {
+      setIsSavingTemplate(false);
+    }
+  }
+
+  function handleLoadSavedTemplate(template) {
+    setSelectedTemplate(template);
+    setSelectedScheduler(template.schedule || "Manual");
+    setMockRunOutput(`Template loaded: ${template.name}. No workflow run was executed.`);
+  }
+
+  async function handleDeleteTemplate(template) {
+    setError("");
+
+    try {
+      await api.deleteWorkflowTemplate(template.id);
+      setSavedTemplates((current) =>
+        current.filter((item) => item.id !== template.id),
+      );
+
+      if (selectedTemplate.id === template.id) {
+        setSelectedTemplate(workflowTemplates[0]);
+      }
+    } catch (deleteError) {
+      setError(getErrorMessage(deleteError));
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
     }
   }
 
   const automationScore = automationStatus?.automationScore || automationStatus?.score || 0;
+  const pendingApprovalRun = workflowRuns.find((run) => run.status === "waiting_approval");
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -407,7 +547,11 @@ export function WorkflowAutomation() {
             <button
               className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#f1c36f]/30 bg-[#f1c36f]/15 px-4 py-3 text-sm font-black text-[#f1c36f] hover:bg-[#f1c36f]/20 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={isRunning || !pendingApprovalRun}
+<<<<<<< HEAD
               onClick={() => handleApproveRun(pendingApprovalRun)}
+=======
+              onClick={handleApproveLatestRun}
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
               type="button">
               <ShieldCheck size={16} />
               Approve
@@ -435,7 +579,11 @@ export function WorkflowAutomation() {
       )}
 
       <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+<<<<<<< HEAD
         <MetricCard label="Templates" value={workflowDefinitions.length} icon={Workflow} />
+=======
+        <MetricCard label="Templates" value={workflowTemplates.length + savedTemplates.length} icon={Workflow} />
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
         <MetricCard label="Triggers" value={fallbackTriggers.length} icon={TimerReset} />
         <MetricCard label="Actions" value={fallbackActions.length} icon={Play} />
         <MetricCard label="Jobs" value={automationJobs.length || automationHistory.length} icon={Layers3} />
@@ -445,12 +593,24 @@ export function WorkflowAutomation() {
         <aside className="grid gap-4">
           <Panel title="Workflow Templates" kicker="Templates Library" icon={Workflow}>
             <div className="grid gap-3">
+<<<<<<< HEAD
               {workflowDefinitions.map((template) => {
                 const isActive = template.name === selectedTemplate.name;
 
                 return (
                   <button
                     key={`${template.id}-${template.definitionId}`}
+=======
+              {[...workflowTemplates, ...savedTemplates].map((template) => {
+                const templateKey = template.id || template.name;
+                const isActive = template.id
+                  ? template.id === selectedTemplate.id
+                  : template.name === selectedTemplate.name && !selectedTemplate.id;
+
+                return (
+                  <button
+                    key={templateKey}
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
                     className={`rounded-2xl border p-4 text-left transition ${
                       isActive
                         ? "border-cyan-300/30 bg-cyan-300/10"
@@ -478,6 +638,59 @@ export function WorkflowAutomation() {
                   </button>
                 );
               })}
+            </div>
+          </Panel>
+
+          <Panel title="Saved Templates" kicker="Reusable" icon={Save}>
+            <div className="grid gap-3">
+              <button
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/15 px-4 text-sm font-black text-cyan-100 hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isSavingTemplate}
+                onClick={handleSaveTemplate}
+                type="button">
+                <Save size={16} />
+                {selectedTemplate.id ? "Update template" : "Save as template"}
+              </button>
+
+              {isLoading ? (
+                <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-sm font-bold text-slate-400">
+                  Loading saved templates...
+                </p>
+              ) : savedTemplates.length ? (
+                savedTemplates.map((template) => (
+                  <div
+                    key={template.id}
+                    className="rounded-2xl border border-white/10 bg-black/15 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <button
+                        className="min-w-0 text-left"
+                        onClick={() => handleLoadSavedTemplate(template)}
+                        type="button">
+                        <p className="truncate text-sm font-black text-white">
+                          {template.name}
+                        </p>
+                        <p className="mt-1 text-xs uppercase tracking-[0.18em] text-cyan-300">
+                          {template.schedule || "Manual"}
+                        </p>
+                      </button>
+                      <button
+                        className="grid size-9 shrink-0 place-items-center rounded-xl border border-rose-300/25 bg-rose-300/10 text-rose-100 hover:bg-rose-300/15"
+                        onClick={() => handleDeleteTemplate(template)}
+                        title="Delete template"
+                        type="button">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                    <p className="mt-3 text-xs leading-5 text-slate-500">
+                      {template.description || "Reusable workflow template."}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-sm font-bold text-slate-400">
+                  No saved templates yet.
+                </p>
+              )}
             </div>
           </Panel>
 

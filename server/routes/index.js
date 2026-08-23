@@ -6,12 +6,15 @@ const {
   getHealthSnapshot,
 } = require("../services/observability/healthService");
 const {
+<<<<<<< HEAD
   getOperationalIntelligence,
 } = require("../services/observability/operationalTelemetry");
 const {
   defaultWorkflowEngine,
 } = require("../services/automation/workflowEngine");
 const {
+=======
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
   getWorkflowPersistenceStatus,
   listRuns: listWorkflowRuns,
 } = require("../services/workflows/workflowRepository");
@@ -1008,6 +1011,7 @@ function mapAutomationHistory(row) {
 }
 
 async function getAutomationHistory(user, limit = 25) {
+<<<<<<< HEAD
   const legacyWorkflowRuns = defaultWorkflowEngine.listRuns(user).map((run) => ({
     createdAt: run.createdAt,
     detail: `${run.completedSteps}/${run.totalSteps} steps completed.`,
@@ -1022,27 +1026,45 @@ async function getAutomationHistory(user, limit = 25) {
 
   try {
     const persistedRuns = await listWorkflowRuns({
+=======
+  try {
+    const workflowRuns = await listWorkflowRuns({
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
       limit,
       ownerId: getAuthUserId(user),
     });
 
+<<<<<<< HEAD
     workflowRuns = persistedRuns.map((run) => ({
         createdAt: run.createdAt,
         detail: `Workflow ${run.definitionId} is ${run.status}.`,
+=======
+    if (workflowRuns.length) {
+      return workflowRuns.map((run) => ({
+        createdAt: run.createdAt,
+        detail: `Workflow ${run.metadata?.templateName || run.definitionId} is ${run.status}.`,
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
         id: run.id,
         jobId: run.definitionId,
         result: run.status,
         status: run.status,
         time: run.createdAt,
+<<<<<<< HEAD
         title: run.definitionId,
         type: "workflow_run",
       }));
+=======
+        title: run.metadata?.templateName || run.definitionId,
+      }));
+    }
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
   } catch (error) {
     console.warn("Workflow automation history unavailable:", {
       code: error.code || null,
     });
   }
 
+<<<<<<< HEAD
   const mergedWorkflowRuns = [
     ...workflowRuns,
     ...legacyWorkflowRuns.filter(
@@ -1052,6 +1074,9 @@ async function getAutomationHistory(user, limit = 25) {
   ];
 
   if (!supabase) return mergedWorkflowRuns.slice(0, limit);
+=======
+  if (!supabase) return [];
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
 
   const { data, error } = await supabase
     .from("orbit_audit_reports")

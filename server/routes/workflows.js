@@ -7,11 +7,26 @@ const {
   createWorkflowRun,
 } = require("../services/workflows/workflowEngine");
 const {
+<<<<<<< HEAD
   getWorkflowDefinitions,
 } = require("../services/workflows/workflowDefinitions");
 const {
   getRun,
   listRuns,
+=======
+  assertAllowedWorkflowDefinition,
+  getWorkflowDefinition,
+  getWorkflowDefinitions,
+} = require("../services/workflows/workflowDefinitions");
+const {
+  createTemplate,
+  deleteTemplate,
+  getRun,
+  getTemplate,
+  listRuns,
+  listTemplates,
+  updateTemplate,
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
 } = require("../services/workflows/workflowRepository");
 
 const router = express.Router();
@@ -34,6 +49,15 @@ function sendWorkflowError(res, error) {
   });
 }
 
+<<<<<<< HEAD
+=======
+function assertTemplateDefinition(input) {
+  const definition = getWorkflowDefinition(input?.definitionId || input?.definition_id);
+
+  assertAllowedWorkflowDefinition(definition);
+}
+
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
 router.use(requireAuth);
 
 router.get("/definitions", (req, res) => {
@@ -43,6 +67,108 @@ router.get("/definitions", (req, res) => {
   });
 });
 
+<<<<<<< HEAD
+=======
+router.get("/templates", async (req, res) => {
+  try {
+    const templates = await listTemplates({ ownerId: getOwnerId(req) });
+
+    return res.json({
+      success: true,
+      data: templates,
+    });
+  } catch (error) {
+    return sendWorkflowError(res, error);
+  }
+});
+
+router.post("/templates", async (req, res) => {
+  try {
+    assertTemplateDefinition(req.body);
+    const template = await createTemplate({
+      input: req.body,
+      ownerId: getOwnerId(req),
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: template,
+      message: "Workflow template saved.",
+    });
+  } catch (error) {
+    return sendWorkflowError(res, error);
+  }
+});
+
+router.get("/templates/:id", async (req, res) => {
+  try {
+    const template = await getTemplate({
+      ownerId: getOwnerId(req),
+      templateId: req.params.id,
+    });
+
+    if (!template) {
+      return res.status(404).json({
+        success: false,
+        code: "WORKFLOW_TEMPLATE_NOT_FOUND",
+        message: "Workflow template tidak ditemukan.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: template,
+    });
+  } catch (error) {
+    return sendWorkflowError(res, error);
+  }
+});
+
+router.put("/templates/:id", async (req, res) => {
+  try {
+    assertTemplateDefinition(req.body);
+    const template = await updateTemplate({
+      input: req.body,
+      ownerId: getOwnerId(req),
+      templateId: req.params.id,
+    });
+
+    return res.json({
+      success: true,
+      data: template,
+      message: "Workflow template updated.",
+    });
+  } catch (error) {
+    return sendWorkflowError(res, error);
+  }
+});
+
+router.delete("/templates/:id", async (req, res) => {
+  try {
+    const deleted = await deleteTemplate({
+      ownerId: getOwnerId(req),
+      templateId: req.params.id,
+    });
+
+    if (!deleted) {
+      return res.status(404).json({
+        success: false,
+        code: "WORKFLOW_TEMPLATE_NOT_FOUND",
+        message: "Workflow template tidak ditemukan.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: { id: req.params.id },
+      message: "Workflow template deleted.",
+    });
+  } catch (error) {
+    return sendWorkflowError(res, error);
+  }
+});
+
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
 router.get("/runs", async (req, res) => {
   try {
     const runs = await listRuns({
@@ -66,6 +192,10 @@ router.post("/runs", async (req, res) => {
       input: req.body?.input,
       ownerId: getOwnerId(req),
       requestId: createRequestId(req),
+<<<<<<< HEAD
+=======
+      templateId: req.body?.templateId,
+>>>>>>> 0a5482c (feat: add reusable workflow templates)
     });
 
     return res.status(201).json({
