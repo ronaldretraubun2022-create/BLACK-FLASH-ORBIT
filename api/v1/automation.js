@@ -3,6 +3,9 @@ const {
   sendJson,
   withTelemetryAuth,
 } = require("../../server/lib/orbitDashboardTelemetry");
+const {
+  defaultWorkflowEngine,
+} = require("../../server/services/automation/workflowEngine");
 
 module.exports = withTelemetryAuth(function handler(req, res) {
   const engines = getOrbitAutomation();
@@ -18,5 +21,7 @@ module.exports = withTelemetryAuth(function handler(req, res) {
     },
     message: "Automation telemetry ready.",
     timestamp: new Date().toISOString(),
+    workflow: defaultWorkflowEngine.getSnapshot(),
+    workflowDefinitions: defaultWorkflowEngine.listDefinitions(),
   });
 });

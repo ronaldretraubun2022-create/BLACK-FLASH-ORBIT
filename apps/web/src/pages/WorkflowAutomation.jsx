@@ -16,18 +16,21 @@ const workflowTemplates = [
   {
     action: "Publish release manifest",
     description: "Validasi manifest, build status, dan export package sebelum publish.",
+    id: "security-sweep",
     name: "Release Gate",
     trigger: "On build PASS",
   },
   {
     action: "Refresh telemetry snapshot",
     description: "Tarik status automation, health, dan history untuk dashboard.",
+    id: "telemetry-sync",
     name: "Telemetry Sync",
     trigger: "Every 15 minutes",
   },
   {
     action: "Run security checklist",
     description: "Mock audit terhadap env, route, dan readiness checklist.",
+    id: "security-sweep",
     name: "Security Sweep",
     trigger: "Manual /security",
   },
@@ -79,10 +82,12 @@ export function WorkflowAutomation() {
   const [automationStatus, setAutomationStatus] = useState(null);
   const [automationJobs, setAutomationJobs] = useState([]);
   const [automationHistory, setAutomationHistory] = useState(fallbackHistory);
+  const [workflowDefinitions, setWorkflowDefinitions] = useState(workflowTemplates);
+  const [workflowRuns, setWorkflowRuns] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(workflowTemplates[0]);
   const [selectedScheduler, setSelectedScheduler] = useState("Hourly");
   const [mockRunOutput, setMockRunOutput] = useState(
-    "Safe mock run output will appear here.",
+    "Safe workflow run output will appear here.",
   );
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
@@ -90,6 +95,10 @@ export function WorkflowAutomation() {
   const [lastSync, setLastSync] = useState("-");
 
   const automationEntries = useMemo(() => Object.entries(automation), [automation]);
+  const selectedRun = useMemo(
+    () => workflowRuns.find((run) => run.workflowId === selectedTemplate.id),
+    [selectedTemplate.id, workflowRuns],
+  );
   const nextRunLabel = useMemo(() => {
     if (selectedScheduler === "Manual") return "Manual trigger only";
     if (selectedScheduler === "Every 15m") return "Next run in 15m";
@@ -102,12 +111,21 @@ export function WorkflowAutomation() {
     setError("");
 
     try {
-      const [automationResult, statusResult, jobsResult, historyResult] =
+      const [
+        automationResult,
+        statusResult,
+        jobsResult,
+        historyResult,
+        definitionsResult,
+        runsResult,
+      ] =
         await Promise.allSettled([
           api.getAutomation(),
           api.getAutomationStatus(),
           api.getAutomationJobs(),
           api.getAutomationHistory(),
+          api.getAutomationDefinitions(),
+          api.getAutomationRuns(),
         ]);
 
       if (automationResult.status === "fulfilled") {
@@ -138,6 +156,31 @@ export function WorkflowAutomation() {
         );
       }
 
+      if (definitionsResult.status === "fulfilled") {
+        const definitions = Array.isArray(definitionsResult.value?.data)
+          ? definitionsResult.value.data
+          : [];
+        const mappedDefinitions = definitions.map((definition) => ({
+          action: definition.requiresApproval ? "Requires approval" : "Safe execution",
+          description: definition.description,
+          id: definition.id,
+          name: definition.name,
+          trigger: "Manual",
+        }));
+
+        if (mappedDefinitions.length) {
+          setWorkflowDefinitions(mappedDefinitions);
+          setSelectedTemplate((current) =>
+            mappedDefinitions.find((item) => item.id === current.id) ||
+            mappedDefinitions[0],
+          );
+        }
+      }
+
+      if (runsResult.status === "fulfilled") {
+        setWorkflowRuns(Array.isArray(runsResult.value?.data) ? runsResult.value.data : []);
+      }
+
       setLastSync(new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }));
     } catch (loadError) {
       setError(getErrorMessage(loadError));
@@ -154,11 +197,16 @@ export function WorkflowAutomation() {
     loadWorkflowData();
   }, []);
 
-  function handleRunTemplate(template) {
+  async function handleRunTemplate(template) {
     setIsRunning(true);
     setError("");
 
-    window.setTimeout(() => {
+    try {
+      const result = await api.createAutomationRun({
+        input: template.id === "ai-operations-brief" ? { topic: template.name } : {},
+        workflowId: template.id,
+      });
+      const run = result?.data;
       const timestamp = new Date().toLocaleTimeString("id-ID", {
         hour: "2-digit",
         minute: "2-digit",
@@ -166,19 +214,56 @@ export function WorkflowAutomation() {
 
       setSelectedTemplate(template);
       setMockRunOutput(
-        `[${timestamp}] Mock run executed for ${template.name}. No backend side effects were triggered.`,
+        `[${timestamp}] Run ${run?.state || "created"} for ${template.name}. ${run?.completedSteps || 0}/${run?.totalSteps || 0} steps completed.`,
       );
+      setWorkflowRuns((current) => [run, ...current.filter((item) => item?.id !== run?.id)].filter(Boolean));
       setAutomationHistory((current) => [
         {
           detail: template.description,
-          result: "Mocked",
+          result: run?.state || "Created",
           time: timestamp,
           title: template.name,
         },
         ...current,
       ]);
+      await loadWorkflowData();
+    } catch (runError) {
+      setError(getErrorMessage(runError));
+    } finally {
       setIsRunning(false);
-    }, 450);
+    }
+  }
+
+  async function handleApproveRun(run) {
+    if (!run?.id) return;
+    setIsRunning(true);
+    setError("");
+
+    try {
+      const result = await api.approveAutomationRun(run.id);
+      setMockRunOutput(`Run ${result?.data?.state || "approved"} after human approval.`);
+      await loadWorkflowData();
+    } catch (approvalError) {
+      setError(getErrorMessage(approvalError));
+    } finally {
+      setIsRunning(false);
+    }
+  }
+
+  async function handleCancelRun(run) {
+    if (!run?.id) return;
+    setIsRunning(true);
+    setError("");
+
+    try {
+      const result = await api.cancelAutomationRun(run.id);
+      setMockRunOutput(`Run ${result?.data?.state || "cancelled"}.`);
+      await loadWorkflowData();
+    } catch (cancelError) {
+      setError(getErrorMessage(cancelError));
+    } finally {
+      setIsRunning(false);
+    }
   }
 
   const automationScore = automationStatus?.automationScore || automationStatus?.score || 0;
@@ -196,7 +281,7 @@ export function WorkflowAutomation() {
             </h2>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base sm:leading-7">
               Dashboard automation visual untuk template workflow, trigger/action,
-              pipeline step, scheduler, execution history, dan mock run output.
+              pipeline step, scheduler, execution history, dan safe run output.
             </p>
           </div>
 
@@ -215,7 +300,7 @@ export function WorkflowAutomation() {
               onClick={() => handleRunTemplate(selectedTemplate)}
               type="button">
               <Play size={16} />
-              {isRunning ? "Running..." : "Run Mock"}
+              {isRunning ? "Running..." : "Run"}
             </button>
           </div>
         </div>
@@ -240,7 +325,7 @@ export function WorkflowAutomation() {
       )}
 
       <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Templates" value={workflowTemplates.length} icon={Workflow} />
+        <MetricCard label="Templates" value={workflowDefinitions.length} icon={Workflow} />
         <MetricCard label="Triggers" value={fallbackTriggers.length} icon={TimerReset} />
         <MetricCard label="Actions" value={fallbackActions.length} icon={Play} />
         <MetricCard label="Jobs" value={automationJobs.length || automationHistory.length} icon={Layers3} />
@@ -250,7 +335,7 @@ export function WorkflowAutomation() {
         <aside className="grid gap-4">
           <Panel title="Workflow Templates" kicker="Templates Library" icon={Workflow}>
             <div className="grid gap-3">
-              {workflowTemplates.map((template) => {
+              {workflowDefinitions.map((template) => {
                 const isActive = template.name === selectedTemplate.name;
 
                 return (
@@ -318,7 +403,7 @@ export function WorkflowAutomation() {
             </div>
           </Panel>
 
-          <Panel title="Mock Run Output" kicker="Safe Execution Result" icon={CheckCircle2}>
+          <Panel title="Run Output" kicker="Safe Execution Result" icon={CheckCircle2}>
             <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4">
               <p className="text-xs uppercase tracking-[0.25em] text-cyan-300">
                 {selectedTemplate.name}
@@ -327,6 +412,26 @@ export function WorkflowAutomation() {
                 {mockRunOutput}
               </p>
             </div>
+
+            {selectedRun?.state === "waiting_approval" && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300/30 bg-emerald-300/15 px-4 py-3 text-sm font-black text-emerald-100 hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={isRunning}
+                  onClick={() => handleApproveRun(selectedRun)}
+                  type="button">
+                  <CheckCircle2 size={16} />
+                  Approve
+                </button>
+                <button
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300/30 bg-rose-300/10 px-4 py-3 text-sm font-black text-rose-100 hover:bg-rose-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={isRunning}
+                  onClick={() => handleCancelRun(selectedRun)}
+                  type="button">
+                  Cancel
+                </button>
+              </div>
+            )}
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <div className="rounded-2xl border border-white/10 bg-black/15 p-4">

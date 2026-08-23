@@ -302,6 +302,12 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
 
   const telemetryLabels = [
     {
+      label: "Auth Session",
+      value:
+        dashboardData?.operationalIntelligence?.authSession?.session ||
+        "not reported",
+    },
+    {
       label: "Runtime",
       value: dashboardData?.system?.runtime || "not reported",
     },
@@ -314,6 +320,12 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       value: dashboardData?.metrics?.timestamp
         ? formatTime(dashboardData.metrics.timestamp, "not reported")
         : "not reported",
+    },
+    {
+      label: "Workflow",
+      value:
+        dashboardData?.operationalIntelligence?.workflow?.status ||
+        "not reported",
     },
   ];
 
@@ -332,6 +344,9 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       ? dashboardData.projects
       : [];
     const security = dashboardData?.security ?? {};
+    const operational = dashboardData?.operationalIntelligence ?? {};
+    const aiChat = operational?.aiChat ?? {};
+    const workflow = operational?.workflow ?? {};
     const activity = Array.isArray(dashboardData?.activity)
       ? dashboardData.activity
       : [];
@@ -347,9 +362,16 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       dashboardStats: [
         {
           ...commandStats[0],
-          value: formatMetric(reportCount, commandStats[0].value),
+          value: formatMetric(
+            workflow.total ?? aiChat.total ?? reportCount,
+            commandStats[0].value,
+          ),
           detail:
-            reportCount === null || reportCount === undefined
+            workflow.total !== null && workflow.total !== undefined
+              ? "workflow events"
+              : aiChat.total !== null && aiChat.total !== undefined
+                ? "ai chats observed"
+                : reportCount === null || reportCount === undefined
               ? commandStats[0].detail
               : "reports tracked",
         },
@@ -410,11 +432,17 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       securityItems: [
         {
           ...securitySignals[0],
-          value: security?.helmet || securitySignals[0].value,
+          value:
+            operational?.authSession?.authenticated === true
+              ? "session validated"
+              : security?.helmet || securitySignals[0].value,
         },
         {
           ...securitySignals[1],
-          value: security?.rateLimit || securitySignals[1].value,
+          value:
+            workflow.waitingApproval > 0
+              ? `${workflow.waitingApproval} approval gate(s)`
+              : security?.rateLimit || securitySignals[1].value,
         },
         {
           ...securitySignals[2],
@@ -430,6 +458,20 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
   }, [dashboardData, hasActivity, hasProjects, isTelemetryConnected]);
 
   const moduleItems = useMemo(() => {
+    const moduleHealth = Array.isArray(
+      dashboardData?.operationalIntelligence?.moduleHealth,
+    )
+      ? dashboardData.operationalIntelligence.moduleHealth
+      : [];
+
+    if (moduleHealth.length) {
+      return moduleHealth.slice(0, 4).map((module, index) => ({
+        name: module?.module || aiModules[index]?.name || "Runtime Module",
+        icon: aiModules[index]?.icon || Bot,
+        state: module?.status || aiModules[index]?.state || "Ready",
+      }));
+    }
+
     if (!automationItems.length) return aiModules;
 
     return automationItems.slice(0, 4).map((engine, index) => ({
@@ -437,7 +479,7 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       icon: aiModules[index]?.icon || Bot,
       state: engine?.status || aiModules[index]?.state || "Ready",
     }));
-  }, [automationItems]);
+  }, [automationItems, dashboardData?.operationalIntelligence?.moduleHealth]);
 
   const displayedModuleItems = useMemo(() => {
     if (hasAutomation) return moduleItems;

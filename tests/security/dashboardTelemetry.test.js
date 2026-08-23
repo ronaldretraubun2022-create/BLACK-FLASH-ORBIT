@@ -295,11 +295,13 @@ test("createDashboardResponse returns Command Center data structure", () => {
   assert.strictEqual(response.success, true);
   assert.strictEqual(response.data.health.module, "health");
   assert.ok(response.data.system.runtime);
+  assert.strictEqual(response.data.operationalIntelligence.workflow.status, "ready");
   assert.deepStrictEqual(Object.keys(response.data).sort(), [
     "activity",
     "automation",
     "health",
     "metrics",
+    "operationalIntelligence",
     "projects",
     "security",
     "system",

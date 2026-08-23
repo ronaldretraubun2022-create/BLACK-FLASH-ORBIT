@@ -5,6 +5,12 @@ const { requireAdmin } = require("../middleware/requireAdmin");
 const {
   getHealthSnapshot,
 } = require("../services/observability/healthService");
+const {
+  getOperationalIntelligence,
+} = require("../services/observability/operationalTelemetry");
+const {
+  defaultWorkflowEngine,
+} = require("../services/automation/workflowEngine");
 
 const router = express.Router();
 const MAX_PROMPT_TITLE_LENGTH = 140;
@@ -917,6 +923,7 @@ function getAutomationStatus(user) {
   const readyEngines = engines.filter((engine) =>
     ["ACTIVE", "ONLINE", "READY", "SYNCED"].includes(engine.status),
   );
+  const workflow = defaultWorkflowEngine.getSnapshot();
 
   return {
     success: true,
@@ -924,6 +931,7 @@ function getAutomationStatus(user) {
     userId: getAuthUserId(user),
     database: supabase ? "CONNECTED" : "NOT_CONFIGURED",
     uptime: process.uptime(),
+    workflow,
     totalEngines: engines.length,
     readyEngines: readyEngines.length,
     timestamp: new Date().toISOString(),
@@ -931,11 +939,29 @@ function getAutomationStatus(user) {
 }
 
 function getAutomationJobs(user) {
-  return automationJobs.map((job) => ({
-    ...job,
-    ownerId: getAuthUserId(user),
-    updatedAt: new Date().toISOString(),
+  const timestamp = new Date().toISOString();
+  const ownerId = getAuthUserId(user);
+  const workflowJobs = defaultWorkflowEngine.listDefinitions().map((definition) => ({
+    id: definition.id,
+    engine: "workflowEngine",
+    name: definition.name,
+    ownerId,
+    requiresApproval: definition.requiresApproval,
+    route: "/api/v1/automation/runs",
+    schedule: "manual",
+    status: "READY",
+    stepCount: definition.stepCount,
+    updatedAt: timestamp,
   }));
+
+  return [
+    ...automationJobs.map((job) => ({
+      ...job,
+      ownerId,
+      updatedAt: timestamp,
+    })),
+    ...workflowJobs,
+  ];
 }
 
 function createModuleResponse({
@@ -970,7 +996,18 @@ function mapAutomationHistory(row) {
 }
 
 async function getAutomationHistory(user, limit = 25) {
-  if (!supabase) return [];
+  const workflowRuns = defaultWorkflowEngine.listRuns(user).map((run) => ({
+    createdAt: run.createdAt,
+    detail: `${run.completedSteps}/${run.totalSteps} steps completed.`,
+    id: run.id,
+    jobId: run.workflowId,
+    result: run.state,
+    status: run.state,
+    title: run.definitionName,
+    type: "workflow_run",
+  }));
+
+  if (!supabase) return workflowRuns.slice(0, limit);
 
   const { data, error } = await supabase
     .from("orbit_audit_reports")
@@ -984,7 +1021,22 @@ async function getAutomationHistory(user, limit = 25) {
     return [];
   }
 
-  return (data || []).map(mapAutomationHistory);
+  return [...workflowRuns, ...(data || []).map(mapAutomationHistory)].slice(0, limit);
+}
+
+function sendWorkflowError(res, error) {
+  const statusCode = error.statusCode || error.status || 500;
+  const safeStatusCode =
+    statusCode >= 400 && statusCode < 600 ? statusCode : 500;
+
+  return res.status(safeStatusCode).json({
+    success: false,
+    code: error.code || "WORKFLOW_REQUEST_FAILED",
+    message:
+      safeStatusCode >= 500
+        ? "Workflow request failed."
+        : error.message || "Workflow request failed.",
+  });
 }
 
 async function updatePrompt(req, res, options = {}) {
@@ -1189,6 +1241,7 @@ router.get("/dashboard/status", async (req, res) => {
         timestamp,
         uptime: process.uptime(),
       },
+      operationalIntelligence: getOperationalIntelligence({ user: req.user }),
       projects,
       security: {
         securityScore: 94,
@@ -1213,6 +1266,7 @@ router.get("/dashboard/status", async (req, res) => {
       reports: reports.length,
       uptime: process.uptime(),
     },
+    timestamp,
   });
 });
 
@@ -1231,6 +1285,7 @@ router.get("/dashboard", async (req, res) => {
         activity,
         automation: getAutomationEngines(),
         health,
+        operationalIntelligence: getOperationalIntelligence({ user: req.user }),
         projects,
         system: {
           status: "online",
@@ -1840,6 +1895,8 @@ router.get("/automation", (req, res) => {
       },
       extra: {
         engines,
+        workflow: defaultWorkflowEngine.getSnapshot(),
+        workflowDefinitions: defaultWorkflowEngine.listDefinitions(),
       },
     }),
   );
@@ -1856,6 +1913,13 @@ router.get("/automation/jobs", requireAuth, (req, res) => {
   });
 });
 
+router.get("/automation/definitions", requireAuth, (req, res) => {
+  res.json({
+    success: true,
+    data: defaultWorkflowEngine.listDefinitions(),
+  });
+});
+
 router.get("/automation/history", requireAuth, async (req, res) => {
   const history = await getAutomationHistory(req.user);
 
@@ -1863,6 +1927,71 @@ router.get("/automation/history", requireAuth, async (req, res) => {
     success: true,
     data: history,
   });
+});
+
+router.get("/automation/runs", requireAuth, (req, res) => {
+  res.json({
+    success: true,
+    data: defaultWorkflowEngine.listRuns(req.user),
+  });
+});
+
+router.get("/automation/runs/:id", requireAuth, (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      data: defaultWorkflowEngine.getOwnedRun(req.params.id, req.user),
+    });
+  } catch (error) {
+    return sendWorkflowError(res, error);
+  }
+});
+
+router.post("/automation/runs", requireAuth, async (req, res) => {
+  try {
+    const run = await defaultWorkflowEngine.startRun({
+      input: req.body?.input || {},
+      user: req.user,
+      workflowId: req.body?.workflowId || req.body?.workflow_id,
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: run,
+    });
+  } catch (error) {
+    return sendWorkflowError(res, error);
+  }
+});
+
+router.post("/automation/runs/:id/approve", requireAuth, async (req, res) => {
+  try {
+    const run = await defaultWorkflowEngine.approveRun({
+      runId: req.params.id,
+      user: req.user,
+    });
+
+    return res.json({
+      success: true,
+      data: run,
+    });
+  } catch (error) {
+    return sendWorkflowError(res, error);
+  }
+});
+
+router.post("/automation/runs/:id/cancel", requireAuth, (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      data: defaultWorkflowEngine.cancelRun({
+        runId: req.params.id,
+        user: req.user,
+      }),
+    });
+  } catch (error) {
+    return sendWorkflowError(res, error);
+  }
 });
 
 router.get("/workspace", (req, res) => {
