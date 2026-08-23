@@ -6,6 +6,7 @@ require("./frontendApiStartup.test.js");
 require("./dashboardTelemetry.test.js");
 require("./vercelDeployment.test.js");
 require("./workflowAutomation.test.js");
+require("./workflowPersistence.test.js");
 require("./aiResponseValidator.test.js");
 require("./frontendMockHygiene.test.js");
 require("./aiRouter.test.js");

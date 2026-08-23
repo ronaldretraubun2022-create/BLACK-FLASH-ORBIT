@@ -967,14 +967,34 @@ export const api = {
     });
   },
 
+  async getWorkflowDefinitions() {
+    return request("/api/v1/workflows/definitions", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
   async getAutomationRuns() {
     return request("/api/v1/automation/runs", {
       headers: await getAuthenticatedHeaders(),
     });
   },
 
+  async getWorkflowRuns() {
+    return request("/api/v1/workflows/runs", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
   async createAutomationRun(payload) {
     return request("/api/v1/automation/runs", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async createWorkflowRun(payload) {
+    return request("/api/v1/workflows/runs", {
       method: "POST",
       headers: await getAuthenticatedHeaders(),
       body: JSON.stringify(payload),
@@ -988,11 +1008,29 @@ export const api = {
     });
   },
 
+  async approveWorkflowRun(id) {
+    return request(`/api/v1/workflows/runs/${encodeURIComponent(id)}/approve`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
   async cancelAutomationRun(id) {
     return request(`/api/v1/automation/runs/${encodeURIComponent(id)}/cancel`, {
       method: "POST",
       headers: await getAuthenticatedHeaders(),
     });
+  },
+
+  async cancelWorkflowRun(id) {
+    return request(`/api/v1/workflows/runs/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async getReadiness() {
+    return request("/api/v1/readiness");
   },
 
   async getCommandCenter() {

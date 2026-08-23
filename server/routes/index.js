@@ -11,6 +11,10 @@ const {
 const {
   defaultWorkflowEngine,
 } = require("../services/automation/workflowEngine");
+const {
+  getWorkflowPersistenceStatus,
+  listRuns: listWorkflowRuns,
+} = require("../services/workflows/workflowRepository");
 
 const router = express.Router();
 const MAX_PROMPT_TITLE_LENGTH = 140;
@@ -915,11 +919,18 @@ async function getProfile(user) {
 }
 
 function getAutomationEngines() {
-  return automationEngines;
+  return {
+    ...automationEngines,
+    workflowHistory: {
+      name: "Workflow History",
+      status: getWorkflowPersistenceStatus().configured ? "READY" : "DEGRADED",
+      description: "Persist owner-scoped workflow runs, approvals, and audit events.",
+    },
+  };
 }
 
 function getAutomationStatus(user) {
-  const engines = Object.values(automationEngines);
+  const engines = Object.values(getAutomationEngines());
   const readyEngines = engines.filter((engine) =>
     ["ACTIVE", "ONLINE", "READY", "SYNCED"].includes(engine.status),
   );
@@ -930,6 +941,7 @@ function getAutomationStatus(user) {
     status: readyEngines.length === engines.length ? "READY" : "DEGRADED",
     userId: getAuthUserId(user),
     database: supabase ? "CONNECTED" : "NOT_CONFIGURED",
+    workflowPersistence: getWorkflowPersistenceStatus(),
     uptime: process.uptime(),
     workflow,
     totalEngines: engines.length,
@@ -996,7 +1008,7 @@ function mapAutomationHistory(row) {
 }
 
 async function getAutomationHistory(user, limit = 25) {
-  const workflowRuns = defaultWorkflowEngine.listRuns(user).map((run) => ({
+  const legacyWorkflowRuns = defaultWorkflowEngine.listRuns(user).map((run) => ({
     createdAt: run.createdAt,
     detail: `${run.completedSteps}/${run.totalSteps} steps completed.`,
     id: run.id,
@@ -1006,8 +1018,40 @@ async function getAutomationHistory(user, limit = 25) {
     title: run.definitionName,
     type: "workflow_run",
   }));
+  let workflowRuns = [];
 
-  if (!supabase) return workflowRuns.slice(0, limit);
+  try {
+    const persistedRuns = await listWorkflowRuns({
+      limit,
+      ownerId: getAuthUserId(user),
+    });
+
+    workflowRuns = persistedRuns.map((run) => ({
+        createdAt: run.createdAt,
+        detail: `Workflow ${run.definitionId} is ${run.status}.`,
+        id: run.id,
+        jobId: run.definitionId,
+        result: run.status,
+        status: run.status,
+        time: run.createdAt,
+        title: run.definitionId,
+        type: "workflow_run",
+      }));
+  } catch (error) {
+    console.warn("Workflow automation history unavailable:", {
+      code: error.code || null,
+    });
+  }
+
+  const mergedWorkflowRuns = [
+    ...workflowRuns,
+    ...legacyWorkflowRuns.filter(
+      (legacyRun) =>
+        !workflowRuns.some((persistedRun) => persistedRun.id === legacyRun.id),
+    ),
+  ];
+
+  if (!supabase) return mergedWorkflowRuns.slice(0, limit);
 
   const { data, error } = await supabase
     .from("orbit_audit_reports")
@@ -1021,7 +1065,7 @@ async function getAutomationHistory(user, limit = 25) {
     return [];
   }
 
-  return [...workflowRuns, ...(data || []).map(mapAutomationHistory)].slice(0, limit);
+  return [...mergedWorkflowRuns, ...(data || []).map(mapAutomationHistory)].slice(0, limit);
 }
 
 function sendWorkflowError(res, error) {

@@ -5,6 +5,9 @@ const {
 const {
   getOperationalIntelligence,
 } = require("../services/observability/operationalTelemetry");
+const {
+  getWorkflowPersistenceStatus,
+} = require("../services/workflows/workflowRepository");
 
 const SERVICE_NAME = "BLACK FLASH ORBIT API";
 const API_VERSION = "v1";
@@ -66,6 +69,11 @@ const automationEngines = {
     name: "Deploy Pipeline",
     status: "READY",
     description: "Prepare validated production builds for controlled release.",
+  },
+  workflowHistory: {
+    name: "Workflow History",
+    status: getWorkflowPersistenceStatus().configured ? "READY" : "DEGRADED",
+    description: "Persist owner-scoped workflow runs, approvals, and audit events.",
   },
 };
 
