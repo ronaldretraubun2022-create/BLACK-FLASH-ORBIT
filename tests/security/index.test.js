@@ -4,13 +4,10 @@ require("./knowledgeRls.test.js");
 require("./frontendApiUrl.test.js");
 require("./frontendApiStartup.test.js");
 require("./dashboardTelemetry.test.js");
-<<<<<<< HEAD
 require("./vercelDeployment.test.js");
 require("./workflowAutomation.test.js");
 require("./workflowPersistence.test.js");
-=======
 require("./workflowTemplates.test.js");
->>>>>>> 0a5482c (feat: add reusable workflow templates)
 require("./aiResponseValidator.test.js");
 require("./frontendMockHygiene.test.js");
 require("./aiRouter.test.js");

@@ -7,13 +7,6 @@ const {
   createWorkflowRun,
 } = require("../services/workflows/workflowEngine");
 const {
-<<<<<<< HEAD
-  getWorkflowDefinitions,
-} = require("../services/workflows/workflowDefinitions");
-const {
-  getRun,
-  listRuns,
-=======
   assertAllowedWorkflowDefinition,
   getWorkflowDefinition,
   getWorkflowDefinitions,
@@ -26,7 +19,6 @@ const {
   listRuns,
   listTemplates,
   updateTemplate,
->>>>>>> 0a5482c (feat: add reusable workflow templates)
 } = require("../services/workflows/workflowRepository");
 
 const router = express.Router();
@@ -49,15 +41,12 @@ function sendWorkflowError(res, error) {
   });
 }
 
-<<<<<<< HEAD
-=======
 function assertTemplateDefinition(input) {
   const definition = getWorkflowDefinition(input?.definitionId || input?.definition_id);
 
   assertAllowedWorkflowDefinition(definition);
 }
 
->>>>>>> 0a5482c (feat: add reusable workflow templates)
 router.use(requireAuth);
 
 router.get("/definitions", (req, res) => {
@@ -67,8 +56,6 @@ router.get("/definitions", (req, res) => {
   });
 });
 
-<<<<<<< HEAD
-=======
 router.get("/templates", async (req, res) => {
   try {
     const templates = await listTemplates({ ownerId: getOwnerId(req) });
@@ -168,7 +155,6 @@ router.delete("/templates/:id", async (req, res) => {
   }
 });
 
->>>>>>> 0a5482c (feat: add reusable workflow templates)
 router.get("/runs", async (req, res) => {
   try {
     const runs = await listRuns({
@@ -192,10 +178,7 @@ router.post("/runs", async (req, res) => {
       input: req.body?.input,
       ownerId: getOwnerId(req),
       requestId: createRequestId(req),
-<<<<<<< HEAD
-=======
       templateId: req.body?.templateId,
->>>>>>> 0a5482c (feat: add reusable workflow templates)
     });
 
     return res.status(201).json({

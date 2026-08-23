@@ -3,12 +3,9 @@ const {
   getHealthSnapshot,
 } = require("../services/observability/healthService");
 const {
-<<<<<<< HEAD
   getOperationalIntelligence,
 } = require("../services/observability/operationalTelemetry");
 const {
-=======
->>>>>>> 0a5482c (feat: add reusable workflow templates)
   getWorkflowPersistenceStatus,
 } = require("../services/workflows/workflowRepository");
 
@@ -73,17 +70,15 @@ const automationEngines = {
     status: "READY",
     description: "Prepare validated production builds for controlled release.",
   },
-<<<<<<< HEAD
   workflowHistory: {
     name: "Workflow History",
     status: getWorkflowPersistenceStatus().configured ? "READY" : "DEGRADED",
     description: "Persist owner-scoped workflow runs, approvals, and audit events.",
-=======
+  },
   workflowTemplates: {
     name: "Workflow Templates",
     status: getWorkflowPersistenceStatus().configured ? "READY" : "DEGRADED",
     description: "Persist owner-scoped reusable workflow templates.",
->>>>>>> 0a5482c (feat: add reusable workflow templates)
   },
 };
 

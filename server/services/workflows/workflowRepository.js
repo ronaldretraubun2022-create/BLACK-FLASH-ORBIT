@@ -2,23 +2,16 @@ const { getSupabaseAdmin, isSupabaseServiceConfigured } = require("../supabaseAd
 const { redactValue, sanitizeScalar } = require("../observability/logger");
 
 const RUN_COLUMNS =
-<<<<<<< HEAD
-  "id, owner_id, definition_id, status, metadata, error_code, error_message, created_at, updated_at, started_at, completed_at";
-=======
   "id, owner_id, definition_id, template_id, status, metadata, error_code, error_message, created_at, updated_at, started_at, completed_at";
->>>>>>> 0a5482c (feat: add reusable workflow templates)
 const STEP_COLUMNS =
   "id, run_id, owner_id, step_id, status, tool, attempts, metadata, error_code, error_message, started_at, completed_at, created_at, updated_at";
 const APPROVAL_COLUMNS =
   "id, run_id, owner_id, step_id, status, approved_by, approved_at, created_at";
-<<<<<<< HEAD
-=======
 const TEMPLATE_COLUMNS =
   "id, owner_id, name, description, definition_id, trigger_label, action_label, schedule, metadata, created_at, updated_at";
 
 const SENSITIVE_TEMPLATE_KEY_PATTERN =
   /(authorization|cookie|password|passwd|secret|token|api[_-]?key|service[_-]?role|access[_-]?key|refresh[_-]?token|prompt|payload|credential)/i;
->>>>>>> 0a5482c (feat: add reusable workflow templates)
 
 function getWorkflowPersistenceStatus() {
   return {
@@ -32,13 +25,8 @@ function getClient() {
 
   if (!client) {
     const error = new Error("Workflow persistence belum dikonfigurasi.");
-<<<<<<< HEAD
-    error.statusCode = 503;
-    error.code = "WORKFLOW_PERSISTENCE_NOT_CONFIGURED";
-=======
     error.code = "WORKFLOW_PERSISTENCE_NOT_CONFIGURED";
     error.statusCode = 503;
->>>>>>> 0a5482c (feat: add reusable workflow templates)
     throw error;
   }
 
@@ -54,11 +42,6 @@ function normalizeLimit(value, fallback = 25) {
 }
 
 function safeMetadata(metadata = {}) {
-<<<<<<< HEAD
-  const redacted = redactValue(metadata || {});
-
-  return JSON.parse(JSON.stringify(redacted || {}));
-=======
   return JSON.parse(JSON.stringify(redactValue(metadata || {}) || {}));
 }
 
@@ -77,8 +60,8 @@ function assertNoSensitiveTemplateFields(value, path = []) {
       if (SENSITIVE_TEMPLATE_KEY_PATTERN.test(key)) {
         const error = new Error("Template workflow memuat field sensitif.");
         error.code = "WORKFLOW_TEMPLATE_SENSITIVE_FIELD";
-        error.statusCode = 400;
         error.field = [...path, key].join(".");
+        error.statusCode = 400;
         throw error;
       }
 
@@ -131,17 +114,13 @@ function normalizeTemplateInput(input = {}) {
     schedule: normalizeText(input.schedule, 80) || "Manual",
     trigger_label: normalizeText(input.trigger || input.triggerLabel || input.trigger_label, 160),
   };
->>>>>>> 0a5482c (feat: add reusable workflow templates)
 }
 
 function mapRun(row, steps = [], approvals = []) {
   if (!row) return null;
 
   return {
-<<<<<<< HEAD
-=======
     approvals: approvals.map(mapApproval),
->>>>>>> 0a5482c (feat: add reusable workflow templates)
     completedAt: row.completed_at || null,
     createdAt: row.created_at || null,
     definitionId: row.definition_id,
@@ -152,15 +131,9 @@ function mapRun(row, steps = [], approvals = []) {
     ownerId: row.owner_id,
     startedAt: row.started_at || null,
     status: row.status,
-<<<<<<< HEAD
-    updatedAt: row.updated_at || null,
-    steps: steps.map(mapStep),
-    approvals: approvals.map(mapApproval),
-=======
     steps: steps.map(mapStep),
     templateId: row.template_id || null,
     updatedAt: row.updated_at || null,
->>>>>>> 0a5482c (feat: add reusable workflow templates)
   };
 }
 
@@ -196,8 +169,6 @@ function mapApproval(row) {
   };
 }
 
-<<<<<<< HEAD
-=======
 function mapTemplate(row) {
   if (!row) return null;
 
@@ -216,28 +187,14 @@ function mapTemplate(row) {
   };
 }
 
->>>>>>> 0a5482c (feat: add reusable workflow templates)
 async function assertNoError(result, code = "WORKFLOW_PERSISTENCE_ERROR") {
   if (!result?.error) return result;
 
   const error = new Error("Workflow persistence gagal.");
-<<<<<<< HEAD
-  error.statusCode = 503;
-=======
->>>>>>> 0a5482c (feat: add reusable workflow templates)
   error.code = code;
   error.safeDetails = {
     dbCode: sanitizeScalar(result.error.code, 80),
   };
-<<<<<<< HEAD
-  throw error;
-}
-
-async function createRunWithSteps({ definition, metadata = {}, ownerId }) {
-  const client = getClient();
-  const startedAt = new Date().toISOString();
-  let run = null;
-=======
   error.statusCode = 503;
 
   if (result.error.code === "23505") {
@@ -252,7 +209,6 @@ async function createRunWithSteps({ definition, metadata = {}, ownerId }) {
 async function createRunWithSteps({ definition, metadata = {}, ownerId, templateId = null }) {
   const client = getClient();
   const startedAt = new Date().toISOString();
->>>>>>> 0a5482c (feat: add reusable workflow templates)
   const runResult = await assertNoError(
     await client
       .from("orbit_workflow_runs")
@@ -262,19 +218,12 @@ async function createRunWithSteps({ definition, metadata = {}, ownerId, template
         owner_id: ownerId,
         started_at: startedAt,
         status: "queued",
-<<<<<<< HEAD
-=======
         template_id: templateId,
->>>>>>> 0a5482c (feat: add reusable workflow templates)
       })
       .select(RUN_COLUMNS)
       .single(),
   );
-<<<<<<< HEAD
-  run = runResult.data;
-=======
   const run = runResult.data;
->>>>>>> 0a5482c (feat: add reusable workflow templates)
   const stepRows = definition.steps.map((step, index) => ({
     attempts: 0,
     metadata: safeMetadata({
@@ -315,11 +264,7 @@ async function createRunWithSteps({ definition, metadata = {}, ownerId, template
 
   await recordAuditEvent({
     eventType: "run_created",
-<<<<<<< HEAD
-    metadata: { definitionId: definition.id },
-=======
     metadata: { definitionId: definition.id, templateId },
->>>>>>> 0a5482c (feat: add reusable workflow templates)
     ownerId,
     runId: run.id,
   });
@@ -376,11 +321,7 @@ async function listRuns({ limit, ownerId }) {
   return (result.data || []).map((row) => mapRun(row));
 }
 
-<<<<<<< HEAD
-async function updateRun({ completed = false, metadata, ownerId, runId, status, error }) {
-=======
 async function updateRun({ completed = false, error, metadata, ownerId, runId, status }) {
->>>>>>> 0a5482c (feat: add reusable workflow templates)
   const client = getClient();
   const patch = {
     status,
@@ -407,11 +348,7 @@ async function updateRun({ completed = false, error, metadata, ownerId, runId, s
   return mapRun(result.data);
 }
 
-<<<<<<< HEAD
-async function updateStep({ attempts, completed = false, metadata, ownerId, runId, status, stepId, error }) {
-=======
 async function updateStep({ attempts, completed = false, error, metadata, ownerId, runId, status, stepId }) {
->>>>>>> 0a5482c (feat: add reusable workflow templates)
   const client = getClient();
   const now = new Date().toISOString();
   const patch = {
@@ -482,8 +419,6 @@ async function recordAuditEvent({ eventType, metadata = {}, ownerId, runId }) {
   );
 }
 
-<<<<<<< HEAD
-=======
 async function listTemplates({ ownerId }) {
   const client = getClient();
   const result = await assertNoError(
@@ -559,7 +494,6 @@ async function deleteTemplate({ ownerId, templateId }) {
   return Boolean(result.data);
 }
 
->>>>>>> 0a5482c (feat: add reusable workflow templates)
 async function checkWorkflowPersistence() {
   if (!isSupabaseServiceConfigured()) {
     return {
@@ -570,26 +504,17 @@ async function checkWorkflowPersistence() {
 
   try {
     const client = getClient();
-<<<<<<< HEAD
-    const result = await client
-      .from("orbit_workflow_runs")
-      .select("id")
-      .limit(1);
+    const checks = await Promise.all([
+      client.from("orbit_workflow_runs").select("id").limit(1),
+      client.from("orbit_workflow_templates").select("id").limit(1),
+    ]);
+    const failed = checks.find((result) => result.error);
 
-    if (result.error) {
+    if (failed) {
       return {
+        code: sanitizeScalar(failed.error.code, 80),
         configured: true,
         status: "unavailable",
-        code: sanitizeScalar(result.error.code, 80),
-=======
-    const result = await client.from("orbit_workflow_templates").select("id").limit(1);
-
-    if (result.error) {
-      return {
-        code: sanitizeScalar(result.error.code, 80),
-        configured: true,
-        status: "unavailable",
->>>>>>> 0a5482c (feat: add reusable workflow templates)
       };
     }
 
@@ -599,15 +524,9 @@ async function checkWorkflowPersistence() {
     };
   } catch (error) {
     return {
-<<<<<<< HEAD
-      configured: true,
-      status: "unavailable",
-      code: sanitizeScalar(error.code || error.name, 80),
-=======
       code: sanitizeScalar(error.code || error.name, 80),
       configured: true,
       status: "unavailable",
->>>>>>> 0a5482c (feat: add reusable workflow templates)
     };
   }
 }
@@ -615,11 +534,6 @@ async function checkWorkflowPersistence() {
 module.exports = {
   checkWorkflowPersistence,
   createRunWithSteps,
-<<<<<<< HEAD
-  getRun,
-  getWorkflowPersistenceStatus,
-  listRuns,
-=======
   createTemplate,
   deleteTemplate,
   getRun,
@@ -628,13 +542,9 @@ module.exports = {
   listRuns,
   listTemplates,
   normalizeTemplateInput,
->>>>>>> 0a5482c (feat: add reusable workflow templates)
   recordApproval,
   recordAuditEvent,
   updateRun,
   updateStep,
-<<<<<<< HEAD
-=======
   updateTemplate,
->>>>>>> 0a5482c (feat: add reusable workflow templates)
 };
