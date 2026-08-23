@@ -428,6 +428,10 @@ test("createDashboardResponse returns Command Center data structure", () => {
     "validated",
   );
   assert.ok(response.data.operationalIntelligence.authSession.userHash);
+  assert.strictEqual(
+    response.data.operationalIntelligence.workflow.status,
+    "ready",
+  );
   assert.deepStrictEqual(Object.keys(response.data).sort(), [
     "activity",
     "automation",
@@ -482,9 +486,11 @@ test("recent runtime errors are redacted before dashboard exposure", () => {
   assert(!serialized.includes("secret-openrouter-value"));
   assert(!serialized.includes("secret-supabase-value"));
   assert(!serialized.includes("secret-token-value"));
+  assert(!serialized.includes("Authorization"));
+  assert(!serialized.includes("Bearer"));
   assert(serialized.includes("OPENROUTER_API_KEY=[REDACTED]"));
   assert(serialized.includes("SUPABASE_SERVICE_ROLE_KEY=[REDACTED]"));
-  assert(serialized.includes("Bearer [REDACTED]"));
+  assert(serialized.includes("[REDACTED]"));
 });
 
 test("Command Center does not classify successful dashboard response as fallback", () => {

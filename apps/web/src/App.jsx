@@ -336,6 +336,12 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
         dashboardData?.operationalIntelligence?.deployment?.branch ||
         "not reported",
     },
+    {
+      label: "Workflow",
+      value:
+        dashboardData?.operationalIntelligence?.workflow?.status ||
+        "not reported",
+    },
   ];
 
   const {
@@ -358,6 +364,7 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
     const runtimeErrors = Array.isArray(operational?.recentRuntimeErrors)
       ? operational.recentRuntimeErrors
       : [];
+    const workflow = operational?.workflow ?? {};
     const activity = Array.isArray(dashboardData?.activity)
       ? dashboardData.activity
       : [];
@@ -373,13 +380,18 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       dashboardStats: [
         {
           ...commandStats[0],
-          value: formatMetric(aiChat.total ?? reportCount, commandStats[0].value),
+          value: formatMetric(
+            workflow.total ?? aiChat.total ?? reportCount,
+            commandStats[0].value,
+          ),
           detail:
-            aiChat.total !== null && aiChat.total !== undefined
-              ? "ai chats observed"
-              : reportCount === null || reportCount === undefined
-                ? commandStats[0].detail
-                : "reports tracked",
+            workflow.total !== null && workflow.total !== undefined
+              ? "workflow events"
+              : aiChat.total !== null && aiChat.total !== undefined
+                ? "ai chats observed"
+                : reportCount === null || reportCount === undefined
+                  ? commandStats[0].detail
+                  : "reports tracked",
         },
         {
           ...commandStats[1],
@@ -446,9 +458,11 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
         {
           ...securitySignals[1],
           value:
-            aiChat.latest?.providerReached === true
-              ? `provider ${aiChat.latest.status || "observed"}`
-              : security?.rateLimit || securitySignals[1].value,
+            workflow.waitingApproval > 0
+              ? `${workflow.waitingApproval} approval gate(s)`
+              : aiChat.latest?.providerReached === true
+                ? `provider ${aiChat.latest.status || "observed"}`
+                : security?.rateLimit || securitySignals[1].value,
         },
         {
           ...securitySignals[2],

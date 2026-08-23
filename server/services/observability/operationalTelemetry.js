@@ -4,7 +4,10 @@ const { getHealthSnapshot } = require("./healthService");
 const { getRecentRuntimeErrors, sanitizeScalar } = require("./logger");
 
 const AI_CHAT_EVENT_LIMIT = 30;
+const WORKFLOW_EVENT_LIMIT = 50;
 const aiChatEvents = [];
+const workflowEvents = [];
+const workflowRunStates = new Map();
 
 function hashValue(value) {
   const cleanValue = String(value || "").trim();
@@ -42,6 +45,38 @@ function recordAiChatTelemetry(event = {}) {
   aiChatEvents.splice(AI_CHAT_EVENT_LIMIT);
 }
 
+function recordWorkflowTelemetry(event = {}) {
+  const userId = event.user?.id || event.userId || null;
+  const runId = sanitizeScalar(event.runId || null, 120);
+  const item = {
+    code: sanitizeScalar(event.code || null, 120),
+    event: sanitizeScalar(event.event || "workflow_event", 120),
+    runId,
+    state: sanitizeScalar(event.state || "unknown", 80),
+    timestamp: new Date().toISOString(),
+    toolId: sanitizeScalar(event.toolId || null, 120),
+    userHash: hashValue(userId),
+    workflowId: sanitizeScalar(event.workflowId || null, 120),
+  };
+
+  workflowEvents.unshift(item);
+
+  if (runId) {
+    workflowRunStates.set(runId, item);
+  }
+
+  workflowEvents.splice(WORKFLOW_EVENT_LIMIT);
+  const retainedRunIds = new Set(
+    workflowEvents.map((event) => event.runId).filter(Boolean),
+  );
+
+  for (const key of workflowRunStates.keys()) {
+    if (!retainedRunIds.has(key)) {
+      workflowRunStates.delete(key);
+    }
+  }
+}
+
 function getAiChatObservability() {
   const total = aiChatEvents.length;
   const successes = aiChatEvents.filter((event) => event.status === "success").length;
@@ -56,16 +91,43 @@ function getAiChatObservability() {
           providerLatencies.length,
       )
     : null;
-  const latest = aiChatEvents[0] || null;
 
   return {
     averageProviderLatencyMs,
     failures,
-    latest,
+    latest: aiChatEvents[0] || null,
     providerReached,
     recent: aiChatEvents.slice(0, 5).map((event) => ({ ...event })),
     successes,
     total,
+  };
+}
+
+function getWorkflowObservability() {
+  const total = workflowEvents.length;
+  const runStates = Array.from(workflowRunStates.values());
+  const active = runStates.filter((event) =>
+    ["queued", "running", "retry_scheduled"].includes(event.state),
+  ).length;
+  const waitingApproval = runStates.filter(
+    (event) => event.state === "waiting_approval",
+  ).length;
+  const failed = runStates.filter((event) =>
+    ["failed", "timed_out"].includes(event.state),
+  ).length;
+  const succeeded = runStates.filter(
+    (event) => event.state === "succeeded",
+  ).length;
+
+  return {
+    active,
+    failed,
+    latest: workflowEvents[0] || null,
+    recent: workflowEvents.slice(0, 5).map((event) => ({ ...event })),
+    status: failed > 0 ? "degraded" : "ready",
+    succeeded,
+    total,
+    waitingApproval,
   };
 }
 
@@ -89,6 +151,10 @@ function getModuleHealth(health = getHealthSnapshot()) {
     {
       module: "knowledge",
       status: dependencies.knowledge?.status || "unknown",
+    },
+    {
+      module: "workflow",
+      status: getWorkflowObservability().status,
     },
     {
       module: "logger",
@@ -139,10 +205,19 @@ function getOperationalIntelligence({ user } = {}) {
     moduleHealth: getModuleHealth(health),
     recentRuntimeErrors: getRecentRuntimeErrors(5),
     timestamp: new Date().toISOString(),
+    workflow: getWorkflowObservability(),
   };
+}
+
+function resetOperationalTelemetryForTests() {
+  aiChatEvents.splice(0, aiChatEvents.length);
+  workflowEvents.splice(0, workflowEvents.length);
+  workflowRunStates.clear();
 }
 
 module.exports = {
   getOperationalIntelligence,
   recordAiChatTelemetry,
+  recordWorkflowTelemetry,
+  resetOperationalTelemetryForTests,
 };

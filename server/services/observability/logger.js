@@ -16,6 +16,7 @@ function sanitizeScalar(value, maxLength = 2000) {
   }
 
   return String(value)
+    .replace(/Authorization\s*[:=]\s*Bearer\s+[A-Za-z0-9._~+\/=-]+/gi, REDACTED)
     .replace(/Bearer\s+[A-Za-z0-9._~+\/=-]+/gi, "Bearer [REDACTED]")
     .replace(
       SENSITIVE_ASSIGNMENT_PATTERN,

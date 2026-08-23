@@ -298,7 +298,7 @@ test("newsroom history migration enables owner scoped RLS", () => {
 
   assert.match(
     fs.readFileSync(newsroomFunctionPath, "utf8"),
-    /server\/index\.js/,
+    /server\/routes\/newsroom\.js/,
   );
   const generationColumns = [
     "id",
