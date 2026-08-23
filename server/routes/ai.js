@@ -10,6 +10,9 @@ const {
   containsSensitiveData,
 } = require("../lib/orbitMemory");
 const { generateCompletion, AI_USE_CASES } = require("../services/ai/aiRouter");
+const {
+  recordAiChatTelemetry,
+} = require("../services/observability/operationalTelemetry");
 
 const router = express.Router();
 
@@ -444,6 +447,8 @@ async function logAiAuditEvent({
   code = null,
   durationMs,
   model,
+  provider = "openrouter",
+  providerLatencyMs = null,
   providerReached = false,
   sessionId,
   stage = "unknown",
@@ -458,11 +463,25 @@ async function logAiAuditEvent({
       code,
       durationMs,
       model,
+      provider,
+      providerLatencyMs,
       providerReached,
       sessionId,
       stage,
       status,
       userId,
+    });
+
+    recordAiChatTelemetry({
+      code,
+      durationMs,
+      model,
+      provider,
+      providerLatencyMs,
+      providerReached,
+      stage,
+      status,
+      user,
     });
 
     if (!supabaseDatabase) return;
@@ -559,6 +578,9 @@ async function buildOpenRouterMessages({
 router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
   const startedAt = Date.now();
   let stage = "received";
+  let providerStartedAt = 0;
+  let providerLatencyMs = null;
+  let providerReached = false;
   let requestContext = {
     message: "",
     model: DEFAULT_OPENROUTER_MODEL,
@@ -589,6 +611,7 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       await logAiAuditEvent({
         durationMs: Date.now() - startedAt,
         model: "orbit-command",
+        provider: "orbit-command",
         providerReached: false,
         sessionId,
         stage,
@@ -612,6 +635,8 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       userEmail: authenticatedUser.email,
     });
     stage = "provider";
+    providerStartedAt = Date.now();
+    providerReached = true;
     const aiResult = await generateCompletion({
       maxTokens: 1200,
       messages: openRouterMessages,
@@ -621,11 +646,14 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       timeout: OPENROUTER_TIMEOUT_MS,
       useCase: AI_USE_CASES.GENERAL_CHAT,
     });
+    providerLatencyMs = Date.now() - providerStartedAt;
 
     stage = "response";
     await logAiAuditEvent({
       durationMs: Date.now() - startedAt,
       model: aiResult.model,
+      provider: aiResult.provider || "openrouter",
+      providerLatencyMs,
       providerReached: true,
       sessionId,
       stage,
@@ -645,13 +673,16 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       error.statusCode || error.status
         ? error.message
         : "Gagal terhubung ke OpenRouter.";
+    if (providerStartedAt && providerLatencyMs === null) {
+      providerLatencyMs = Date.now() - providerStartedAt;
+    }
 
     console.error("[AI Route Error]", {
       code,
       status,
       model: requestContext.model,
       name: error.name,
-      providerReached: stage === "provider" || stage === "response",
+      providerReached,
       sessionId: requestContext.sessionId,
       stage,
     });
@@ -660,7 +691,8 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       code,
       durationMs: Date.now() - startedAt,
       model: requestContext.model,
-      providerReached: stage === "provider" || stage === "response",
+      providerLatencyMs,
+      providerReached,
       sessionId: requestContext.sessionId,
       stage,
       status: "failed",

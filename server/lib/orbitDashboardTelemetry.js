@@ -2,6 +2,12 @@ const { createClient } = require("@supabase/supabase-js");
 const {
   getHealthSnapshot,
 } = require("../services/observability/healthService");
+const {
+  getOperationalIntelligence,
+} = require("../services/observability/operationalTelemetry");
+const {
+  getWorkflowPersistenceStatus,
+} = require("../services/workflows/workflowRepository");
 
 const SERVICE_NAME = "BLACK FLASH ORBIT API";
 const API_VERSION = "v1";
@@ -63,6 +69,11 @@ const automationEngines = {
     name: "Deploy Pipeline",
     status: "READY",
     description: "Prepare validated production builds for controlled release.",
+  },
+  workflowHistory: {
+    name: "Workflow History",
+    status: getWorkflowPersistenceStatus().configured ? "READY" : "DEGRADED",
+    description: "Persist owner-scoped workflow runs, approvals, and audit events.",
   },
 };
 
@@ -342,20 +353,21 @@ function getOrbitAutomation() {
   return automationEngines;
 }
 
-function createDashboardData() {
+function createDashboardData(context = {}) {
   return {
     activity: getOrbitActivity(),
     automation: getOrbitAutomation(),
     health: getOrbitHealth(),
     metrics: getOrbitMetrics(),
+    operationalIntelligence: getOperationalIntelligence(context),
     projects: getOrbitProjects(),
     security: getOrbitSecurity(),
     system: getOrbitSystem(),
   };
 }
 
-function createDashboardResponse() {
-  const data = createDashboardData();
+function createDashboardResponse(context = {}) {
+  const data = createDashboardData(context);
 
   return {
     success: true,

@@ -15,19 +15,25 @@ import { api } from "../services/api";
 const workflowTemplates = [
   {
     action: "Publish release manifest",
+    definitionId: "ai_operational_check",
     description: "Validasi manifest, build status, dan export package sebelum publish.",
+    id: "security-sweep",
     name: "Release Gate",
     trigger: "On build PASS",
   },
   {
     action: "Refresh telemetry snapshot",
+    definitionId: "telemetry_sync",
     description: "Tarik status automation, health, dan history untuk dashboard.",
+    id: "telemetry-sync",
     name: "Telemetry Sync",
     trigger: "Every 15 minutes",
   },
   {
     action: "Run security checklist",
-    description: "Mock audit terhadap env, route, dan readiness checklist.",
+    definitionId: "ai_operational_check",
+    description: "Audit env, route, dan readiness checklist melalui workflow terkontrol.",
+    id: "security-sweep",
     name: "Security Sweep",
     trigger: "Manual /security",
   },
@@ -36,7 +42,7 @@ const workflowTemplates = [
 const pipelineSteps = [
   { name: "Trigger", status: "Ready", detail: "Event listener menunggu pemicu." },
   { name: "Validate", status: "Healthy", detail: "Rules dan prerequisites diverifikasi." },
-  { name: "Execute", status: "Idle", detail: "Run engine aman, mock output only." },
+  { name: "Execute", status: "Idle", detail: "Run engine aman, approved output only." },
   { name: "Report", status: "Synced", detail: "History dan ringkasan hasil disimpan." },
 ];
 
@@ -74,15 +80,42 @@ const fallbackActions = [
   { label: "Sync report", detail: "Store execution summary", icon: Layers3 },
 ];
 
+function getRunStatus(run) {
+  return run?.status || run?.state || "";
+}
+
+function getRunDefinitionId(run) {
+  return run?.definitionId || run?.workflowId || "";
+}
+
+function getTemplateRunId(template) {
+  return template?.definitionId || template?.id || "";
+}
+
+function mapWorkflowDefinition(definition) {
+  const definitionId = definition.definitionId || definition.id;
+
+  return {
+    action: definition.requiresApproval ? "Requires approval" : "Safe execution",
+    definitionId,
+    description: definition.description,
+    id: definition.id || definitionId,
+    name: definition.name || definitionId,
+    trigger: "Manual",
+  };
+}
+
 export function WorkflowAutomation() {
   const [automation, setAutomation] = useState({});
   const [automationStatus, setAutomationStatus] = useState(null);
   const [automationJobs, setAutomationJobs] = useState([]);
   const [automationHistory, setAutomationHistory] = useState(fallbackHistory);
+  const [workflowDefinitions, setWorkflowDefinitions] = useState(workflowTemplates);
+  const [workflowRuns, setWorkflowRuns] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(workflowTemplates[0]);
   const [selectedScheduler, setSelectedScheduler] = useState("Hourly");
   const [mockRunOutput, setMockRunOutput] = useState(
-    "Safe mock run output will appear here.",
+    "Workflow output will appear here after a signed-in run.",
   );
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
@@ -90,6 +123,22 @@ export function WorkflowAutomation() {
   const [lastSync, setLastSync] = useState("-");
 
   const automationEntries = useMemo(() => Object.entries(automation), [automation]);
+  const selectedRun = useMemo(
+    () =>
+      workflowRuns.find((run) => {
+        const runDefinitionId = getRunDefinitionId(run);
+
+        return (
+          runDefinitionId === getTemplateRunId(selectedTemplate) ||
+          runDefinitionId === selectedTemplate.id
+        );
+      }),
+    [selectedTemplate, workflowRuns],
+  );
+  const pendingApprovalRun = useMemo(
+    () => workflowRuns.find((run) => getRunStatus(run) === "waiting_approval"),
+    [workflowRuns],
+  );
   const nextRunLabel = useMemo(() => {
     if (selectedScheduler === "Manual") return "Manual trigger only";
     if (selectedScheduler === "Every 15m") return "Next run in 15m";
@@ -102,13 +151,25 @@ export function WorkflowAutomation() {
     setError("");
 
     try {
-      const [automationResult, statusResult, jobsResult, historyResult] =
-        await Promise.allSettled([
-          api.getAutomation(),
-          api.getAutomationStatus(),
-          api.getAutomationJobs(),
-          api.getAutomationHistory(),
-        ]);
+      const [
+        automationResult,
+        statusResult,
+        jobsResult,
+        historyResult,
+        automationDefinitionsResult,
+        workflowDefinitionsResult,
+        automationRunsResult,
+        workflowRunsResult,
+      ] = await Promise.allSettled([
+        api.getAutomation(),
+        api.getAutomationStatus(),
+        api.getAutomationJobs(),
+        api.getAutomationHistory(),
+        api.getAutomationDefinitions(),
+        api.getWorkflowDefinitions(),
+        api.getAutomationRuns(),
+        api.getWorkflowRuns(),
+      ]);
 
       if (automationResult.status === "fulfilled") {
         setAutomation(automationResult.value || {});
@@ -138,6 +199,52 @@ export function WorkflowAutomation() {
         );
       }
 
+      const durableDefinitions =
+        workflowDefinitionsResult.status === "fulfilled" &&
+        Array.isArray(workflowDefinitionsResult.value?.data)
+          ? workflowDefinitionsResult.value.data.map(mapWorkflowDefinition)
+          : [];
+      const legacyDefinitions =
+        automationDefinitionsResult.status === "fulfilled" &&
+        Array.isArray(automationDefinitionsResult.value?.data)
+          ? automationDefinitionsResult.value.data.map(mapWorkflowDefinition)
+          : [];
+      const mergedDefinitions = [
+        ...durableDefinitions,
+        ...legacyDefinitions.filter(
+          (legacy) =>
+            !durableDefinitions.some(
+              (durable) => durable.definitionId === legacy.definitionId || durable.id === legacy.id,
+            ),
+        ),
+      ];
+
+      if (mergedDefinitions.length) {
+        setWorkflowDefinitions(mergedDefinitions);
+        setSelectedTemplate((current) =>
+          mergedDefinitions.find((item) => item.id === current.id) ||
+          mergedDefinitions.find((item) => item.definitionId === current.definitionId) ||
+          mergedDefinitions[0],
+        );
+      }
+
+      const durableRuns =
+        workflowRunsResult.status === "fulfilled" &&
+        Array.isArray(workflowRunsResult.value?.data)
+          ? workflowRunsResult.value.data
+          : [];
+      const legacyRuns =
+        automationRunsResult.status === "fulfilled" &&
+        Array.isArray(automationRunsResult.value?.data)
+          ? automationRunsResult.value.data
+          : [];
+      setWorkflowRuns([
+        ...durableRuns,
+        ...legacyRuns.filter(
+          (legacyRun) => !durableRuns.some((durableRun) => durableRun.id === legacyRun.id),
+        ),
+      ]);
+
       setLastSync(new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }));
     } catch (loadError) {
       setError(getErrorMessage(loadError));
@@ -145,6 +252,7 @@ export function WorkflowAutomation() {
       setAutomationStatus(null);
       setAutomationJobs([]);
       setAutomationHistory(fallbackHistory);
+      setWorkflowRuns([]);
     } finally {
       setIsLoading(false);
     }
@@ -154,11 +262,19 @@ export function WorkflowAutomation() {
     loadWorkflowData();
   }, []);
 
-  function handleRunTemplate(template) {
+  async function handleRunTemplate(template) {
     setIsRunning(true);
     setError("");
 
-    window.setTimeout(() => {
+    try {
+      const response = await api.createWorkflowRun({
+        definitionId: template.definitionId || "telemetry_sync",
+        input: {
+          label: template.name,
+        },
+      });
+      const run = response?.data || response;
+      const runStatus = getRunStatus(run) || "created";
       const timestamp = new Date().toLocaleTimeString("id-ID", {
         hour: "2-digit",
         minute: "2-digit",
@@ -166,19 +282,90 @@ export function WorkflowAutomation() {
 
       setSelectedTemplate(template);
       setMockRunOutput(
-        `[${timestamp}] Mock run executed for ${template.name}. No backend side effects were triggered.`,
+        `[${timestamp}] Workflow ${runStatus}. ${
+          runStatus === "waiting_approval"
+            ? "Human approval required before AI Router execution."
+            : "Durable history persisted."
+        }`,
       );
+      setWorkflowRuns((current) => [run, ...current.filter((item) => item?.id !== run?.id)].filter(Boolean));
       setAutomationHistory((current) => [
         {
           detail: template.description,
-          result: "Mocked",
+          result: runStatus,
           time: timestamp,
           title: template.name,
         },
         ...current,
       ]);
+      await loadWorkflowData();
+    } catch (runError) {
+      setError(getErrorMessage(runError));
+    } finally {
       setIsRunning(false);
-    }, 450);
+    }
+  }
+
+  async function handleApproveRun(run) {
+    if (!run?.id) return;
+
+    setIsRunning(true);
+    setError("");
+
+    try {
+      const response =
+        run.definitionId || run.status
+          ? await api.approveWorkflowRun(run.id)
+          : await api.approveAutomationRun(run.id);
+      const approvedRun = response?.data || response;
+      const approvedStatus = getRunStatus(approvedRun) || "approved";
+      const timestamp = new Date().toLocaleTimeString("id-ID", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      setMockRunOutput(
+        `[${timestamp}] Workflow ${approvedStatus}. Provider reached: ${
+          approvedRun?.metadata?.providerReached ? "yes" : "no"
+        }.`,
+      );
+      setWorkflowRuns((current) => [
+        approvedRun,
+        ...current.filter((item) => item?.id !== approvedRun?.id),
+      ].filter(Boolean));
+      await loadWorkflowData();
+    } catch (approvalError) {
+      setError(getErrorMessage(approvalError));
+    } finally {
+      setIsRunning(false);
+    }
+  }
+
+  async function handleCancelRun(run) {
+    if (!run?.id) return;
+
+    setIsRunning(true);
+    setError("");
+
+    try {
+      const response =
+        run.definitionId || run.status
+          ? await api.cancelWorkflowRun(run.id)
+          : await api.cancelAutomationRun(run.id);
+      const cancelledRun = response?.data || response;
+      const cancelledStatus = getRunStatus(cancelledRun) || "cancelled";
+
+      setMockRunOutput(`Run ${cancelledStatus}.`);
+      setWorkflowRuns((current) => [
+        cancelledRun,
+        ...current.filter((item) => item?.id !== cancelledRun?.id),
+      ].filter(Boolean));
+      await loadWorkflowData();
+    } catch (cancelError) {
+      setError(getErrorMessage(cancelError));
+    } finally {
+      setIsRunning(false);
+    }
   }
 
   const automationScore = automationStatus?.automationScore || automationStatus?.score || 0;
@@ -196,7 +383,7 @@ export function WorkflowAutomation() {
             </h2>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base sm:leading-7">
               Dashboard automation visual untuk template workflow, trigger/action,
-              pipeline step, scheduler, execution history, dan mock run output.
+              pipeline step, scheduler, execution history, dan safe run output.
             </p>
           </div>
 
@@ -215,7 +402,15 @@ export function WorkflowAutomation() {
               onClick={() => handleRunTemplate(selectedTemplate)}
               type="button">
               <Play size={16} />
-              {isRunning ? "Running..." : "Run Mock"}
+              {isRunning ? "Running..." : "Run Workflow"}
+            </button>
+            <button
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#f1c36f]/30 bg-[#f1c36f]/15 px-4 py-3 text-sm font-black text-[#f1c36f] hover:bg-[#f1c36f]/20 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={isRunning || !pendingApprovalRun}
+              onClick={() => handleApproveRun(pendingApprovalRun)}
+              type="button">
+              <ShieldCheck size={16} />
+              Approve
             </button>
           </div>
         </div>
@@ -240,7 +435,7 @@ export function WorkflowAutomation() {
       )}
 
       <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Templates" value={workflowTemplates.length} icon={Workflow} />
+        <MetricCard label="Templates" value={workflowDefinitions.length} icon={Workflow} />
         <MetricCard label="Triggers" value={fallbackTriggers.length} icon={TimerReset} />
         <MetricCard label="Actions" value={fallbackActions.length} icon={Play} />
         <MetricCard label="Jobs" value={automationJobs.length || automationHistory.length} icon={Layers3} />
@@ -250,12 +445,12 @@ export function WorkflowAutomation() {
         <aside className="grid gap-4">
           <Panel title="Workflow Templates" kicker="Templates Library" icon={Workflow}>
             <div className="grid gap-3">
-              {workflowTemplates.map((template) => {
+              {workflowDefinitions.map((template) => {
                 const isActive = template.name === selectedTemplate.name;
 
                 return (
                   <button
-                    key={template.name}
+                    key={`${template.id}-${template.definitionId}`}
                     className={`rounded-2xl border p-4 text-left transition ${
                       isActive
                         ? "border-cyan-300/30 bg-cyan-300/10"
@@ -318,7 +513,7 @@ export function WorkflowAutomation() {
             </div>
           </Panel>
 
-          <Panel title="Mock Run Output" kicker="Safe Execution Result" icon={CheckCircle2}>
+          <Panel title="Run Output" kicker="Safe Execution Result" icon={CheckCircle2}>
             <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4">
               <p className="text-xs uppercase tracking-[0.25em] text-cyan-300">
                 {selectedTemplate.name}
@@ -327,6 +522,26 @@ export function WorkflowAutomation() {
                 {mockRunOutput}
               </p>
             </div>
+
+            {getRunStatus(selectedRun) === "waiting_approval" && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300/30 bg-emerald-300/15 px-4 py-3 text-sm font-black text-emerald-100 hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={isRunning}
+                  onClick={() => handleApproveRun(selectedRun)}
+                  type="button">
+                  <CheckCircle2 size={16} />
+                  Approve
+                </button>
+                <button
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300/30 bg-rose-300/10 px-4 py-3 text-sm font-black text-rose-100 hover:bg-rose-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={isRunning}
+                  onClick={() => handleCancelRun(selectedRun)}
+                  type="button">
+                  Cancel
+                </button>
+              </div>
+            )}
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <div className="rounded-2xl border border-white/10 bg-black/15 p-4">
