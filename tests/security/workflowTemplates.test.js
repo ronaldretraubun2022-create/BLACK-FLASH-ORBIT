@@ -15,6 +15,7 @@ const rootDir = path.resolve(__dirname, "../..");
 
 function createWorkflowApp({ overrides = {} } = {}) {
   let createRunCalls = 0;
+  const updateTemplateCalls = [];
   const repository = {
     async createTemplate({ input, ownerId }) {
       return {
@@ -60,6 +61,7 @@ function createWorkflowApp({ overrides = {} } = {}) {
       ];
     },
     async updateTemplate({ input, ownerId, templateId }) {
+      updateTemplateCalls.push({ ownerId, templateId });
       return {
         definitionId: input.definitionId,
         id: templateId,
@@ -127,6 +129,7 @@ function createWorkflowApp({ overrides = {} } = {}) {
   return {
     app,
     getCreateRunCalls: () => createRunCalls,
+    getUpdateTemplateCalls: () => updateTemplateCalls,
   };
 }
 
@@ -176,6 +179,15 @@ test("workflow template input rejects malformed and sensitive fields", () => {
     /membutuhkan name dan definitionId/,
   );
   assert.throws(
+    () => normalizeTemplateInput({ definitionId: "telemetry_sync", name: "   " }),
+    /membutuhkan name dan definitionId/,
+  );
+  assert.strictEqual(
+    normalizeTemplateInput({ definitionId: "telemetry_sync", name: "  ORBIT Personal Test 001  " })
+      .name,
+    "ORBIT Personal Test 001",
+  );
+  assert.throws(
     () =>
       normalizeTemplateInput({
         definitionId: "telemetry_sync",
@@ -184,6 +196,30 @@ test("workflow template input rejects malformed and sensitive fields", () => {
       }),
     /field sensitif/,
   );
+});
+
+test("custom template name is submitted through the authenticated create endpoint", async () => {
+  const { app } = createWorkflowApp();
+  const server = await startServer(app);
+
+  try {
+    const result = await requestJson(server.baseUrl, "/api/v1/workflows/templates", {
+      body: JSON.stringify({
+        definitionId: "telemetry_sync",
+        name: "ORBIT Personal Test 001",
+      }),
+      headers: {
+        ...createAuthHeader(),
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+
+    assert.strictEqual(result.status, 201);
+    assert.strictEqual(result.body.data.name, "ORBIT Personal Test 001");
+  } finally {
+    await server.close();
+  }
 });
 
 test("loading a workflow template does not execute a workflow run", async () => {
@@ -238,6 +274,32 @@ test("workflow template CRUD handles duplicate names safely", async () => {
 
     assert.strictEqual(result.status, 409);
     assert.strictEqual(result.body.code, "WORKFLOW_TEMPLATE_DUPLICATE_NAME");
+  } finally {
+    await server.close();
+  }
+});
+
+test("workflow template update preserves authenticated owner scope", async () => {
+  const { app, getUpdateTemplateCalls } = createWorkflowApp();
+  const server = await startServer(app);
+
+  try {
+    const result = await requestJson(server.baseUrl, "/api/v1/workflows/templates/template-1", {
+      body: JSON.stringify({
+        definitionId: "telemetry_sync",
+        name: "Updated Telemetry Sync",
+      }),
+      headers: {
+        ...createAuthHeader(),
+        "content-type": "application/json",
+      },
+      method: "PUT",
+    });
+
+    assert.strictEqual(result.status, 200);
+    assert.deepStrictEqual(getUpdateTemplateCalls(), [
+      { ownerId: "user-1", templateId: "template-1" },
+    ]);
   } finally {
     await server.close();
   }

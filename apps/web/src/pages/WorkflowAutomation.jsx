@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Clock3,
   Layers3,
+  Pencil,
   Play,
   RefreshCcw,
   Rocket,
@@ -161,6 +162,7 @@ export function WorkflowAutomation() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
+  const [templateEditor, setTemplateEditor] = useState(null);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState("-");
 
@@ -219,6 +221,20 @@ export function WorkflowAutomation() {
   function selectTemplate(template) {
     setSelectedTemplate(template);
     setSelectedScheduler(template.schedule || "Manual");
+  }
+
+  function openTemplateEditor(template = selectedTemplate) {
+    setError("");
+    setTemplateEditor({
+      description: template.description || "",
+      definitionId: template.definitionId || "telemetry_sync",
+      id: isSavedTemplate(template) ? template.id : null,
+      name: template.name || "",
+    });
+  }
+
+  function closeTemplateEditor() {
+    if (!isSavingTemplate) setTemplateEditor(null);
   }
 
   async function loadWorkflowData(preferredTemplate = selectedTemplate) {
@@ -447,29 +463,34 @@ export function WorkflowAutomation() {
   }
 
   async function handleSaveTemplate() {
+    const name = templateEditor?.name?.trim() || "";
+
+    if (!name) {
+      setError("Template name is required.");
+      return;
+    }
+
     setIsSavingTemplate(true);
     setError("");
 
     try {
       const payload = {
         action: selectedTemplate.action,
-        definitionId: selectedTemplate.definitionId || "telemetry_sync",
-        description: selectedTemplate.description,
-        name: selectedTemplate.name,
+        definitionId: templateEditor.definitionId || selectedTemplate.definitionId || "telemetry_sync",
+        description: templateEditor.description.trim(),
+        name,
         schedule: selectedScheduler,
         trigger: selectedTemplate.trigger,
       };
-      const response = isSavedTemplate(selectedTemplate)
-        ? await api.updateWorkflowTemplate(selectedTemplate.id, payload)
+      const response = templateEditor.id
+        ? await api.updateWorkflowTemplate(templateEditor.id, payload)
         : await api.createWorkflowTemplate(payload);
       const saved = response?.data || response;
 
-      setSavedTemplates((current) => [
-        saved,
-        ...current.filter((template) => template.id !== saved.id),
-      ]);
-      setSelectedTemplate(saved);
+      selectTemplate(saved);
       setRunOutput(`Template saved: ${saved.name}. Loading it will not execute a run.`);
+      setTemplateEditor(null);
+      await loadWorkflowData(saved);
     } catch (saveError) {
       setError(getErrorMessage(saveError));
     } finally {
@@ -478,8 +499,14 @@ export function WorkflowAutomation() {
   }
 
   function handleLoadSavedTemplate(template) {
+    setTemplateEditor(null);
     selectTemplate(template);
     setRunOutput(`Template loaded: ${template.name}. No workflow run was executed.`);
+  }
+
+  function handleEditSavedTemplate(template) {
+    selectTemplate(template);
+    openTemplateEditor(template);
   }
 
   async function handleDeleteTemplate(template) {
@@ -491,9 +518,16 @@ export function WorkflowAutomation() {
         current.filter((item) => item.id !== template.id),
       );
 
+      const nextTemplate =
+        selectedTemplate.id === template.id
+          ? workflowDefinitions[0] || workflowTemplates[0]
+          : selectedTemplate;
+
       if (selectedTemplate.id === template.id) {
-        selectTemplate(workflowDefinitions[0] || workflowTemplates[0]);
+        setTemplateEditor(null);
+        selectTemplate(nextTemplate);
       }
+      await loadWorkflowData(nextTemplate);
     } catch (deleteError) {
       setError(getErrorMessage(deleteError));
     }
@@ -620,11 +654,78 @@ export function WorkflowAutomation() {
               <button
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/15 px-4 text-sm font-black text-cyan-100 hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={isSavingTemplate}
-                onClick={handleSaveTemplate}
+                onClick={() => openTemplateEditor(selectedTemplate)}
                 type="button">
                 <Save size={16} />
                 {isSavedTemplate(selectedTemplate) ? "Update template" : "Save as template"}
               </button>
+
+              {templateEditor && (
+                <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/5 p-4">
+                  <div className="grid gap-3">
+                    <label className="grid gap-2 text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                      Template Name
+                      <input
+                        autoFocus
+                        className="min-h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm font-bold normal-case tracking-normal text-white outline-none placeholder:text-slate-600 focus:border-cyan-300/40"
+                        disabled={isSavingTemplate}
+                        maxLength={120}
+                        onChange={(event) =>
+                          setTemplateEditor((current) => ({
+                            ...current,
+                            name: event.target.value,
+                          }))
+                        }
+                        placeholder="Reusable workflow name"
+                        value={templateEditor.name}
+                      />
+                    </label>
+                    <label className="grid gap-2 text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                      Description
+                      <textarea
+                        className="min-h-20 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm font-semibold normal-case tracking-normal text-white outline-none placeholder:text-slate-600 focus:border-cyan-300/40"
+                        disabled={isSavingTemplate}
+                        maxLength={500}
+                        onChange={(event) =>
+                          setTemplateEditor((current) => ({
+                            ...current,
+                            description: event.target.value,
+                          }))
+                        }
+                        placeholder="Optional description"
+                        value={templateEditor.description}
+                      />
+                    </label>
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                        Workflow Definition
+                      </p>
+                      <p className="mt-2 text-sm font-bold text-white">
+                        {workflowDefinitions.find(
+                          (definition) => definition.definitionId === templateEditor.definitionId,
+                        )?.name || templateEditor.definitionId}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 text-sm font-black text-slate-300 hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={isSavingTemplate}
+                        onClick={closeTemplateEditor}
+                        type="button">
+                        Cancel
+                      </button>
+                      <button
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/15 px-3 text-sm font-black text-cyan-100 hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={isSavingTemplate || !templateEditor.name.trim()}
+                        onClick={handleSaveTemplate}
+                        type="button">
+                        <Save size={15} />
+                        {isSavingTemplate ? "Saving..." : "Save Template"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {isLoading ? (
                 <p className="rounded-2xl border border-white/10 bg-black/15 p-4 text-sm font-bold text-slate-400">
@@ -636,17 +737,12 @@ export function WorkflowAutomation() {
                     key={template.id}
                     className="rounded-2xl border border-white/10 bg-black/15 p-4">
                     <div className="flex items-start justify-between gap-3">
-                      <button
-                        className="min-w-0 text-left"
-                        onClick={() => handleLoadSavedTemplate(template)}
-                        type="button">
-                        <p className="truncate text-sm font-black text-white">
-                          {template.name}
-                        </p>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black text-white">{template.name}</p>
                         <p className="mt-1 text-xs uppercase tracking-[0.18em] text-cyan-300">
                           {template.schedule || "Manual"}
                         </p>
-                      </button>
+                      </div>
                       <button
                         className="grid size-9 shrink-0 place-items-center rounded-xl border border-rose-300/25 bg-rose-300/10 text-rose-100 hover:bg-rose-300/15"
                         onClick={() => handleDeleteTemplate(template)}
@@ -658,6 +754,29 @@ export function WorkflowAutomation() {
                     <p className="mt-3 text-xs leading-5 text-slate-500">
                       {template.description || "Reusable workflow template."}
                     </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-white/10 bg-black/20 px-2.5 text-xs font-black text-slate-300 hover:border-cyan-300/30 hover:text-cyan-100"
+                        onClick={() => handleLoadSavedTemplate(template)}
+                        type="button">
+                        Load
+                      </button>
+                      <button
+                        className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-2.5 text-xs font-black text-emerald-100 hover:bg-emerald-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={isRunning}
+                        onClick={() => handleRunTemplate(template)}
+                        type="button">
+                        <Play size={13} />
+                        Run
+                      </button>
+                      <button
+                        className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-2.5 text-xs font-black text-cyan-100 hover:bg-cyan-300/15"
+                        onClick={() => handleEditSavedTemplate(template)}
+                        type="button">
+                        <Pencil size={13} />
+                        Edit
+                      </button>
+                    </div>
                   </div>
                 ))
               ) : (
