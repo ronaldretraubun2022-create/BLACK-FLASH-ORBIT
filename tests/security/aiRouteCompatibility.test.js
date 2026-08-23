@@ -96,6 +96,10 @@ test("POST /api/ai/newsroom preserves response schema through AI Router wrapper"
 });
 
 test("POST /api/ai/chat preserves public response contract through AI Router", async () => {
+  const {
+    getOperationalIntelligence,
+  } = require("../../server/services/observability/operationalTelemetry");
+
   const app = createJsonApp("../../server/routes/ai", "/api/ai", {
     "../lib/orbitKnowledge": {
       buildOrbitKnowledgeContext: async () => "",
@@ -114,6 +118,9 @@ test("POST /api/ai/chat preserves public response contract through AI Router", a
       },
       generateCompletion: async () => ({
         content: "Router chat answer.",
+        metadata: {
+          durationMs: 12,
+        },
         model: "resolved/model",
         provider: "openrouter",
       }),
@@ -160,6 +167,12 @@ test("POST /api/ai/chat preserves public response contract through AI Router", a
       response: "Router chat answer.",
       success: true,
     });
+
+    const telemetry = getOperationalIntelligence();
+    assert.strictEqual(telemetry.aiChat.latest.providerReached, true);
+    assert.strictEqual(telemetry.aiChat.latest.provider, "openrouter");
+    assert.strictEqual(telemetry.aiChat.latest.status, "success");
+    assert(Number.isFinite(telemetry.aiChat.latest.providerLatencyMs));
   } finally {
     if (originalSupabaseUrl === undefined) delete process.env.SUPABASE_URL;
     else process.env.SUPABASE_URL = originalSupabaseUrl;

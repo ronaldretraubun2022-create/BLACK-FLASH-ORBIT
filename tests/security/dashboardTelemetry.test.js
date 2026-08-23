@@ -290,20 +290,82 @@ test("dashboard API accepts a valid mocked Supabase user token", async () => {
 
 test("createDashboardResponse returns Command Center data structure", () => {
   const { createDashboardResponse } = require(telemetryLibPath);
-  const response = createDashboardResponse();
+  const response = createDashboardResponse({
+    user: {
+      email: "operator@example.test",
+      id: "user-1",
+    },
+  });
 
   assert.strictEqual(response.success, true);
   assert.strictEqual(response.data.health.module, "health");
   assert.ok(response.data.system.runtime);
+  assert.strictEqual(
+    response.data.operationalIntelligence.authSession.authenticated,
+    true,
+  );
+  assert.strictEqual(
+    response.data.operationalIntelligence.authSession.session,
+    "validated",
+  );
+  assert.ok(response.data.operationalIntelligence.authSession.userHash);
   assert.deepStrictEqual(Object.keys(response.data).sort(), [
     "activity",
     "automation",
     "health",
     "metrics",
+    "operationalIntelligence",
     "projects",
     "security",
     "system",
   ]);
+});
+
+test("Command Center operational intelligence omits email, tokens, and secrets", () => {
+  const { createDashboardResponse } = require(telemetryLibPath);
+  const response = createDashboardResponse({
+    user: {
+      email: "operator@example.test",
+      id: "user-1",
+    },
+  });
+  const serialized = JSON.stringify(response.data.operationalIntelligence);
+
+  assert(!serialized.includes("operator@example.test"));
+  assert(!serialized.includes("Authorization"));
+  assert(!serialized.includes("Bearer"));
+  assert(!serialized.includes("OPENROUTER_API_KEY"));
+  assert(!serialized.includes("SUPABASE_SERVICE_ROLE_KEY"));
+});
+
+test("recent runtime errors are redacted before dashboard exposure", () => {
+  const { error: logError } = require("../../server/services/observability/logger");
+  const { createDashboardResponse } = require(telemetryLibPath);
+
+  logError("test_runtime_error", {
+    code: "TEST_RUNTIME_ERROR",
+    error: {
+      message:
+        "OPENROUTER_API_KEY=secret-openrouter-value SUPABASE_SERVICE_ROLE_KEY=secret-supabase-value Authorization: Bearer secret-token-value",
+    },
+    method: "GET",
+    path: "/api/v1/test",
+    requestId: "request-1",
+    statusCode: 500,
+  });
+
+  const response = createDashboardResponse();
+  const recentErrors =
+    response.data.operationalIntelligence.recentRuntimeErrors || [];
+  const serialized = JSON.stringify(recentErrors);
+
+  assert(recentErrors.length > 0);
+  assert(!serialized.includes("secret-openrouter-value"));
+  assert(!serialized.includes("secret-supabase-value"));
+  assert(!serialized.includes("secret-token-value"));
+  assert(serialized.includes("OPENROUTER_API_KEY=[REDACTED]"));
+  assert(serialized.includes("SUPABASE_SERVICE_ROLE_KEY=[REDACTED]"));
+  assert(serialized.includes("Bearer [REDACTED]"));
 });
 
 test("Command Center does not classify successful dashboard response as fallback", () => {

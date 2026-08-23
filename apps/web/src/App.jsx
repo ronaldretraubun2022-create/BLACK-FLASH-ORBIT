@@ -98,10 +98,10 @@ const adminRoles = new Set(["admin", "owner", "super_admin"]);
 const releaseState = [
   {
     label: "Branch",
-    value: "feature/project-health-v0.7",
+    value: "feature/orbit-v0.8",
     tone: "text-amber-300",
   },
-  { label: "Tag", value: "Project Health Monitor v0.7", tone: "text-white" },
+  { label: "Tag", value: "Operational Intelligence v0.8", tone: "text-white" },
   { label: "Status", value: "deployment-aware", tone: "text-emerald-300" },
 ];
 
@@ -302,6 +302,12 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
 
   const telemetryLabels = [
     {
+      label: "Auth Session",
+      value:
+        dashboardData?.operationalIntelligence?.authSession?.session ||
+        "not reported",
+    },
+    {
       label: "Runtime",
       value: dashboardData?.system?.runtime || "not reported",
     },
@@ -314,6 +320,21 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       value: dashboardData?.metrics?.timestamp
         ? formatTime(dashboardData.metrics.timestamp, "not reported")
         : "not reported",
+    },
+    {
+      label: "Provider Latency",
+      value: Number.isFinite(
+        dashboardData?.operationalIntelligence?.aiChat
+          ?.averageProviderLatencyMs,
+      )
+        ? `${dashboardData.operationalIntelligence.aiChat.averageProviderLatencyMs}ms`
+        : "no samples",
+    },
+    {
+      label: "Deploy",
+      value:
+        dashboardData?.operationalIntelligence?.deployment?.branch ||
+        "not reported",
     },
   ];
 
@@ -332,6 +353,11 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       ? dashboardData.projects
       : [];
     const security = dashboardData?.security ?? {};
+    const operational = dashboardData?.operationalIntelligence ?? {};
+    const aiChat = operational?.aiChat ?? {};
+    const runtimeErrors = Array.isArray(operational?.recentRuntimeErrors)
+      ? operational.recentRuntimeErrors
+      : [];
     const activity = Array.isArray(dashboardData?.activity)
       ? dashboardData.activity
       : [];
@@ -347,11 +373,13 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       dashboardStats: [
         {
           ...commandStats[0],
-          value: formatMetric(reportCount, commandStats[0].value),
+          value: formatMetric(aiChat.total ?? reportCount, commandStats[0].value),
           detail:
-            reportCount === null || reportCount === undefined
-              ? commandStats[0].detail
-              : "reports tracked",
+            aiChat.total !== null && aiChat.total !== undefined
+              ? "ai chats observed"
+              : reportCount === null || reportCount === undefined
+                ? commandStats[0].detail
+                : "reports tracked",
         },
         {
           ...commandStats[1],
@@ -410,16 +438,24 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       securityItems: [
         {
           ...securitySignals[0],
-          value: security?.helmet || securitySignals[0].value,
+          value:
+            operational?.authSession?.authenticated === true
+              ? "session validated"
+              : security?.helmet || securitySignals[0].value,
         },
         {
           ...securitySignals[1],
-          value: security?.rateLimit || securitySignals[1].value,
+          value:
+            aiChat.latest?.providerReached === true
+              ? `provider ${aiChat.latest.status || "observed"}`
+              : security?.rateLimit || securitySignals[1].value,
         },
         {
           ...securitySignals[2],
           value:
-            security?.securityScore !== null &&
+            runtimeErrors.length > 0
+              ? `${runtimeErrors.length} recent error(s)`
+              : security?.securityScore !== null &&
             security?.securityScore !== undefined
               ? `${security.securityScore}/100`
               : securitySignals[2].value,
@@ -430,6 +466,20 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
   }, [dashboardData, hasActivity, hasProjects, isTelemetryConnected]);
 
   const moduleItems = useMemo(() => {
+    const moduleHealth = Array.isArray(
+      dashboardData?.operationalIntelligence?.moduleHealth,
+    )
+      ? dashboardData.operationalIntelligence.moduleHealth
+      : [];
+
+    if (moduleHealth.length) {
+      return moduleHealth.slice(0, 4).map((module, index) => ({
+        name: module?.module || aiModules[index]?.name || "Runtime Module",
+        icon: aiModules[index]?.icon || Bot,
+        state: module?.status || aiModules[index]?.state || "Ready",
+      }));
+    }
+
     if (!automationItems.length) return aiModules;
 
     return automationItems.slice(0, 4).map((engine, index) => ({
@@ -437,7 +487,7 @@ function CommandCenterDashboard({ onOpenCommandPalette }) {
       icon: aiModules[index]?.icon || Bot,
       state: engine?.status || aiModules[index]?.state || "Ready",
     }));
-  }, [automationItems]);
+  }, [automationItems, dashboardData?.operationalIntelligence?.moduleHealth]);
 
   const displayedModuleItems = useMemo(() => {
     if (hasAutomation) return moduleItems;
