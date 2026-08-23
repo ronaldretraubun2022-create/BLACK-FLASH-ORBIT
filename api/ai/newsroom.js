@@ -1,4 +1,10 @@
-const app = require("../../server/index.js");
+const express = require("express");
+const newsroomRoutes = require("../../server/routes/newsroom.js");
+
+const app = express();
+
+app.use(express.json({ limit: "2mb" }));
+app.use("/api/ai/newsroom", newsroomRoutes);
 
 module.exports = function handler(req, res) {
   const url = new URL(req.url || "/", "http://orbit.local");
