@@ -16,36 +16,41 @@ import { api } from "../services/api";
 
 const workflowTemplates = [
   {
-    action: "Publish release manifest",
+    action: "Approval-gated AI Router check",
     definitionId: "ai_operational_check",
-    description: "Validasi manifest, build status, dan export package sebelum publish.",
-    id: "security-sweep",
-    name: "Release Gate",
-    trigger: "On build PASS",
+    description:
+      "Validate workflow persistence, require human approval, then call the existing AI Router.",
+    id: "ai_operational_check",
+    name: "AI Operational Check",
+    stepCount: 4,
+    trigger: "Manual approval gate",
   },
   {
-    action: "Refresh telemetry snapshot",
+    action: "Persist telemetry checkpoint",
     definitionId: "telemetry_sync",
-    description: "Tarik status automation, health, dan history untuk dashboard.",
-    id: "telemetry-sync",
+    description: "Record a safe workflow telemetry checkpoint.",
+    id: "telemetry_sync",
     name: "Telemetry Sync",
-    trigger: "Every 15 minutes",
-  },
-  {
-    action: "Run security checklist",
-    definitionId: "ai_operational_check",
-    description: "Audit env, route, dan readiness checklist melalui workflow terkontrol.",
-    id: "security-sweep",
-    name: "Security Sweep",
-    trigger: "Manual /security",
+    stepCount: 2,
+    trigger: "Manual safe run",
   },
 ];
 
 const pipelineSteps = [
-  { name: "Trigger", status: "Ready", detail: "Event listener menunggu pemicu." },
-  { name: "Validate", status: "Healthy", detail: "Rules dan prerequisites diverifikasi." },
-  { name: "Execute", status: "Idle", detail: "Run engine aman, approved output only." },
-  { name: "Report", status: "Synced", detail: "History dan ringkasan hasil disimpan." },
+  {
+    id: "validate_request",
+    name: "Validate request",
+    requiresApproval: false,
+    status: "Ready",
+    tool: "internal.validate",
+  },
+  {
+    id: "persist_result",
+    name: "Persist result",
+    requiresApproval: false,
+    status: "Ready",
+    tool: "internal.persist",
+  },
 ];
 
 const schedulerOptions = [
@@ -57,29 +62,13 @@ const schedulerOptions = [
 
 const fallbackHistory = [
   {
-    detail: "Workflow readiness snapshot cached from dashboard telemetry.",
+    detail: "Durable workflow history will appear after the first signed-in run.",
     result: "Ready",
     time: "Live",
+    id: "telemetry-sync",
+    name: "Telemetry Sync",
     title: "Telemetry Sync",
   },
-  {
-    detail: "Security checklist validated against current dashboard state.",
-    result: "Passed",
-    time: "Ready",
-    title: "Security Sweep",
-  },
-];
-
-const fallbackTriggers = [
-  { label: "Build PASS", detail: "Start release gate", icon: Rocket },
-  { label: "Security Alert", detail: "Run audit checklist", icon: ShieldCheck },
-  { label: "Timer Tick", detail: "Refresh telemetry snapshot", icon: TimerReset },
-];
-
-const fallbackActions = [
-  { label: "Publish package", detail: "Export and release artifact", icon: Play },
-  { label: "Refresh data", detail: "Reload automation state", icon: RefreshCcw },
-  { label: "Sync report", detail: "Store execution summary", icon: Layers3 },
 ];
 
 function getRunStatus(run) {
@@ -96,15 +85,64 @@ function getTemplateRunId(template) {
 
 function mapWorkflowDefinition(definition) {
   const definitionId = definition.definitionId || definition.id;
+  const steps = Array.isArray(definition.steps) ? definition.steps : [];
+  const requiresApproval =
+    definition.requiresApproval ||
+    definition.sensitive ||
+    steps.some((step) => step?.requiresApproval);
 
   return {
-    action: definition.requiresApproval || definition.sensitive ? "Requires approval" : "Safe execution",
+    action: requiresApproval ? "Requires approval" : "Safe execution",
     definitionId,
     description: definition.description,
     id: definition.id || definitionId,
     name: definition.name || definitionId,
+    steps,
+    stepCount: steps.length || definition.stepCount || 0,
     trigger: "Manual",
   };
+}
+
+function mergeWorkflowDefinitions(durableDefinitions, legacyDefinitions) {
+  return [
+    ...durableDefinitions,
+    ...legacyDefinitions.filter(
+      (legacy) =>
+        !durableDefinitions.some(
+          (durable) => durable.definitionId === legacy.definitionId || durable.id === legacy.id,
+        ),
+    ),
+  ];
+}
+
+function visibleTemplateSource(workflowDefinitions, savedTemplates) {
+  return [...workflowDefinitions, ...savedTemplates];
+}
+
+function getSelectedSteps(template, workflowDefinitions) {
+  if (Array.isArray(template?.steps) && template.steps.length) return template.steps;
+
+  const definition = workflowDefinitions.find(
+    (item) => item.definitionId === template?.definitionId || item.id === template?.definitionId,
+  );
+
+  if (Array.isArray(definition?.steps) && definition.steps.length) return definition.steps;
+
+  return pipelineSteps;
+}
+
+function formatRunOutput(run, template) {
+  const status = getRunStatus(run) || "created";
+  const timestamp = new Date().toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  if (status === "waiting_approval") {
+    return `[${timestamp}] ${template.name} waiting_approval. Human approval required before AI Router execution.`;
+  }
+
+  return `[${timestamp}] ${template.name} ${status}. Durable workflow history persisted.`;
 }
 
 export function WorkflowAutomation() {
@@ -117,7 +155,7 @@ export function WorkflowAutomation() {
   const [workflowRuns, setWorkflowRuns] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(workflowTemplates[0]);
   const [selectedScheduler, setSelectedScheduler] = useState("Hourly");
-  const [mockRunOutput, setMockRunOutput] = useState(
+  const [runOutput, setRunOutput] = useState(
     "Workflow output will appear here after a signed-in run.",
   );
   const [isLoading, setIsLoading] = useState(true);
@@ -151,12 +189,39 @@ export function WorkflowAutomation() {
     if (selectedScheduler === "Hourly") return "Next run in 1h";
     return "Next run tomorrow";
   }, [selectedScheduler]);
+  const selectedSteps = useMemo(
+    () => getSelectedSteps(selectedTemplate, workflowDefinitions),
+    [selectedTemplate, workflowDefinitions],
+  );
+  const triggerCards = useMemo(
+    () =>
+      visibleTemplateSource(workflowDefinitions, savedTemplates).map((template) => ({
+        detail: template.description || "Reusable workflow template.",
+        icon: template.schedule && template.schedule !== "Manual" ? TimerReset : Rocket,
+        label: template.trigger || template.schedule || "Manual",
+      })),
+    [savedTemplates, workflowDefinitions],
+  );
+  const actionCards = useMemo(
+    () =>
+      selectedSteps.map((step) => ({
+        detail: step.tool || "workflow.step",
+        icon: step.requiresApproval ? ShieldCheck : Play,
+        label: step.name || step.id || "Workflow step",
+      })),
+    [selectedSteps],
+  );
 
   function isSavedTemplate(template) {
     return Boolean(template?.id && savedTemplates.some((item) => item.id === template.id));
   }
 
-  async function loadWorkflowData() {
+  function selectTemplate(template) {
+    setSelectedTemplate(template);
+    setSelectedScheduler(template.schedule || "Manual");
+  }
+
+  async function loadWorkflowData(preferredTemplate = selectedTemplate) {
     setIsLoading(true);
     setError("");
 
@@ -221,30 +286,28 @@ export function WorkflowAutomation() {
         Array.isArray(automationDefinitionsResult.value?.data)
           ? automationDefinitionsResult.value.data.map(mapWorkflowDefinition)
           : [];
-      const mergedDefinitions = [
-        ...durableDefinitions,
-        ...legacyDefinitions.filter(
-          (legacy) =>
-            !durableDefinitions.some(
-              (durable) => durable.definitionId === legacy.definitionId || durable.id === legacy.id,
-            ),
-        ),
-      ];
+      const mergedDefinitions = mergeWorkflowDefinitions(durableDefinitions, legacyDefinitions);
+      const nextSavedTemplates =
+        templatesResult.status === "fulfilled" && Array.isArray(templatesResult.value?.data)
+          ? templatesResult.value.data
+          : [];
 
       if (mergedDefinitions.length) {
         setWorkflowDefinitions(mergedDefinitions);
-        setSelectedTemplate((current) =>
-          savedTemplates.find((item) => item.id === current.id) ||
-          mergedDefinitions.find((item) => item.id === current.id) ||
-          mergedDefinitions.find((item) => item.definitionId === current.definitionId) ||
-          mergedDefinitions[0],
-        );
+        const nextTemplate =
+          nextSavedTemplates.find((item) => item.id === preferredTemplate.id) ||
+          mergedDefinitions.find((item) => item.id === preferredTemplate.id) ||
+          mergedDefinitions.find(
+            (item) => item.definitionId === preferredTemplate.definitionId,
+          ) ||
+          nextSavedTemplates[0] ||
+          mergedDefinitions[0];
+
+        setSelectedTemplate(nextTemplate);
       }
 
       if (templatesResult.status === "fulfilled") {
-        setSavedTemplates(
-          Array.isArray(templatesResult.value?.data) ? templatesResult.value.data : [],
-        );
+        setSavedTemplates(nextSavedTemplates);
       }
 
       const durableRuns =
@@ -301,14 +364,8 @@ export function WorkflowAutomation() {
         minute: "2-digit",
       });
 
-      setSelectedTemplate(template);
-      setMockRunOutput(
-        `[${timestamp}] Workflow ${runStatus}. ${
-          runStatus === "waiting_approval"
-            ? "Human approval required before AI Router execution."
-            : "Durable history persisted."
-        }`,
-      );
+      selectTemplate(template);
+      setRunOutput(formatRunOutput(run, template));
       setWorkflowRuns((current) => [run, ...current.filter((item) => item?.id !== run?.id)].filter(Boolean));
       setAutomationHistory((current) => [
         {
@@ -319,7 +376,7 @@ export function WorkflowAutomation() {
         },
         ...current,
       ]);
-      await loadWorkflowData();
+      await loadWorkflowData(template);
     } catch (runError) {
       setError(getErrorMessage(runError));
     } finally {
@@ -345,7 +402,7 @@ export function WorkflowAutomation() {
         minute: "2-digit",
       });
 
-      setMockRunOutput(
+      setRunOutput(
         `[${timestamp}] Workflow ${approvedStatus}. Provider reached: ${
           approvedRun?.metadata?.providerReached ? "yes" : "no"
         }.`,
@@ -376,7 +433,7 @@ export function WorkflowAutomation() {
       const cancelledRun = response?.data || response;
       const cancelledStatus = getRunStatus(cancelledRun) || "cancelled";
 
-      setMockRunOutput(`Run ${cancelledStatus}.`);
+      setRunOutput(`Run ${cancelledStatus}.`);
       setWorkflowRuns((current) => [
         cancelledRun,
         ...current.filter((item) => item?.id !== cancelledRun?.id),
@@ -412,7 +469,7 @@ export function WorkflowAutomation() {
         ...current.filter((template) => template.id !== saved.id),
       ]);
       setSelectedTemplate(saved);
-      setMockRunOutput(`Template saved: ${saved.name}. Loading it will not execute a run.`);
+      setRunOutput(`Template saved: ${saved.name}. Loading it will not execute a run.`);
     } catch (saveError) {
       setError(getErrorMessage(saveError));
     } finally {
@@ -421,9 +478,8 @@ export function WorkflowAutomation() {
   }
 
   function handleLoadSavedTemplate(template) {
-    setSelectedTemplate(template);
-    setSelectedScheduler(template.schedule || "Manual");
-    setMockRunOutput(`Template loaded: ${template.name}. No workflow run was executed.`);
+    selectTemplate(template);
+    setRunOutput(`Template loaded: ${template.name}. No workflow run was executed.`);
   }
 
   async function handleDeleteTemplate(template) {
@@ -436,7 +492,7 @@ export function WorkflowAutomation() {
       );
 
       if (selectedTemplate.id === template.id) {
-        setSelectedTemplate(workflowDefinitions[0] || workflowTemplates[0]);
+        selectTemplate(workflowDefinitions[0] || workflowTemplates[0]);
       }
     } catch (deleteError) {
       setError(getErrorMessage(deleteError));
@@ -444,7 +500,7 @@ export function WorkflowAutomation() {
   }
 
   const automationScore = automationStatus?.automationScore || automationStatus?.score || 0;
-  const visibleTemplates = [...workflowDefinitions, ...savedTemplates];
+  const visibleTemplates = visibleTemplateSource(workflowDefinitions, savedTemplates);
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -512,8 +568,8 @@ export function WorkflowAutomation() {
 
       <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Templates" value={visibleTemplates.length} icon={Workflow} />
-        <MetricCard label="Triggers" value={fallbackTriggers.length} icon={TimerReset} />
-        <MetricCard label="Actions" value={fallbackActions.length} icon={Play} />
+        <MetricCard label="Triggers" value={triggerCards.length} icon={TimerReset} />
+        <MetricCard label="Actions" value={actionCards.length} icon={Play} />
         <MetricCard label="Jobs" value={automationJobs.length || automationHistory.length} icon={Layers3} />
       </section>
 
@@ -534,7 +590,7 @@ export function WorkflowAutomation() {
                         ? "border-cyan-300/30 bg-cyan-300/10"
                         : "border-white/10 bg-black/15 hover:border-cyan-300/20"
                     }`}
-                    onClick={() => setSelectedTemplate(template)}
+                    onClick={() => selectTemplate(template)}
                     type="button">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -614,8 +670,8 @@ export function WorkflowAutomation() {
 
           <Panel title="Trigger / Action" kicker="Automation Control" icon={Rocket}>
             <div className="grid gap-3">
-              <CardList title="Triggers" items={fallbackTriggers} />
-              <CardList title="Actions" items={fallbackActions} />
+              <CardList title="Triggers" items={triggerCards} />
+              <CardList title="Actions" items={actionCards} />
             </div>
           </Panel>
         </aside>
@@ -623,9 +679,9 @@ export function WorkflowAutomation() {
         <section className="grid gap-4">
           <Panel title="Pipeline Steps" kicker="Execution Pipeline" icon={Layers3}>
             <div className="grid gap-3 md:grid-cols-2">
-              {pipelineSteps.map((step, index) => (
+              {selectedSteps.map((step, index) => (
                 <div
-                  key={step.name}
+                  key={step.id || step.name}
                   className="rounded-2xl border border-white/10 bg-black/15 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-sm font-black text-white">{step.name}</p>
@@ -634,10 +690,10 @@ export function WorkflowAutomation() {
                     </span>
                   </div>
                   <p className="mt-2 text-xs uppercase tracking-[0.18em] text-cyan-300">
-                    {step.status}
+                    {step.status || (step.requiresApproval ? "Approval required" : "Ready")}
                   </p>
                   <p className="mt-2 text-sm leading-6 text-slate-400">
-                    {step.detail}
+                    {step.tool || step.detail || "Workflow engine step"}
                   </p>
                 </div>
               ))}
@@ -650,7 +706,7 @@ export function WorkflowAutomation() {
                 {selectedTemplate.name}
               </p>
               <p className="mt-3 text-sm font-semibold leading-7 text-white">
-                {mockRunOutput}
+                {runOutput}
               </p>
             </div>
 
@@ -819,7 +875,12 @@ function CardList({ title, items }) {
 
 function getErrorMessage(error) {
   if (typeof error === "string") return error;
-  if (typeof error?.message === "string") return error.message;
+  if (typeof error?.message === "string") {
+    const details = [error.code, error.status].filter(Boolean).join(" ");
+    return details && !error.message.includes(error.code)
+      ? `${error.message} (${details})`
+      : error.message;
+  }
 
   try {
     return JSON.stringify(error);

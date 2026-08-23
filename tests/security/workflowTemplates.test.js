@@ -243,6 +243,43 @@ test("workflow template CRUD handles duplicate names safely", async () => {
   }
 });
 
+test("workflow persistence failures preserve a safe machine-readable error", async () => {
+  const { app } = createWorkflowApp({
+    overrides: {
+      repository: {
+        async createTemplate() {
+          const error = new Error("Workflow persistence gagal.");
+          error.code = "WORKFLOW_PERSISTENCE_ERROR";
+          error.statusCode = 503;
+          throw error;
+        },
+      },
+    },
+  });
+  const server = await startServer(app);
+
+  try {
+    const result = await requestJson(server.baseUrl, "/api/v1/workflows/templates", {
+      body: JSON.stringify({
+        definitionId: "telemetry_sync",
+        name: "Telemetry Sync",
+      }),
+      headers: {
+        ...createAuthHeader(),
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+
+    assert.strictEqual(result.status, 503);
+    assert.strictEqual(result.body.code, "WORKFLOW_PERSISTENCE_ERROR");
+    assert.strictEqual(result.body.message, "Workflow persistence gagal.");
+    assert.notStrictEqual(result.body.message, "Workflow request gagal.");
+  } finally {
+    await server.close();
+  }
+});
+
 test("creating a run from a template uses the workflow engine boundary", async () => {
   const { app, getCreateRunCalls } = createWorkflowApp();
   const server = await startServer(app);

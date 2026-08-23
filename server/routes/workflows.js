@@ -27,17 +27,24 @@ function getOwnerId(req) {
   return req.userId || req.user?.id || null;
 }
 
+const SAFE_WORKFLOW_ERROR_MESSAGES = {
+  WORKFLOW_PERSISTENCE_ERROR: "Workflow persistence gagal.",
+  WORKFLOW_PERSISTENCE_NOT_CONFIGURED: "Workflow persistence belum dikonfigurasi.",
+  WORKFLOW_TEMPLATE_DUPLICATE_NAME: "Nama template workflow sudah digunakan.",
+};
+
 function sendWorkflowError(res, error) {
   const status = Number(error?.statusCode || error?.status || 500);
   const safeStatus = status >= 400 && status < 600 ? status : 500;
+  const safeMessage =
+    SAFE_WORKFLOW_ERROR_MESSAGES[error?.code] ||
+    (safeStatus < 500 ? error?.message : null) ||
+    "Workflow request gagal.";
 
   return res.status(safeStatus).json({
     success: false,
     code: error?.code || "WORKFLOW_ERROR",
-    message:
-      safeStatus >= 500
-        ? "Workflow request gagal."
-        : error?.message || "Workflow request gagal.",
+    message: safeMessage,
   });
 }
 
