@@ -1,8 +1,12 @@
 const crypto = require("node:crypto");
 
 const REDACTED = "[REDACTED]";
+const RECENT_RUNTIME_ERROR_LIMIT = 25;
 const SENSITIVE_KEY_PATTERN =
   /(authorization|cookie|password|passwd|secret|token|api[_-]?key|service[_-]?role|access[_-]?key|refresh[_-]?token)/i;
+const SENSITIVE_ASSIGNMENT_PATTERN =
+  /\b([A-Za-z0-9_.-]*(?:api[_-]?key|service[_-]?role[_-]?key|access[_-]?key|refresh[_-]?token|password|passwd|secret|token)[A-Za-z0-9_.-]*)(\s*[:=]\s*)(['"]?)[^\s'",;)}\]]+\3/gi;
+const recentRuntimeErrors = [];
 
 function sanitizeScalar(value, maxLength = 2000) {
   if (value === null || value === undefined) return value;
@@ -13,6 +17,10 @@ function sanitizeScalar(value, maxLength = 2000) {
 
   return String(value)
     .replace(/Bearer\s+[A-Za-z0-9._~+\/=-]+/gi, "Bearer [REDACTED]")
+    .replace(
+      SENSITIVE_ASSIGNMENT_PATTERN,
+      (_match, key, separator) => `${key}${separator}${REDACTED}`,
+    )
     .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
     .trim()
     .slice(0, maxLength);
@@ -94,6 +102,10 @@ function write(level, event, metadata = {}) {
     ...metadata,
   });
 
+  if (level === "error") {
+    recordRuntimeError(payload);
+  }
+
   const line = JSON.stringify(payload);
 
   if (level === "error") {
@@ -107,6 +119,27 @@ function write(level, event, metadata = {}) {
   }
 
   console.info(line);
+}
+
+function recordRuntimeError(payload) {
+  recentRuntimeErrors.unshift({
+    code: sanitizeScalar(payload.code || payload.error?.code || null, 120),
+    event: sanitizeScalar(payload.event, 160),
+    message: sanitizeScalar(payload.error?.message || payload.message || null, 240),
+    method: sanitizeScalar(payload.method || null, 16),
+    path: sanitizeScalar(payload.path || null, 240),
+    requestId: sanitizeScalar(payload.requestId || null, 160),
+    statusCode: Number(payload.statusCode || payload.status || 0) || null,
+    timestamp: sanitizeScalar(payload.timestamp, 64),
+  });
+
+  recentRuntimeErrors.splice(RECENT_RUNTIME_ERROR_LIMIT);
+}
+
+function getRecentRuntimeErrors(limit = 5) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 5, 0), 25);
+
+  return recentRuntimeErrors.slice(0, safeLimit).map((item) => ({ ...item }));
 }
 
 function info(event, metadata) {
@@ -126,6 +159,7 @@ module.exports = {
   createRequestId,
   error,
   getRequestContext,
+  getRecentRuntimeErrors,
   info,
   redactValue,
   sanitizeScalar,

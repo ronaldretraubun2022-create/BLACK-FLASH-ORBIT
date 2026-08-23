@@ -5,6 +5,9 @@ const { requireAdmin } = require("../middleware/requireAdmin");
 const {
   getHealthSnapshot,
 } = require("../services/observability/healthService");
+const {
+  getOperationalIntelligence,
+} = require("../services/observability/operationalTelemetry");
 
 const router = express.Router();
 const MAX_PROMPT_TITLE_LENGTH = 140;
@@ -1189,6 +1192,7 @@ router.get("/dashboard/status", async (req, res) => {
         timestamp,
         uptime: process.uptime(),
       },
+      operationalIntelligence: getOperationalIntelligence({ user: req.user }),
       projects,
       security: {
         securityScore: 94,
@@ -1213,6 +1217,7 @@ router.get("/dashboard/status", async (req, res) => {
       reports: reports.length,
       uptime: process.uptime(),
     },
+    timestamp,
   });
 });
 
@@ -1231,6 +1236,7 @@ router.get("/dashboard", async (req, res) => {
         activity,
         automation: getAutomationEngines(),
         health,
+        operationalIntelligence: getOperationalIntelligence({ user: req.user }),
         projects,
         system: {
           status: "online",
