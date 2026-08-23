@@ -1,10 +1,16 @@
 const assert = require("node:assert");
+const express = require("express");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-const { loadModuleWithMocks } = require("../knowledge/testUtils");
+const {
+  createAuthHeader,
+  loadModuleWithMocks,
+  requestJson,
+  startServer,
+} = require("../knowledge/testUtils");
 
 const rootDir = path.resolve(__dirname, "../..");
 const apiServicePath = path.join(rootDir, "apps/web/src/services/api.js");
@@ -20,6 +26,7 @@ const telemetryLibPath = path.join(
   rootDir,
   "server/lib/orbitDashboardTelemetry.js",
 );
+const routesIndexPath = path.join(rootDir, "server/routes/index.js");
 
 function createFrontendApiHarness({
   fetchImpl,
@@ -125,6 +132,17 @@ function createResponseRecorder() {
     setHeader(key, value) {
       this.headers[key.toLowerCase()] = value;
     },
+  };
+}
+
+function createDashboardAuthMiddleware(user = {}) {
+  return function requireDashboardAuth(req, _res, next) {
+    req.user = {
+      email: "operator@example.test",
+      id: "user-1",
+      ...user,
+    };
+    next();
   };
 }
 
@@ -278,6 +296,107 @@ test("dashboard API accepts a valid mocked Supabase user token", async () => {
     assert.strictEqual(body.success, true);
     assert.strictEqual(body.module, "dashboard");
   } finally {
+    Object.entries(previousEnv).forEach(([key, value]) => {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    });
+  }
+});
+
+test("Express and serverless dashboard status share telemetry envelope shape", async () => {
+  delete require.cache[require.resolve(telemetryLibPath)];
+  delete require.cache[require.resolve(dashboardStatusPath)];
+  delete require.cache[require.resolve(routesIndexPath)];
+
+  const serverlessHandler = loadModuleWithMocks(dashboardStatusPath, {
+    "@supabase/supabase-js": {
+      createClient() {
+        return {
+          auth: {
+            async getUser() {
+              return {
+                data: {
+                  user: {
+                    id: "user-1",
+                    email: "operator@example.test",
+                  },
+                },
+                error: null,
+              };
+            },
+          },
+        };
+      },
+    },
+  });
+  const expressRoute = loadModuleWithMocks(routesIndexPath, {
+    "../lib/supabase": null,
+    "../middleware/requireAdmin": {
+      requireAdmin: createDashboardAuthMiddleware(),
+    },
+    "../middleware/requireAuth": {
+      requireAuth: createDashboardAuthMiddleware(),
+    },
+  });
+  const previousEnv = {
+    SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY,
+    VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL,
+  };
+  process.env.SUPABASE_URL = "https://orbit-auth.example.test";
+  process.env.SUPABASE_ANON_KEY = "test-anon-key";
+  delete process.env.VITE_SUPABASE_URL;
+  delete process.env.VITE_SUPABASE_ANON_KEY;
+
+  const app = express();
+  app.use(express.json());
+  app.use("/api/v1", expressRoute);
+  const server = await startServer(app);
+
+  try {
+    const serverlessRes = createResponseRecorder();
+    await serverlessHandler(
+      {
+        headers: {
+          authorization: "Bearer valid-mocked-token",
+        },
+        method: "GET",
+        url: "/api/v1/dashboard/status",
+      },
+      serverlessRes,
+    );
+    const serverlessBody = JSON.parse(serverlessRes.body);
+    const expressResult = await requestJson(
+      server.baseUrl,
+      "/api/v1/dashboard/status",
+      {
+        headers: createAuthHeader(),
+      },
+    );
+
+    assert.strictEqual(serverlessRes.statusCode, 200);
+    assert.strictEqual(expressResult.status, 200);
+    assert.strictEqual(typeof serverlessBody.timestamp, "string");
+    assert.strictEqual(typeof expressResult.body.timestamp, "string");
+    assert.deepStrictEqual(
+      Object.keys(serverlessBody.data.operationalIntelligence).sort(),
+      Object.keys(expressResult.body.data.operationalIntelligence).sort(),
+    );
+    assert.strictEqual(
+      serverlessBody.data.operationalIntelligence.authSession.session,
+      "validated",
+    );
+    assert.strictEqual(
+      expressResult.body.data.operationalIntelligence.authSession.session,
+      "validated",
+    );
+  } finally {
+    await server.close();
+
     Object.entries(previousEnv).forEach(([key, value]) => {
       if (value === undefined) {
         delete process.env[key];

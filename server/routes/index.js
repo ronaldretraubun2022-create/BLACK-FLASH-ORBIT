@@ -1217,6 +1217,7 @@ router.get("/dashboard/status", async (req, res) => {
       reports: reports.length,
       uptime: process.uptime(),
     },
+    timestamp,
   });
 });
 
