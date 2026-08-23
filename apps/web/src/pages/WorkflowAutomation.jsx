@@ -15,19 +15,22 @@ import { api } from "../services/api";
 const workflowTemplates = [
   {
     action: "Publish release manifest",
+    definitionId: "ai_operational_check",
     description: "Validasi manifest, build status, dan export package sebelum publish.",
     name: "Release Gate",
     trigger: "On build PASS",
   },
   {
     action: "Refresh telemetry snapshot",
+    definitionId: "telemetry_sync",
     description: "Tarik status automation, health, dan history untuk dashboard.",
     name: "Telemetry Sync",
     trigger: "Every 15 minutes",
   },
   {
     action: "Run security checklist",
-    description: "Mock audit terhadap env, route, dan readiness checklist.",
+    definitionId: "ai_operational_check",
+    description: "Audit env, route, dan readiness checklist melalui workflow terkontrol.",
     name: "Security Sweep",
     trigger: "Manual /security",
   },
@@ -79,10 +82,11 @@ export function WorkflowAutomation() {
   const [automationStatus, setAutomationStatus] = useState(null);
   const [automationJobs, setAutomationJobs] = useState([]);
   const [automationHistory, setAutomationHistory] = useState(fallbackHistory);
+  const [workflowRuns, setWorkflowRuns] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(workflowTemplates[0]);
   const [selectedScheduler, setSelectedScheduler] = useState("Hourly");
   const [mockRunOutput, setMockRunOutput] = useState(
-    "Safe mock run output will appear here.",
+    "Workflow output will appear here after a signed-in run.",
   );
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
@@ -102,12 +106,19 @@ export function WorkflowAutomation() {
     setError("");
 
     try {
-      const [automationResult, statusResult, jobsResult, historyResult] =
+      const [
+        automationResult,
+        statusResult,
+        jobsResult,
+        historyResult,
+        runsResult,
+      ] =
         await Promise.allSettled([
           api.getAutomation(),
           api.getAutomationStatus(),
           api.getAutomationJobs(),
           api.getAutomationHistory(),
+          api.getWorkflowRuns(),
         ]);
 
       if (automationResult.status === "fulfilled") {
@@ -138,6 +149,13 @@ export function WorkflowAutomation() {
         );
       }
 
+      if (runsResult.status === "fulfilled") {
+        const runs = Array.isArray(runsResult.value?.data)
+          ? runsResult.value.data
+          : [];
+        setWorkflowRuns(runs);
+      }
+
       setLastSync(new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }));
     } catch (loadError) {
       setError(getErrorMessage(loadError));
@@ -145,6 +163,7 @@ export function WorkflowAutomation() {
       setAutomationStatus(null);
       setAutomationJobs([]);
       setAutomationHistory(fallbackHistory);
+      setWorkflowRuns([]);
     } finally {
       setIsLoading(false);
     }
@@ -154,11 +173,18 @@ export function WorkflowAutomation() {
     loadWorkflowData();
   }, []);
 
-  function handleRunTemplate(template) {
+  async function handleRunTemplate(template) {
     setIsRunning(true);
     setError("");
 
-    window.setTimeout(() => {
+    try {
+      const response = await api.createWorkflowRun({
+        definitionId: template.definitionId || "telemetry_sync",
+        input: {
+          label: template.name,
+        },
+      });
+      const run = response?.data || response;
       const timestamp = new Date().toLocaleTimeString("id-ID", {
         hour: "2-digit",
         minute: "2-digit",
@@ -166,22 +192,61 @@ export function WorkflowAutomation() {
 
       setSelectedTemplate(template);
       setMockRunOutput(
-        `[${timestamp}] Mock run executed for ${template.name}. No backend side effects were triggered.`,
+        `[${timestamp}] Workflow ${run.status}. ${
+          run.status === "waiting_approval"
+            ? "Human approval required before AI Router execution."
+            : "Durable history persisted."
+        }`,
       );
+      setWorkflowRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
       setAutomationHistory((current) => [
         {
           detail: template.description,
-          result: "Mocked",
+          result: run.status,
           time: timestamp,
           title: template.name,
         },
         ...current,
       ]);
+    } catch (runError) {
+      setError(getErrorMessage(runError));
+    } finally {
       setIsRunning(false);
-    }, 450);
+    }
+  }
+
+  async function handleApproveLatestRun() {
+    const approvalRun = workflowRuns.find((run) => run.status === "waiting_approval");
+
+    if (!approvalRun) return;
+
+    setIsRunning(true);
+    setError("");
+
+    try {
+      const response = await api.approveWorkflowRun(approvalRun.id);
+      const run = response?.data || response;
+      const timestamp = new Date().toLocaleTimeString("id-ID", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      setMockRunOutput(
+        `[${timestamp}] Workflow ${run.status}. Provider reached: ${
+          run.metadata?.providerReached ? "yes" : "no"
+        }.`,
+      );
+      setWorkflowRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
+      await loadWorkflowData();
+    } catch (approvalError) {
+      setError(getErrorMessage(approvalError));
+    } finally {
+      setIsRunning(false);
+    }
   }
 
   const automationScore = automationStatus?.automationScore || automationStatus?.score || 0;
+  const pendingApprovalRun = workflowRuns.find((run) => run.status === "waiting_approval");
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -215,7 +280,15 @@ export function WorkflowAutomation() {
               onClick={() => handleRunTemplate(selectedTemplate)}
               type="button">
               <Play size={16} />
-              {isRunning ? "Running..." : "Run Mock"}
+              {isRunning ? "Running..." : "Run Workflow"}
+            </button>
+            <button
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#f1c36f]/30 bg-[#f1c36f]/15 px-4 py-3 text-sm font-black text-[#f1c36f] hover:bg-[#f1c36f]/20 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={isRunning || !pendingApprovalRun}
+              onClick={handleApproveLatestRun}
+              type="button">
+              <ShieldCheck size={16} />
+              Approve
             </button>
           </div>
         </div>
@@ -318,7 +391,7 @@ export function WorkflowAutomation() {
             </div>
           </Panel>
 
-          <Panel title="Mock Run Output" kicker="Safe Execution Result" icon={CheckCircle2}>
+          <Panel title="Run Output" kicker="Safe Execution Result" icon={CheckCircle2}>
             <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4">
               <p className="text-xs uppercase tracking-[0.25em] text-cyan-300">
                 {selectedTemplate.name}

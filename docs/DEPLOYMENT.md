@@ -24,6 +24,7 @@ Services:
 - Web: `http://localhost:5173`
 - API: `http://localhost:5000`
 - Health: `http://localhost:5000/api/v1/health`
+- Readiness: `http://localhost:5000/api/v1/readiness`
 
 ## 3. Environment inventory
 
@@ -103,6 +104,7 @@ Periksa:
 - Output directory sesuai `scripts/build-web.mjs`/Vite configuration.
 - SPA fallback hanya untuk route frontend.
 - `/api/*` tidak ditangkap fallback HTML.
+- `/api/v1/readiness` mengembalikan 200 saat dependency ready dan 503 saat degraded.
 - Environment dipisah untuk Preview dan Production.
 - Production branch `master`.
 
@@ -113,6 +115,7 @@ Jika backend Express tidak cocok dengan runtime serverless yang digunakan, deplo
 ### Public
 
 - Health 200.
+- Readiness 200 atau 503 degraded dengan JSON aman, bukan HTML fallback.
 - Login page tampil.
 - Frontend asset dan favicon termuat.
 - Refresh route SPA tidak 404.
@@ -126,6 +129,7 @@ Jika backend Express tidak cocok dengan runtime serverless yang digunakan, deplo
 - Newsroom draft.
 - Knowledge upload/index/search/delete.
 - Web Builder project/page.
+- Workflow Automation create run, approval gate, persisted history.
 
 ### Security
 

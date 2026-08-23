@@ -2,6 +2,9 @@ const { createClient } = require("@supabase/supabase-js");
 const {
   getHealthSnapshot,
 } = require("../services/observability/healthService");
+const {
+  getWorkflowPersistenceStatus,
+} = require("../services/workflows/workflowRepository");
 
 const SERVICE_NAME = "BLACK FLASH ORBIT API";
 const API_VERSION = "v1";
@@ -63,6 +66,11 @@ const automationEngines = {
     name: "Deploy Pipeline",
     status: "READY",
     description: "Prepare validated production builds for controlled release.",
+  },
+  workflowHistory: {
+    name: "Workflow History",
+    status: getWorkflowPersistenceStatus().configured ? "READY" : "DEGRADED",
+    description: "Persist owner-scoped workflow runs, approvals, and audit events.",
   },
 };
 

@@ -82,10 +82,40 @@ Closed:
 6. Verifikasi row count, relationships, RLS, dan critical queries.
 7. Catat duration, failure, dan recovery point.
 
+### Personal-use Supabase backup
+
+Gunakan export database Supabase untuk data durable ORBIT sebelum migration atau release personal.
+
+```powershell
+supabase db dump --linked --file backups/orbit-$(Get-Date -Format yyyyMMdd-HHmmss).sql
+```
+
+Jika CLI Supabase belum ter-link, jalankan dari project Supabase yang benar dan jangan commit folder `backups/`.
+
+Data yang wajib ter-cover:
+
+- `newsroom_generations`
+- `newsroom_editorial_decisions`
+- `orbit_knowledge`
+- `orbit_chat_sessions`
+- `orbit_chat_messages`
+- `orbit_workflow_runs`
+- `orbit_workflow_run_steps`
+- `orbit_workflow_approvals`
+- `orbit_workflow_audit_events`
+
+Restore hanya ke target terisolasi lebih dulu:
+
+```powershell
+supabase db reset --linked
+psql "<target-database-url>" -f backups/orbit-YYYYMMDD-HHMMSS.sql
+```
+
+Setelah restore, jalankan smoke test login, `/api/v1/readiness`, workflow history, AI chat, Newsroom history, Knowledge query, dan cross-user RLS denial.
+
 ## 7. Maintenance rule
 
 - Hindari migration/dependency update besar bersamaan dengan feature release.
 - Pastikan rollback target tersedia.
 - Beritahu pengguna internal untuk downtime terencana.
 - Jalankan smoke test setelah maintenance.
-

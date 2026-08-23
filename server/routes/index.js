@@ -5,6 +5,10 @@ const { requireAdmin } = require("../middleware/requireAdmin");
 const {
   getHealthSnapshot,
 } = require("../services/observability/healthService");
+const {
+  getWorkflowPersistenceStatus,
+  listRuns: listWorkflowRuns,
+} = require("../services/workflows/workflowRepository");
 
 const router = express.Router();
 const MAX_PROMPT_TITLE_LENGTH = 140;
@@ -923,6 +927,7 @@ function getAutomationStatus(user) {
     status: readyEngines.length === engines.length ? "READY" : "DEGRADED",
     userId: getAuthUserId(user),
     database: supabase ? "CONNECTED" : "NOT_CONFIGURED",
+    workflowPersistence: getWorkflowPersistenceStatus(),
     uptime: process.uptime(),
     totalEngines: engines.length,
     readyEngines: readyEngines.length,
@@ -970,6 +975,30 @@ function mapAutomationHistory(row) {
 }
 
 async function getAutomationHistory(user, limit = 25) {
+  try {
+    const workflowRuns = await listWorkflowRuns({
+      limit,
+      ownerId: getAuthUserId(user),
+    });
+
+    if (workflowRuns.length) {
+      return workflowRuns.map((run) => ({
+        createdAt: run.createdAt,
+        detail: `Workflow ${run.definitionId} is ${run.status}.`,
+        id: run.id,
+        jobId: run.definitionId,
+        result: run.status,
+        status: run.status,
+        time: run.createdAt,
+        title: run.definitionId,
+      }));
+    }
+  } catch (error) {
+    console.warn("Workflow automation history unavailable:", {
+      code: error.code || null,
+    });
+  }
+
   if (!supabase) return [];
 
   const { data, error } = await supabase

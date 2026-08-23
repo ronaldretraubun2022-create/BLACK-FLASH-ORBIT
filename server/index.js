@@ -16,6 +16,7 @@ const backupRoutes = require("./routes/backup");
 const chatRoutes = require("./routes/chat.routes");
 const knowledgeRoutes = require("./routes/knowledge.routes");
 const webBuilderRoutes = require("./routes/webBuilder.routes");
+const workflowRoutes = require("./routes/workflows");
 const notFound = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
 const {
@@ -24,7 +25,11 @@ const {
 } = require("./services/knowledge/embeddingService");
 const {
   getHealthSnapshot,
+  getReadinessSnapshot,
 } = require("./services/observability/healthService");
+const {
+  getWorkflowPersistenceStatus,
+} = require("./services/workflows/workflowRepository");
 
 const app = express();
 
@@ -228,6 +233,10 @@ function healthPayload() {
   return getHealthSnapshot();
 }
 
+async function readinessPayload() {
+  return getReadinessSnapshot();
+}
+
 function hasEnvValue(key) {
   return Boolean(String(process.env[key] || "").trim());
 }
@@ -235,6 +244,7 @@ function hasEnvValue(key) {
 function validateRequiredEnv() {
   const embeddingProvider = getEmbeddingProviderStatus();
   const knowledgeChatProvider = getKnowledgeChatProviderStatus();
+  const workflowPersistence = getWorkflowPersistenceStatus();
 
   console.info("[ORBIT Startup] Knowledge env", {
     embeddingProvider,
@@ -242,6 +252,7 @@ function validateRequiredEnv() {
     serviceRoleConfigured:
       hasEnvValue("SUPABASE_URL") &&
       hasEnvValue("SUPABASE_SERVICE_ROLE_KEY"),
+    workflowPersistence,
   });
 }
 
@@ -333,6 +344,13 @@ app.get(
   },
 );
 
+app.get(["/ready", "/readyz", "/api/ready", "/api/readyz", "/api/v1/readiness"], async (req, res) => {
+  const readiness = await readinessPayload();
+  const statusCode = readiness.status === "ready" ? 200 : 503;
+
+  res.status(statusCode).json(readiness);
+});
+
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: isProduction ? 100 : 1500,
@@ -348,6 +366,11 @@ const apiLimiter = rateLimit({
       "/api/healthz",
       "/api/v1/health",
       "/api/v1/healthz",
+      "/ready",
+      "/readyz",
+      "/api/ready",
+      "/api/readyz",
+      "/api/v1/readiness",
     ].includes(req.path),
   message: {
     success: false,
@@ -377,6 +400,10 @@ app.use(
 app.use(
   "/api/v1/web-builder",
   requireRouteHandler("routes/webBuilder.routes.js", webBuilderRoutes),
+);
+app.use(
+  "/api/v1/workflows",
+  requireRouteHandler("routes/workflows.js", workflowRoutes),
 );
 
 app.use(notFound);
