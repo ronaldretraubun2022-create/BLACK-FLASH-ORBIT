@@ -2,6 +2,9 @@ const express = require("express");
 const supabase = require("../lib/supabase");
 const { requireAuth } = require("../middleware/requireAuth");
 const { requireAdmin } = require("../middleware/requireAdmin");
+const {
+  getHealthSnapshot,
+} = require("../services/observability/healthService");
 
 const router = express.Router();
 const MAX_PROMPT_TITLE_LENGTH = 140;
@@ -1105,9 +1108,11 @@ router.use(
 );
 
 router.get("/system", (req, res) => {
+  const health = getHealthSnapshot();
+
   res.json({
     success: true,
-    status: "ready",
+    status: health.status === "healthy" ? "ready" : health.status,
     module: "system",
     data: [],
     metrics: {
@@ -1115,8 +1120,9 @@ router.get("/system", (req, res) => {
     },
     message: "Module ready for staging.",
     apiVersion: "v1",
-    environment: process.env.NODE_ENV || "development",
-    timestamp: new Date().toISOString(),
+    environment: health.environment,
+    runtime: health.runtime,
+    timestamp: health.timestamp,
   });
 });
 
@@ -1150,6 +1156,12 @@ router.get("/dashboard/status", async (req, res) => {
   const isDegraded = Boolean(degradedReason);
   const dashboardStatus = isDegraded ? "degraded" : "ready";
   const timestamp = new Date().toISOString();
+  const healthSnapshot = getHealthSnapshot();
+  const health = {
+    ...healthSnapshot,
+    status: isDegraded ? "degraded" : healthSnapshot.status,
+    timestamp,
+  };
 
   return res.json({
     success: true,
@@ -1168,13 +1180,7 @@ router.get("/dashboard/status", async (req, res) => {
     data: {
       activity,
       automation: getAutomationEngines(),
-      health: {
-        success: true,
-        service: "BLACK FLASH ORBIT API",
-        status: isDegraded ? "degraded" : "healthy",
-        uptime: process.uptime(),
-        timestamp,
-      },
+      health,
       metrics: {
         degraded: isDegraded,
         memory: process.memoryUsage(),
@@ -1194,8 +1200,10 @@ router.get("/dashboard/status", async (req, res) => {
       },
       system: {
         status: isDegraded ? "degraded" : "online",
+        module: "system",
         apiVersion: "v1",
-        environment: process.env.NODE_ENV || "development",
+        environment: health.environment,
+        runtime: health.runtime,
         timestamp,
       },
     },
@@ -1214,6 +1222,7 @@ router.get("/dashboard", async (req, res) => {
     getReports(),
     getActivity(20),
   ]);
+  const health = getHealthSnapshot();
 
   return res.json(
     createModuleResponse({
@@ -1221,19 +1230,15 @@ router.get("/dashboard", async (req, res) => {
       data: {
         activity,
         automation: getAutomationEngines(),
-        health: {
-          success: true,
-          service: "BLACK FLASH ORBIT API",
-          status: "healthy",
-          uptime: process.uptime(),
-          timestamp: new Date().toISOString(),
-        },
+        health,
         projects,
         system: {
           status: "online",
+          module: "system",
           apiVersion: "v1",
-          environment: process.env.NODE_ENV || "development",
-          timestamp: new Date().toISOString(),
+          environment: health.environment,
+          runtime: health.runtime,
+          timestamp: health.timestamp,
         },
       },
       metrics: {

@@ -1,4 +1,7 @@
 const { createClient } = require("@supabase/supabase-js");
+const {
+  getHealthSnapshot,
+} = require("../services/observability/healthService");
 
 const SERVICE_NAME = "BLACK FLASH ORBIT API";
 const API_VERSION = "v1";
@@ -271,14 +274,7 @@ function getMemory() {
 }
 
 function getOrbitHealth() {
-  return {
-    success: true,
-    service: SERVICE_NAME,
-    status: "healthy",
-    module: "health",
-    uptime: process.uptime(),
-    timestamp: getTimestamp(),
-  };
+  return getHealthSnapshot();
 }
 
 function getOrbitMetrics() {
@@ -329,14 +325,16 @@ function getOrbitSecurity() {
 }
 
 function getOrbitSystem() {
+  const health = getHealthSnapshot();
+
   return {
     success: true,
-    status: "online",
+    status: health.status === "healthy" ? "online" : health.status,
     module: "system",
     apiVersion: API_VERSION,
-    environment: getEnvironment(),
-    runtime: process.env.VERCEL ? "vercel" : "node",
-    timestamp: getTimestamp(),
+    environment: health.environment || getEnvironment(),
+    runtime: health.runtime || (process.env.VERCEL ? "vercel" : "node"),
+    timestamp: health.timestamp || getTimestamp(),
   };
 }
 
