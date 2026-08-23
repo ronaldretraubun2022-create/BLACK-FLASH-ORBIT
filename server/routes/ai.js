@@ -295,6 +295,12 @@ function normalizeSessionId(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || ""),
+  );
+}
+
 function normalizeEmail(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -327,7 +333,13 @@ function validateAiChatBody(body) {
   }
 
   const message = typeof body.message === "string" ? body.message.trim() : "";
-  const sessionId = normalizeSessionId(body.sessionId || body.session_id);
+  const sessionId =
+    normalizeSessionId(
+      body.sessionId ||
+        body.session_id ||
+        body.conversationId ||
+        body.conversation_id,
+    ) || "legacy-ai-chat";
 
   if (!message) {
     throw createHttpError("Message tidak boleh kosong.", 400, "empty_message");
@@ -335,10 +347,6 @@ function validateAiChatBody(body) {
 
   if (message.length > MAX_AI_MESSAGE_LENGTH) {
     throw createHttpError("Message terlalu panjang.", 413, "message_too_large");
-  }
-
-  if (!sessionId) {
-    throw createHttpError("sessionId wajib diisi.", 400, "session_required");
   }
 
   return {
@@ -401,7 +409,7 @@ async function getConversationHistory({
 }) {
   const ownerEmail = normalizeEmail(userEmail);
 
-  if (!sessionId || !ownerEmail || !supabaseDatabase) {
+  if (!sessionId || !ownerEmail || !supabaseDatabase || !isUuid(sessionId)) {
     return fallbackHistory;
   }
 
@@ -436,7 +444,9 @@ async function logAiAuditEvent({
   code = null,
   durationMs,
   model,
+  providerReached = false,
   sessionId,
+  stage = "unknown",
   status,
   user,
 }) {
@@ -448,7 +458,9 @@ async function logAiAuditEvent({
       code,
       durationMs,
       model,
+      providerReached,
       sessionId,
+      stage,
       status,
       userId,
     });
@@ -546,6 +558,7 @@ async function buildOpenRouterMessages({
 
 router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
   const startedAt = Date.now();
+  let stage = "received";
   let requestContext = {
     message: "",
     model: DEFAULT_OPENROUTER_MODEL,
@@ -556,9 +569,11 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
 
   try {
     const authenticatedUser = req.user;
+    stage = "validation";
     requestContext = validateAiChatBody(req.body);
     const { history, message, model, sessionId, systemPrompt } = requestContext;
 
+    stage = "safety";
     if (hasSensitiveAiInput(requestContext)) {
       throw createHttpError(
         "Prompt mengandung data sensitif dan tidak dikirim ke AI.",
@@ -567,13 +582,16 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       );
     }
 
+    stage = "orbit_command";
     const orbitCommandResponse = handleOrbitCommand(message);
 
     if (orbitCommandResponse) {
       await logAiAuditEvent({
         durationMs: Date.now() - startedAt,
         model: "orbit-command",
+        providerReached: false,
         sessionId,
+        stage,
         status: "success",
         user: authenticatedUser,
       });
@@ -585,6 +603,7 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       });
     }
 
+    stage = "context";
     const openRouterMessages = await buildOpenRouterMessages({
       currentMessage: message,
       fallbackHistory: history,
@@ -592,6 +611,7 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       systemPrompt,
       userEmail: authenticatedUser.email,
     });
+    stage = "provider";
     const aiResult = await generateCompletion({
       maxTokens: 1200,
       messages: openRouterMessages,
@@ -602,10 +622,13 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       useCase: AI_USE_CASES.GENERAL_CHAT,
     });
 
+    stage = "response";
     await logAiAuditEvent({
       durationMs: Date.now() - startedAt,
       model: aiResult.model,
+      providerReached: true,
       sessionId,
+      stage,
       status: "success",
       user: authenticatedUser,
     });
@@ -628,15 +651,18 @@ router.post("/chat", requireAiAuth, aiChatLimiter, async (req, res) => {
       status,
       model: requestContext.model,
       name: error.name,
-      message: error.message,
+      providerReached: stage === "provider" || stage === "response",
       sessionId: requestContext.sessionId,
+      stage,
     });
 
     await logAiAuditEvent({
       code,
       durationMs: Date.now() - startedAt,
       model: requestContext.model,
+      providerReached: stage === "provider" || stage === "response",
       sessionId: requestContext.sessionId,
+      stage,
       status: "failed",
       user: req.user,
     });

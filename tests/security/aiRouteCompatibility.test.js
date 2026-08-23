@@ -174,6 +174,88 @@ test("POST /api/ai/chat preserves public response contract through AI Router", a
   }
 });
 
+test("POST /api/ai/chat accepts legacy payload without sessionId and reaches AI Router", async () => {
+  let observedRequestId = "";
+
+  const app = createJsonApp("../../server/routes/ai", "/api/ai", {
+    "../lib/orbitKnowledge": {
+      buildOrbitKnowledgeContext: async () => "",
+    },
+    "../lib/orbitMemory": {
+      buildOrbitMemoryContext: async () => "",
+      containsSensitiveData: () => false,
+    },
+    "../lib/orbitRuntimeContext": {
+      buildOrbitRuntimeContext: () => "",
+    },
+    "../lib/supabase": null,
+    "../services/ai/aiRouter": {
+      AI_USE_CASES: {
+        GENERAL_CHAT: "GENERAL_CHAT",
+      },
+      generateCompletion: async (options) => {
+        observedRequestId = options.requestId;
+
+        return {
+          content: "Router legacy chat answer.",
+          model: "resolved/model",
+          provider: "openrouter",
+        };
+      },
+    },
+    "@supabase/supabase-js": {
+      createClient: () => ({
+        auth: {
+          getUser: async () => ({
+            data: {
+              user: {
+                email: "reporter@example.com",
+                id: "user-1",
+              },
+            },
+            error: null,
+          }),
+        },
+      }),
+    },
+  });
+  const server = await startServer(app);
+  const originalSupabaseUrl = process.env.SUPABASE_URL;
+  const originalSupabaseAnonKey = process.env.SUPABASE_ANON_KEY;
+
+  process.env.SUPABASE_URL = "https://project.supabase.co";
+  process.env.SUPABASE_ANON_KEY = "test.anon.key";
+
+  try {
+    const result = await requestJson(server.baseUrl, "/api/ai/chat", {
+      body: JSON.stringify({
+        message: "Halo Orbit legacy",
+      }),
+      headers: {
+        ...createAuthHeader(),
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+
+    assert.strictEqual(result.status, 200);
+    assert.strictEqual(result.body.success, true);
+    assert.strictEqual(result.body.response, "Router legacy chat answer.");
+    assert.strictEqual(observedRequestId, "legacy-ai-chat");
+  } finally {
+    if (originalSupabaseUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = originalSupabaseUrl;
+
+    if (originalSupabaseAnonKey === undefined) {
+      delete process.env.SUPABASE_ANON_KEY;
+    } else {
+      process.env.SUPABASE_ANON_KEY = originalSupabaseAnonKey;
+    }
+
+    await server.close();
+  }
+});
+
 test("POST /api/knowledge/ask remains compatible", async () => {
   const app = createJsonApp(
     "../../server/routes/knowledge.routes",
@@ -230,6 +312,8 @@ test("GET /api/v1/health remains public", async () => {
 
     assert.strictEqual(result.status, 200);
     assert.strictEqual(result.body.success, true);
+    assert.strictEqual(result.body.module, "health");
+    assert.ok(result.body.runtime);
   } finally {
     await server.close();
   }

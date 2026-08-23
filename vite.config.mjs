@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -9,12 +10,9 @@ const rootDir = dirname(fileURLToPath(import.meta.url));
 export default defineConfig(({ command }) => {
   const isBuild = command === "build";
 
-  if (isBuild) {
-    process.env.NODE_ENV = "production";
-  }
-
   return {
     root: resolve(rootDir, "apps/web"),
+
     envDir: rootDir,
 
     plugins: [
@@ -36,12 +34,6 @@ export default defineConfig(({ command }) => {
       ),
     },
 
-    oxc: {
-      jsx: {
-        development: !isBuild,
-      },
-    },
-
     optimizeDeps: {
       include: [
         "react",
@@ -55,10 +47,9 @@ export default defineConfig(({ command }) => {
     server: {
       host: "0.0.0.0",
       port: 5173,
+
       proxy: {
         "/api": {
-          // Match the server's IPv4 listen address so Windows dev traffic
-          // does not bounce through localhost -> ::1 and fail.
           target: "http://127.0.0.1:5000",
           changeOrigin: true,
           secure: false,
@@ -69,19 +60,21 @@ export default defineConfig(({ command }) => {
     build: {
       outDir: resolve(rootDir, "dist/web"),
       emptyOutDir: true,
+
       sourcemap: false,
       minify: true,
       cssCodeSplit: true,
+
       chunkSizeWarningLimit: 900,
       reportCompressedSize: true,
 
-      rolldownOptions: {
+      rollupOptions: {
         output: {
           chunkFileNames: "assets/js/[name]-[hash].js",
           entryFileNames: "assets/js/[name]-[hash].js",
 
           assetFileNames: ({ name }) => {
-            if (/\.(css)$/i.test(name ?? "")) {
+            if (/\.css$/i.test(name ?? "")) {
               return "assets/css/[name]-[hash][extname]";
             }
 

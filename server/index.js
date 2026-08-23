@@ -22,6 +22,9 @@ const {
   getEmbeddingProviderStatus,
   getKnowledgeChatProviderStatus,
 } = require("./services/knowledge/embeddingService");
+const {
+  getHealthSnapshot,
+} = require("./services/observability/healthService");
 
 const app = express();
 
@@ -222,14 +225,7 @@ function requireRouteHandler(routeName, handler) {
 }
 
 function healthPayload() {
-  return {
-    success: true,
-    status: "online",
-    service: "BLACK FLASH ORBIT API",
-    version: "1.0.0",
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
-  };
+  return getHealthSnapshot();
 }
 
 function hasEnvValue(key) {

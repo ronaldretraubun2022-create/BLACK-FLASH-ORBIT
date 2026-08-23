@@ -45,7 +45,10 @@ import { CommandCenterSecurityPanel } from "./components/CommandCenterSecurityPa
 import { CommandCenterSidebar } from "./components/CommandCenterSidebar.jsx";
 import { CommandPalette } from "./components/CommandPalette.jsx";
 import { api, isAuthProviderUnavailableError } from "./services/api.js";
-import dashboardTelemetryState from "./services/dashboardTelemetryState.cjs";
+import {
+  getObjectValues,
+  resolveCommandCenterTelemetryState,
+} from "./services/dashboardTelemetryState.mjs";
 
 
 const AINewsroom = lazy(() =>
@@ -89,9 +92,6 @@ const Register = lazy(() =>
     default: module.Register,
   })),
 );
-
-const { getObjectValues, resolveCommandCenterTelemetryState } =
-  dashboardTelemetryState;
 
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
 

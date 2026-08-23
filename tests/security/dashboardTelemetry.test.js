@@ -36,7 +36,12 @@ function createFrontendApiHarness({
     .replace(/export\s+const\s+api\s+=/g, "const api =");
 
   const script = `
-    const apiUrlUtils = require("${path
+    const {
+      getApiPathSuffix,
+      joinApiUrl,
+      normalizeApiBaseUrl,
+      normalizeApiPath,
+    } = require("${path
       .join(rootDir, "apps/web/src/services/apiUrlUtils.cjs")
       .replace(/\\/g, "\\\\")}");
     const supabase = mockedSupabase;
@@ -288,6 +293,8 @@ test("createDashboardResponse returns Command Center data structure", () => {
   const response = createDashboardResponse();
 
   assert.strictEqual(response.success, true);
+  assert.strictEqual(response.data.health.module, "health");
+  assert.ok(response.data.system.runtime);
   assert.deepStrictEqual(Object.keys(response.data).sort(), [
     "activity",
     "automation",

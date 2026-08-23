@@ -33,7 +33,11 @@ async function parseJsonResponse(response) {
   return data;
 }
 
-export async function sendOrbitMessage({ message, model = DEFAULT_MODEL }) {
+export async function sendOrbitMessage({
+  message,
+  model = DEFAULT_MODEL,
+  sessionId = "legacy-ai-chat",
+}) {
   const cleanMessage = String(message || "").trim();
 
   if (!cleanMessage) {
@@ -55,6 +59,7 @@ export async function sendOrbitMessage({ message, model = DEFAULT_MODEL }) {
     body: JSON.stringify({
       message: cleanMessage,
       model,
+      sessionId,
     }),
   });
 
