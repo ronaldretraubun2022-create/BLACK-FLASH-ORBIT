@@ -262,11 +262,9 @@ async function reconcileStaleAgentRuns({ ownerId = null } = {}) {
 
   if (error) throw normalizeDbError(error, "AGENT_RUN_RECONCILE_FAILED");
 
-  const cutoff = Date.now() - getStaleRunAgeMs();
   let reconciled = 0;
 
   for (const row of data || []) {
-    const startedAt = Date.parse(row.started_at || "");
     const localStartedAt = localCodexRuns.get(row.id);
     const localAgeMs = localStartedAt ? Date.now() - localStartedAt : 0;
     const locallyLocked = repositoryRepairLock?.runId === row.id;
@@ -274,16 +272,18 @@ async function reconcileStaleAgentRuns({ ownerId = null } = {}) {
       ? hasActiveCodexProcess(repositoryRepairLock?.repoRoot || "")
       : Boolean(localStartedAt && localAgeMs < getStaleRunAgeMs());
 
-    if (
-      (repositoryRepairLock?.runId == null && pendingCodexJobs.size > 0) ||
-      (localStartedAt && localAgeMs < getStaleRunAgeMs() && (childAlive || locallyLocked))
-    ) continue;
-    if (!Number.isFinite(startedAt) || startedAt > cutoff) continue;
+    const verifiedCurrentRun = localStartedAt && (childAlive || locallyLocked);
+    const orphaned = !verifiedCurrentRun;
 
-    const safeSummary = "Codex repair marked failed after stale-run recovery.";
+    if (!orphaned && localAgeMs < getStaleRunAgeMs()) continue;
+
+    const exitCode = orphaned ? 125 : 124;
+    const safeSummary = orphaned
+      ? "Codex repair orphaned after Agent Bridge restart."
+      : "Codex repair marked failed after runtime timeout.";
     await updateRun({
       changedFiles: [],
-      exitCode: 124,
+      exitCode,
       runId: row.id,
       ownerId: row.owner_id,
       safeSummary,
@@ -295,7 +295,7 @@ async function reconcileStaleAgentRuns({ ownerId = null } = {}) {
     await recordAgentAudit({
       eventType: "codex_repair_stale_reconciled",
       jobId: row.job_id,
-      metadata: { runId: row.id, exitCode: 124 },
+      metadata: { code: orphaned ? "AGENT_RUN_ORPHANED" : "AGENT_CODEX_TIMEOUT", runId: row.id, exitCode },
       ownerId: row.owner_id,
     }).catch(() => null);
     reconciled += 1;

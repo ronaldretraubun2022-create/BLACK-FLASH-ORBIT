@@ -942,7 +942,7 @@ test("agent status reconciles old non-local Codex runs without touching active l
       created_at: "2026-08-24T00:00:00.000Z",
       id: "fresh-job",
       owner_id: "owner-1",
-      status: "running",
+      status: "queued",
       title: "Fresh repair",
       updated_at: "2026-08-24T00:00:00.000Z",
     }],
@@ -952,7 +952,7 @@ test("agent status reconciles old non-local Codex runs without touching active l
       owner_id: "owner-1",
       stage: "codex_repair",
       status: "running",
-      started_at: "2020-01-01T00:00:00.000Z",
+      started_at: new Date().toISOString(),
       safe_summary: "Codex repair running.",
       changed_files: [],
     }, {
@@ -960,7 +960,7 @@ test("agent status reconciles old non-local Codex runs without touching active l
       job_id: "fresh-job",
       owner_id: "owner-1",
       stage: "codex_repair",
-      status: "running",
+      status: "queued",
       started_at: new Date().toISOString(),
       safe_summary: "Codex repair running.",
       changed_files: [],
@@ -987,10 +987,11 @@ test("agent status reconciles old non-local Codex runs without touching active l
   const staleRun = client.state.runs.find((run) => run.id === "stale-run");
   const freshRun = client.state.runs.find((run) => run.id === "fresh-run");
   assert.strictEqual(staleRun.status, "failed");
-  assert.strictEqual(staleRun.exit_code, 124);
-  assert.strictEqual(freshRun.status, "running");
+  assert.strictEqual(staleRun.exit_code, 125);
+  assert.match(staleRun.safe_summary, /orphaned|restart/i);
+  assert.strictEqual(freshRun.status, "queued");
   assert.strictEqual(client.state.jobs.find((job) => job.id === "stale-job").status, "failed");
-  assert.strictEqual(client.state.jobs.find((job) => job.id === "fresh-job").status, "running");
+  assert.strictEqual(client.state.jobs.find((job) => job.id === "fresh-job").status, "queued");
 });
 
 test("active local Codex run is not reconciled before its runtime limit", async () => {
