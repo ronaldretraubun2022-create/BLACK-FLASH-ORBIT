@@ -81,6 +81,7 @@ export function AgentBridge() {
   const isCodexNonInteractive = codexState.nonInteractive === true;
   const isPersistenceAvailable = persistenceState.available !== false;
   const isRepositoryBusy = status?.repositoryRepair?.status === "busy";
+  const isRepositoryDirty = status?.repository?.dirty === true;
   const selectedJobId = selectedJob?.id || jobs[0]?.id || "";
   const selectedRunStateKey = getArray(selectedJob?.runs)
     .map((run) => `${run.id}:${run.status}`)
@@ -91,7 +92,8 @@ export function AgentBridge() {
   const canUseJobs = isBridgeEnabled && isPersistenceAvailable;
   const canCreateJob = canUseJobs && taskText.trim().length >= 8 && !activeAction;
   const canActOnJob = canUseJobs && Boolean(selectedJobId) && !activeAction && !isSelectedJobActive;
-  const canRunRepair = canActOnJob && !isRepositoryBusy && isCodexAvailable && isCodexNonInteractive;
+  const canRunRepair =
+    canActOnJob && !isRepositoryBusy && !isRepositoryDirty && isCodexAvailable && isCodexNonInteractive;
 
   const metrics = useMemo(() => {
     const data = status?.metrics || {};
@@ -441,6 +443,13 @@ export function AgentBridge() {
                       }
                     />
                   </div>
+                  {isRepositoryBusy || isRepositoryDirty ? (
+                    <p className="rounded-lg border border-[#d9ad57]/20 bg-[#d9ad57]/10 px-3 py-2 text-xs font-bold leading-5 text-[#f1c36f]">
+                      {isRepositoryBusy
+                        ? "Prepare Repair menunggu Codex repair yang sedang berjalan selesai."
+                        : "Prepare Repair membutuhkan working tree bersih sebelum Codex dapat dijalankan."}
+                    </p>
+                  ) : null}
                   <JobDetail job={selectedJob} />
                 </div>
               </Panel>

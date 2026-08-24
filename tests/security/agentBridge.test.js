@@ -1272,11 +1272,13 @@ test("agent API client and UI do not expose service role or provider secrets", (
   assert.match(app, /open-agent-bridge/);
   assert.match(sidebar, /Agent Bridge/);
   assert.match(page, /isRepositoryBusy/);
+  assert.match(page, /isRepositoryDirty/);
   assert.match(page, /Repository Repair/);
   assert.match(page, /disabled=\{!canUseJobs \|\| Boolean\(activeAction\)\}/);
   assert.match(page, /persistence/);
   assert.match(page, /codex/);
   assert.match(page, /canRunRepair/);
+  assert.match(page, /working tree bersih/);
   assert.match(page, /nonInteractive/);
   assert.match(page, /setInterval\(poll, 3000\)/);
   assert.match(page, /api\.getAgentJob\(selectedJobId\)/);
