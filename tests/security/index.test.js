@@ -17,3 +17,4 @@ require("./newsroomVerification.test.js");
 require("./newsroomIntelligenceSummary.test.js");
 require("./newsroomHistory.test.js");
 require("./newsroomHistoryClient.test.js");
+require("./intelligenceEngine.test.js");

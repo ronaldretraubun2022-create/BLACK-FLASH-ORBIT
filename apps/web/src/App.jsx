@@ -75,6 +75,12 @@ const WorkflowAutomation = lazy(() =>
   })),
 );
 
+const Intelligence = lazy(() =>
+  import("./pages/Intelligence.jsx").then((module) => ({
+    default: module.Intelligence,
+  })),
+);
+
 const WebBuilder = lazy(() =>
   import("./pages/WebBuilder.jsx").then((module) => ({
     default: module.WebBuilder,
@@ -739,6 +745,14 @@ function AppShell() {
         to: "/knowledge-base#knowledge-rag-preview",
       },
       {
+        id: "open-intelligence",
+        label: "Open Intelligence",
+        description: "Open entity, claim, timeline, and source evidence search.",
+        icon: BrainCircuit,
+        keywords: ["intelligence", "entities", "claims", "timeline", "search"],
+        to: "/intelligence",
+      },
+      {
         id: "open-workflow-automation",
         label: "Open Workflow Automation",
         description: "Open the automation dashboard.",
@@ -848,6 +862,7 @@ function AppShell() {
           <Route path="/ai-workspace" element={<AIWorkspace />} />
           <Route path="/ai-newsroom" element={<AINewsroom />} />
           <Route path="/knowledge-base" element={<KnowledgeBase />} />
+          <Route path="/intelligence" element={<Intelligence />} />
           <Route
             path="/knowledge"
             element={<Navigate replace to="/knowledge-base" />}

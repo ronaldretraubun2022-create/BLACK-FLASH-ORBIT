@@ -19,6 +19,7 @@ const navigationItems = [
   ["Command", LayoutDashboard, "all", "#command"],
   ["AI Newsroom", Bot, "all", "/ai-newsroom"],
   ["Knowledge", BrainCircuit, "all", "/knowledge-base"],
+  ["Intelligence", CloudLightning, "all", "/intelligence"],
   ["Web Builder", Globe2, "all", "/web-builder"],
   ["Media Intel", CloudLightning, "all", "#media-intel"],
   ["Security", ShieldCheck, "admin", "#security"],
