@@ -15,6 +15,7 @@ import {
   BrainCircuit,
   CheckCircle2,
   FileText,
+  GitBranch,
   Gauge,
   Image,
   Globe2,
@@ -78,6 +79,12 @@ const WorkflowAutomation = lazy(() =>
 const Intelligence = lazy(() =>
   import("./pages/Intelligence.jsx").then((module) => ({
     default: module.Intelligence,
+  })),
+);
+
+const AgentBridge = lazy(() =>
+  import("./pages/AgentBridge.jsx").then((module) => ({
+    default: module.AgentBridge,
   })),
 );
 
@@ -753,6 +760,14 @@ function AppShell() {
         to: "/intelligence",
       },
       {
+        id: "open-agent-bridge",
+        label: "Open Agent Bridge",
+        description: "Open local repository diagnostics and repair controls.",
+        icon: GitBranch,
+        keywords: ["agent", "bridge", "codex", "diagnostics", "repair"],
+        to: "/agent-bridge",
+      },
+      {
         id: "open-workflow-automation",
         label: "Open Workflow Automation",
         description: "Open the automation dashboard.",
@@ -863,6 +878,7 @@ function AppShell() {
           <Route path="/ai-newsroom" element={<AINewsroom />} />
           <Route path="/knowledge-base" element={<KnowledgeBase />} />
           <Route path="/intelligence" element={<Intelligence />} />
+          <Route path="/agent-bridge" element={<AgentBridge />} />
           <Route
             path="/knowledge"
             element={<Navigate replace to="/knowledge-base" />}

@@ -16,6 +16,7 @@ const backupRoutes = require("./routes/backup");
 const chatRoutes = require("./routes/chat.routes");
 const knowledgeRoutes = require("./routes/knowledge.routes");
 const intelligenceRoutes = require("./routes/intelligence");
+const agentRoutes = require("./routes/agent");
 const webBuilderRoutes = require("./routes/webBuilder.routes");
 const workflowRoutes = require("./routes/workflows");
 const notFound = require("./middleware/notFound");
@@ -401,6 +402,10 @@ app.use(
 app.use(
   "/api/v1/intelligence",
   requireRouteHandler("routes/intelligence.js", intelligenceRoutes),
+);
+app.use(
+  "/api/v1/agent",
+  requireRouteHandler("routes/agent.js", agentRoutes),
 );
 app.use(
   "/api/v1/web-builder",

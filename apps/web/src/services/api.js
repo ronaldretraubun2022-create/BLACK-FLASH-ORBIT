@@ -1069,6 +1069,86 @@ export const api = {
     );
   },
 
+  async getAgentStatus() {
+    return request("/api/v1/agent/status", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async createAgentJob(payload) {
+    return request("/api/v1/agent/jobs", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getAgentJobs() {
+    return request("/api/v1/agent/jobs", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async getAgentJob(jobId) {
+    return request(`/api/v1/agent/jobs/${encodeURIComponent(jobId)}`, {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async diagnoseAgentJob(jobId) {
+    return request(
+      `/api/v1/agent/jobs/${encodeURIComponent(jobId)}/diagnose`,
+      {
+        method: "POST",
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
+  async runAgentJob(jobId, payload) {
+    return request(`/api/v1/agent/jobs/${encodeURIComponent(jobId)}/run`, {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async validateAgentJob(jobId) {
+    return request(
+      `/api/v1/agent/jobs/${encodeURIComponent(jobId)}/validate`,
+      {
+        method: "POST",
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
+  async approveAgentJob(jobId) {
+    return request(
+      `/api/v1/agent/jobs/${encodeURIComponent(jobId)}/approve`,
+      {
+        method: "POST",
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
+  async rejectAgentJob(jobId) {
+    return request(
+      `/api/v1/agent/jobs/${encodeURIComponent(jobId)}/reject`,
+      {
+        method: "POST",
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
+  async getAgentJobDiff(jobId) {
+    return request(`/api/v1/agent/jobs/${encodeURIComponent(jobId)}/diff`, {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
   async createAutomationRun(payload) {
     return request("/api/v1/automation/runs", {
       method: "POST",
