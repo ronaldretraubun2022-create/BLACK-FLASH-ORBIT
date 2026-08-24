@@ -1027,16 +1027,16 @@ async function getAutomationHistory(user, limit = 25) {
     });
 
     workflowRuns = persistedRuns.map((run) => ({
-        createdAt: run.createdAt,
-        detail: `Workflow ${run.definitionId} is ${run.status}.`,
-        id: run.id,
-        jobId: run.definitionId,
-        result: run.status,
-        status: run.status,
-        time: run.createdAt,
-        title: run.definitionId,
-        type: "workflow_run",
-      }));
+      createdAt: run.createdAt,
+      detail: `Workflow ${run.metadata?.templateName || run.definitionId} is ${run.status}.`,
+      id: run.id,
+      jobId: run.definitionId,
+      result: run.status,
+      status: run.status,
+      time: run.createdAt,
+      title: run.metadata?.templateName || run.definitionId,
+      type: "workflow_run",
+    }));
   } catch (error) {
     console.warn("Workflow automation history unavailable:", {
       code: error.code || null,

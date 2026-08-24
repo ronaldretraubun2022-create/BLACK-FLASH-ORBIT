@@ -11,8 +11,8 @@ const AI_STEP_ID = "ai_router_check";
 
 function createHttpError(message, statusCode = 500, code = "WORKFLOW_ERROR") {
   const error = new Error(message);
-  error.statusCode = statusCode;
   error.code = code;
+  error.statusCode = statusCode;
   return error;
 }
 
@@ -47,10 +47,34 @@ function assertTransition(run, expectedStatus, action) {
   }
 }
 
-async function createWorkflowRun({ definitionId, input, ownerId, requestId }) {
+async function resolveRunDefinition({ definitionId, ownerId, templateId }) {
+  if (!templateId) {
+    return {
+      definition: getWorkflowDefinition(definitionId),
+      template: null,
+    };
+  }
+
+  const template = await repository.getTemplate({ ownerId, templateId });
+
+  if (!template) {
+    throw createHttpError("Workflow template tidak ditemukan.", 404, "WORKFLOW_TEMPLATE_NOT_FOUND");
+  }
+
+  return {
+    definition: getWorkflowDefinition(template.definitionId),
+    template,
+  };
+}
+
+async function createWorkflowRun({ definitionId, input, ownerId, requestId, templateId }) {
   assertOwner(ownerId);
 
-  const definition = getWorkflowDefinition(definitionId);
+  const { definition, template } = await resolveRunDefinition({
+    definitionId,
+    ownerId,
+    templateId,
+  });
   assertAllowedWorkflowDefinition(definition);
 
   const safeInput = sanitizeInput(input);
@@ -59,8 +83,11 @@ async function createWorkflowRun({ definitionId, input, ownerId, requestId }) {
     metadata: {
       input: safeInput,
       requestId,
+      templateId: template?.id || null,
+      templateName: template?.name || null,
     },
     ownerId,
+    templateId: template?.id || null,
   });
 
   if (definition.sensitive) {
@@ -174,9 +201,9 @@ async function approveWorkflowRun({ approvedBy, ownerId, requestId, runId }) {
       maxTokens: 180,
       messages: [
         {
-          role: "user",
           content:
             "Return a concise BLACK FLASH ORBIT workflow readiness confirmation for a human-approved operational check. Do not include secrets or credentials.",
+          role: "user",
         },
       ],
       metadata: {

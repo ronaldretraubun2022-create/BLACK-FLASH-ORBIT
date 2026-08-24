@@ -7,6 +7,7 @@ require("./dashboardTelemetry.test.js");
 require("./vercelDeployment.test.js");
 require("./workflowAutomation.test.js");
 require("./workflowPersistence.test.js");
+require("./workflowTemplates.test.js");
 require("./aiResponseValidator.test.js");
 require("./frontendMockHygiene.test.js");
 require("./aiRouter.test.js");

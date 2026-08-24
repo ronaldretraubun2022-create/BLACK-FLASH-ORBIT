@@ -979,6 +979,35 @@ export const api = {
     });
   },
 
+  async getWorkflowTemplates() {
+    return request("/api/v1/workflows/templates", {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async createWorkflowTemplate(payload) {
+    return request("/api/v1/workflows/templates", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateWorkflowTemplate(id, payload) {
+    return request(`/api/v1/workflows/templates/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteWorkflowTemplate(id) {
+    return request(`/api/v1/workflows/templates/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
   async getWorkflowRuns() {
     return request("/api/v1/workflows/runs", {
       headers: await getAuthenticatedHeaders(),

@@ -75,6 +75,11 @@ const automationEngines = {
     status: getWorkflowPersistenceStatus().configured ? "READY" : "DEGRADED",
     description: "Persist owner-scoped workflow runs, approvals, and audit events.",
   },
+  workflowTemplates: {
+    name: "Workflow Templates",
+    status: getWorkflowPersistenceStatus().configured ? "READY" : "DEGRADED",
+    description: "Persist owner-scoped reusable workflow templates.",
+  },
 };
 
 function getTimestamp() {
