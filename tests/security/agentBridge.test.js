@@ -1,7 +1,13 @@
 const assert = require("node:assert");
+const express = require("express");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const {
+  loadModuleWithMocks,
+  requestJson,
+  startServer,
+} = require("../knowledge/testUtils");
 
 const rootDir = path.resolve(__dirname, "../..");
 const migrationPath = path.join(
@@ -45,6 +51,9 @@ test("agent bridge migration creates owner-scoped RLS tables", () => {
   assert.match(sql, /changed_files jsonb not null default '\[\]'::jsonb/);
   assert.match(sql, /safe_metadata jsonb not null default '\{\}'::jsonb/);
   assert.match(sql, /safe_metadata::text !~\*/);
+  assert.match(sql, /create or replace function public\.set_orbit_agent_updated_at\(\)/);
+  assert.match(sql, /execute function public\.set_orbit_agent_updated_at\(\)/);
+  assert.doesNotMatch(sql, /set_orbit_intelligence_updated_at/);
 });
 
 test("agent bridge routes require auth and never accept client owner id", () => {
@@ -104,6 +113,92 @@ test("agent bridge is disabled by default unless local server flag is explicit",
   assert.match(page, /agentBridge/);
   assert.match(page, /Local bridge disabled/);
   assert.match(page, /ORBIT_AGENT_BRIDGE_ENABLED=true/);
+});
+
+test("agent status reports persistence failure without generic runtime failure", async () => {
+  const previous = process.env.ORBIT_AGENT_BRIDGE_ENABLED;
+
+  process.env.ORBIT_AGENT_BRIDGE_ENABLED = "true";
+
+  const service = loadModuleWithMocks(jobServicePath, {
+    "../supabaseAdmin": {
+      getSupabaseAdmin: () => null,
+    },
+    "./repositoryInspector": {
+      getChangedFiles: async () => [],
+      getConfiguredRepoRoot: () => rootDir,
+      getRepositoryStatus: async () => ({
+        branch: "feature/orbit-v1.3-agent-bridge",
+        dirty: false,
+        repoRootLabel: "BLACK-FLASH-ORBIT",
+        status: "clean",
+        statusSummary: "",
+      }),
+      getSafeDiffSummary: async () => ({
+        changedFiles: [],
+        diffCheckExitCode: 0,
+        safeSummary: "",
+      }),
+    },
+  });
+
+  const status = await service.getAgentStatus({ ownerId: "owner-1" });
+
+  if (previous === undefined) {
+    delete process.env.ORBIT_AGENT_BRIDGE_ENABLED;
+  } else {
+    process.env.ORBIT_AGENT_BRIDGE_ENABLED = previous;
+  }
+
+  assert.strictEqual(status.agentBridge.enabled, true);
+  assert.strictEqual(status.repository.branch, "feature/orbit-v1.3-agent-bridge");
+  assert.strictEqual(status.persistence.available, false);
+  assert.strictEqual(status.persistence.code, "AGENT_PERSISTENCE_NOT_CONFIGURED");
+  assert.notStrictEqual(status.persistence.message, "Agent Bridge request gagal.");
+});
+
+test("agent API exposes safe code status and message for known runtime errors", async () => {
+  const route = loadModuleWithMocks(routePath, {
+    "../middleware/requireAuth": {
+      requireAuth(req, _res, next) {
+        req.userId = "owner-1";
+        req.user = { id: "owner-1" };
+        next();
+      },
+    },
+    "../services/agent/agentConfig": {
+      assertAgentBridgeEnabled() {},
+    },
+    "../services/agent/agentJobService": {
+      getAgentStatus: async () => {
+        const error = new Error("Agent schema missing.");
+
+        error.statusCode = 503;
+        error.code = "AGENT_SCHEMA_MISSING";
+        throw error;
+      },
+    },
+  });
+  const app = express();
+
+  app.use(express.json());
+  app.use("/api/v1/agent", route);
+
+  const server = await startServer(app);
+
+  try {
+    const { body, status } = await requestJson(server.baseUrl, "/api/v1/agent/status", {
+      headers: { authorization: "Bearer test-token" },
+    });
+
+    assert.strictEqual(status, 503);
+    assert.strictEqual(body.success, false);
+    assert.strictEqual(body.status, 503);
+    assert.strictEqual(body.code, "AGENT_SCHEMA_MISSING");
+    assert.strictEqual(body.message, "Agent schema missing.");
+  } finally {
+    await server.close();
+  }
 });
 
 test("agent command allowlist rejects arbitrary shell and destructive git", () => {
@@ -230,7 +325,10 @@ test("agent API client and UI do not expose service role or provider secrets", (
   assert.match(app, /\/agent-bridge/);
   assert.match(app, /open-agent-bridge/);
   assert.match(sidebar, /Agent Bridge/);
-  assert.match(page, /disabled=\{!isBridgeEnabled \|\| Boolean\(activeAction\)\}/);
+  assert.match(page, /disabled=\{!canUseJobs \|\| Boolean\(activeAction\)\}/);
+  assert.match(page, /persistence/);
+  assert.match(page, /error\?\.body\?\.code/);
+  assert.match(page, /error\?\.body\?\.status/);
   assert.match(page, /disabled=\{!canCreateJob\}/);
   assert.doesNotMatch(page, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(page, /SUPABASE_SERVICE_ROLE_KEY|OPENROUTER_API_KEY|Authorization:\s*Bearer/);

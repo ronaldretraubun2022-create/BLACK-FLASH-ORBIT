@@ -36,14 +36,18 @@ function getOwnerId(req) {
 function sendAgentError(res, error) {
   const status = Number(error?.statusCode || error?.status || 500);
   const safeStatus = status >= 400 && status < 600 ? status : 500;
+  const code = error?.code || "AGENT_REQUEST_FAILED";
+  const isKnownAgentError = /^AGENT_[A-Z0-9_]+$/.test(code);
+  const safeMessage =
+    isKnownAgentError || safeStatus < 500
+      ? error?.message || "Agent Bridge request gagal."
+      : "Agent Bridge request gagal.";
 
   return res.status(safeStatus).json({
     success: false,
-    code: error?.code || "AGENT_REQUEST_FAILED",
-    message:
-      safeStatus >= 500
-        ? "Agent Bridge request gagal."
-        : error?.message || "Agent Bridge request gagal.",
+    code,
+    message: safeMessage,
+    status: safeStatus,
   });
 }
 

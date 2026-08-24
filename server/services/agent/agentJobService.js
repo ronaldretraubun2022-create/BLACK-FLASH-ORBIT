@@ -50,6 +50,34 @@ function normalizeDbError(error, code = "AGENT_PERSISTENCE_FAILED") {
   return createAgentError("Agent persistence gagal.", 500, code);
 }
 
+function mapPersistenceError(error) {
+  const agentError =
+    error?.code && /^AGENT_[A-Z0-9_]+$/.test(error.code)
+      ? error
+      : normalizeDbError(error, "AGENT_STATUS_FAILED");
+
+  return {
+    available: false,
+    code: agentError.code || "AGENT_PERSISTENCE_FAILED",
+    message: agentError.message || "Agent persistence gagal.",
+    status: "unavailable",
+  };
+}
+
+function buildEmptyMetrics(repoStatus, overrides = {}) {
+  return {
+    currentRepoBranch: repoStatus.branch,
+    jobsFailed: 0,
+    jobsQueued: 0,
+    jobsRunning: 0,
+    jobsSucceeded: 0,
+    lastRun: null,
+    lastValidation: null,
+    workingTree: repoStatus.status,
+    ...overrides,
+  };
+}
+
 function mapJob(row) {
   return {
     createdAt: row.created_at,
@@ -148,34 +176,44 @@ async function listRunsForJob({ jobId, ownerId }) {
 
 async function getAgentStatus({ ownerId }) {
   const agentBridge = getAgentBridgeState();
+  const disabledRepoStatus = {
+    branch: "disabled",
+    dirty: false,
+    repoRootLabel: "BLACK-FLASH-ORBIT",
+    status: "disabled",
+    statusSummary: agentBridge.reason,
+  };
 
   if (!isAgentBridgeEnabled()) {
     return {
       agentBridge,
-      metrics: {
-        currentRepoBranch: "disabled",
-        jobsFailed: 0,
-        jobsQueued: 0,
-        jobsRunning: 0,
-        jobsSucceeded: 0,
-        lastRun: null,
-        lastValidation: null,
-        workingTree: "disabled",
-      },
-      repository: {
-        branch: "disabled",
-        dirty: false,
-        repoRootLabel: "BLACK-FLASH-ORBIT",
+      metrics: buildEmptyMetrics(disabledRepoStatus),
+      persistence: {
+        available: false,
+        code: "AGENT_BRIDGE_DISABLED",
+        message: agentBridge.reason,
         status: "disabled",
-        statusSummary: agentBridge.reason,
       },
+      repository: disabledRepoStatus,
     };
   }
 
-  const client = getClient();
-  const [repoStatus, jobsQueued, jobsRunning, jobsSucceeded, jobsFailed, lastRun, lastValidation] =
+  const repoStatus = await getRepositoryStatus();
+  let client;
+
+  try {
+    client = getClient();
+  } catch (error) {
+    return {
+      agentBridge,
+      metrics: buildEmptyMetrics(repoStatus),
+      persistence: mapPersistenceError(error),
+      repository: repoStatus,
+    };
+  }
+
+  const [jobsQueued, jobsRunning, jobsSucceeded, jobsFailed, lastRun, lastValidation] =
     await Promise.all([
-      getRepositoryStatus(),
       client.from("orbit_agent_jobs").select("id", { count: "exact", head: true }).eq("owner_id", ownerId).eq("status", "queued"),
       client.from("orbit_agent_jobs").select("id", { count: "exact", head: true }).eq("owner_id", ownerId).in("status", ["diagnosing", "running", "validating"]),
       client.from("orbit_agent_jobs").select("id", { count: "exact", head: true }).eq("owner_id", ownerId).in("status", ["succeeded", "approved"]),
@@ -191,7 +229,14 @@ async function getAgentStatus({ ownerId }) {
     lastRun.error ||
     lastValidation.error;
 
-  if (firstError) throw normalizeDbError(firstError, "AGENT_STATUS_FAILED");
+  if (firstError) {
+    return {
+      agentBridge,
+      metrics: buildEmptyMetrics(repoStatus),
+      persistence: mapPersistenceError(firstError),
+      repository: repoStatus,
+    };
+  }
 
   return {
     agentBridge,
@@ -204,6 +249,12 @@ async function getAgentStatus({ ownerId }) {
       lastRun: lastRun.data ? mapRun(lastRun.data) : null,
       lastValidation: lastValidation.data ? mapRun(lastValidation.data) : null,
       workingTree: repoStatus.status,
+    },
+    persistence: {
+      available: true,
+      code: null,
+      message: "Agent persistence ready.",
+      status: "ready",
     },
     repository: repoStatus,
   };

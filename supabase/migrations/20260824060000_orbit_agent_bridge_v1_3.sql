@@ -162,9 +162,19 @@ create policy "Agent audit owners can delete own events"
 on public.orbit_agent_audit for delete
 using (false);
 
+create or replace function public.set_orbit_agent_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
 drop trigger if exists orbit_agent_jobs_set_updated_at
   on public.orbit_agent_jobs;
 create trigger orbit_agent_jobs_set_updated_at
 before update on public.orbit_agent_jobs
 for each row
-execute function public.set_orbit_intelligence_updated_at();
+execute function public.set_orbit_agent_updated_at();

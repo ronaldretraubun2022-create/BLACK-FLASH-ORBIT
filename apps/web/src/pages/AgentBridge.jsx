@@ -28,13 +28,19 @@ function getArray(value) {
 }
 
 function getSafeError(error) {
-  const message = String(error?.message || "Agent Bridge request gagal.").slice(0, 240);
+  const status = Number(error?.status || error?.body?.status || 0);
+  const code = String(error?.code || error?.body?.code || "").trim();
+  const bodyMessage = String(error?.body?.message || "").trim();
+  const baseMessage = bodyMessage || error?.message || "Agent Bridge request gagal.";
+  const message = String(baseMessage).slice(0, 240);
 
   if (/authorization|bearer|token|secret|api[_-]?key|service[_-]?role/i.test(message)) {
     return "Agent Bridge request gagal.";
   }
 
-  return message;
+  const prefix = [status || "", code].filter(Boolean).join(" ");
+
+  return prefix ? `${prefix}: ${message}` : message;
 }
 
 function formatDate(value) {
@@ -66,10 +72,13 @@ export function AgentBridge() {
   const [message, setMessage] = useState("");
 
   const agentState = status?.agentBridge || {};
+  const persistenceState = status?.persistence || {};
   const isBridgeEnabled = agentState.enabled === true;
+  const isPersistenceAvailable = persistenceState.available !== false;
   const selectedJobId = selectedJob?.id || jobs[0]?.id || "";
-  const canCreateJob = isBridgeEnabled && taskText.trim().length >= 8 && !activeAction;
-  const canActOnJob = isBridgeEnabled && Boolean(selectedJobId) && !activeAction;
+  const canUseJobs = isBridgeEnabled && isPersistenceAvailable;
+  const canCreateJob = canUseJobs && taskText.trim().length >= 8 && !activeAction;
+  const canActOnJob = canUseJobs && Boolean(selectedJobId) && !activeAction;
 
   const metrics = useMemo(() => {
     const data = status?.metrics || {};
@@ -90,8 +99,9 @@ export function AgentBridge() {
       const statusResponse = await api.getAgentStatus();
       const nextStatus = statusResponse?.data || null;
       const enabled = nextStatus?.agentBridge?.enabled === true;
+      const persistenceReady = nextStatus?.persistence?.available !== false;
 
-      if (!enabled) {
+      if (!enabled || !persistenceReady) {
         setStatus(nextStatus);
         setJobs([]);
         setSelectedJob(null);
@@ -240,7 +250,9 @@ export function AgentBridge() {
                   </h2>
                   <p className="mt-4 max-w-3xl text-sm leading-7 text-zinc-400">
                     {isBridgeEnabled
-                      ? "Agent Bridge menjalankan command allowlist, menyiapkan Codex repair lewat wrapper lokal, dan menunggu approval manusia."
+                      ? isPersistenceAvailable
+                        ? "Agent Bridge menjalankan command allowlist, menyiapkan Codex repair lewat wrapper lokal, dan menunggu approval manusia."
+                        : "Agent Bridge lokal aktif, tetapi persistence Agent belum siap untuk menyimpan job."
                       : "Agent Bridge tidak menjalankan command sampai server lokal mengaktifkan ORBIT_AGENT_BRIDGE_ENABLED=true."}
                   </p>
                 </div>
@@ -271,7 +283,7 @@ export function AgentBridge() {
                 <form className="grid gap-3" onSubmit={handleCreateJob}>
                   <textarea
                     className="min-h-36 rounded-lg border border-white/10 bg-black/25 px-3 py-3 text-sm font-semibold leading-6 text-white outline-none placeholder:text-zinc-600 focus:border-[#d9ad57]/45"
-                    disabled={!isBridgeEnabled || Boolean(activeAction)}
+                    disabled={!canUseJobs || Boolean(activeAction)}
                     maxLength={4000}
                     onChange={(event) => setTaskText(event.target.value)}
                     placeholder="Describe the repository diagnosis or repair task. Do not paste secrets."
@@ -391,6 +403,7 @@ export function AgentBridge() {
 function RepositoryStatus({ isLoading, status }) {
   const repo = status?.repository || {};
   const agentBridge = status?.agentBridge || {};
+  const persistence = status?.persistence || {};
 
   if (isLoading) return <EmptyState label="Loading repository status..." />;
 
@@ -405,6 +418,10 @@ function RepositoryStatus({ isLoading, status }) {
           label="Local Agent"
           value={agentBridge.enabled ? "enabled" : "disabled"}
         />
+        <StatusLine
+          label="Persistence"
+          value={persistence.available === false ? "unavailable" : persistence.status || "ready"}
+        />
         <StatusLine label="Branch" value={repo.branch || "-"} />
         <StatusLine label="Working Tree" value={repo.status || "-"} />
         <StatusLine label="Dirty" value={repo.dirty ? "yes" : "no"} />
@@ -412,6 +429,12 @@ function RepositoryStatus({ isLoading, status }) {
       {!agentBridge.enabled ? (
         <p className="mt-3 rounded-lg border border-[#d9ad57]/20 bg-[#d9ad57]/10 px-3 py-2 text-xs font-bold leading-5 text-[#f1c36f]">
           {agentBridge.reason || "Local Agent Bridge is disabled."}
+        </p>
+      ) : null}
+      {agentBridge.enabled && persistence.available === false ? (
+        <p className="mt-3 rounded-lg border border-[#7d1f2f]/30 bg-[#7d1f2f]/10 px-3 py-2 text-xs font-bold leading-5 text-rose-100">
+          {persistence.code ? `${persistence.code}: ` : ""}
+          {persistence.message || "Agent persistence unavailable."}
         </p>
       ) : null}
     </div>
