@@ -1284,6 +1284,7 @@ test("agent API client and UI do not expose service role or provider secrets", (
   assert.match(page, /setInterval\(poll, 3000\)/);
   assert.match(page, /api\.getAgentJob\(selectedJobId\)/);
   assert.match(page, /Codex repair queued/);
+  assert.match(page, /mode exec non-interaktif belum siap/);
   assert.match(page, /error\?\.body\?\.code/);
   assert.match(page, /error\?\.body\?\.status/);
   assert.match(page, /disabled=\{!canCreateJob\}/);

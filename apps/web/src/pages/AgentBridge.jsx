@@ -50,6 +50,18 @@ function getSafeError(error) {
   return prefix ? `${prefix}: ${message}` : message;
 }
 
+function getCodexUnavailableMessage(codex = {}) {
+  if (codex.available === false) {
+    return `${codex.code || "AGENT_CODEX_NOT_FOUND"}: Codex CLI belum tersedia untuk Prepare Repair.`;
+  }
+
+  if (codex.nonInteractive === false) {
+    return `${codex.code || "AGENT_CODEX_MODE_UNSUPPORTED"}: Codex CLI tersedia, tetapi mode exec non-interaktif belum siap.`;
+  }
+
+  return "AGENT_CODEX_MODE_UNSUPPORTED: Codex repair unavailable.";
+}
+
 function formatDate(value) {
   if (!value) return "-";
 
@@ -527,7 +539,7 @@ function RepositoryStatus({ isLoading, status }) {
       ) : null}
       {agentBridge.enabled && (codex.available === false || codex.nonInteractive === false) ? (
         <p className="mt-3 rounded-lg border border-[#d9ad57]/20 bg-[#d9ad57]/10 px-3 py-2 text-xs font-bold leading-5 text-[#f1c36f]">
-          {codex.code || "AGENT_CODEX_MODE_UNSUPPORTED"}: Codex repair unavailable.
+          {getCodexUnavailableMessage(codex)}
         </p>
       ) : null}
     </div>
