@@ -29,6 +29,18 @@ function read(filePath) {
   return fs.readFileSync(filePath, "utf8");
 }
 
+function getFunctionSource(source, functionName) {
+  const start = source.indexOf(`async function ${functionName}`);
+  assert(start >= 0, `${functionName} missing`);
+
+  const nextFunction = source.indexOf("\nasync function ", start + 1);
+  const nextPlainFunction = source.indexOf("\nfunction ", start + 1);
+  const candidates = [nextFunction, nextPlainFunction].filter((index) => index > start);
+  const end = candidates.length ? Math.min(...candidates) : source.length;
+
+  return source.slice(start, end);
+}
+
 test("intelligence migration creates owner-scoped RLS tables", () => {
   const sql = read(migrationPath);
 
@@ -533,13 +545,47 @@ test("reprocess cleanup is source-link aware so shared entities survive", () => 
 
 test("reprocess remains idempotent through cleanup and scoped upsert keys", () => {
   const source = read(repositoryPath);
+  const reprocessBody = getFunctionSource(source, "reprocessSource");
 
   assert.match(source, /const cleanup = await cleanupSourceDerivedData\(\{ ownerId, sourceUuid: source\.id \}\)/);
-  assert.match(source, /await processSourceInput\(\{/);
+  assert.match(reprocessBody, /await updateSourceReprocessMetadata\(\{/);
+  assert.match(reprocessBody, /await persistExtractionForSource\(\{/);
+  assert.doesNotMatch(reprocessBody, /processSourceInput\(/);
+  assert.doesNotMatch(reprocessBody, /upsertSource\(/);
   assert.match(source, /onConflict: "owner_id,source_type,source_id"/);
   assert.match(source, /onConflict: "owner_id,source_id,normalized_claim"/);
   assert.match(source, /onConflict: "owner_id,source_id,link_type,target_key"/);
   assert.match(source, /mention_count: existing\s*\?\s*Math\.max\(1, existingLinkCount \+ Number\(entity\.mentions \|\| 1\)\)/s);
+});
+
+test("reprocess updates the requested source row without changing source identity", () => {
+  const source = read(repositoryPath);
+  const route = read(routePath);
+  const reprocessBody = getFunctionSource(source, "reprocessSource");
+  const updateBody = getFunctionSource(source, "updateSourceReprocessMetadata");
+
+  assert.match(route, /sourceUuid: req\.params\.id/);
+  assert.match(reprocessBody, /const source = await getSourceForReprocess\(\{ ownerId, sourceUuid \}\)/);
+  assert.match(updateBody, /\.eq\("owner_id", ownerId\)\s*\.eq\("id", sourceUuid\)/s);
+  assert.match(updateBody, /status: "processed"/);
+  assert.match(updateBody, /processed_at: reprocessedAt/);
+  assert.doesNotMatch(updateBody, /source_id:/);
+  assert.doesNotMatch(updateBody, /source_type:/);
+  assert.doesNotMatch(updateBody, /title:/);
+  assert.doesNotMatch(updateBody, /content_snapshot:/);
+  assert.match(reprocessBody, /sourceRow: refreshedSource/);
+  assert.match(source, /return \{\s*claims,\s*dates: extraction\.dates,\s*entities,\s*relationships,\s*source: sourceRow/s);
+});
+
+test("reprocess cleanup targets only derived rows for the requested source id", () => {
+  const source = read(repositoryPath);
+  const cleanupBody = getFunctionSource(source, "cleanupSourceDerivedData");
+
+  assert.match(cleanupBody, /\.from\("orbit_intelligence_source_links"\)\s*\.select\("id, entity_id"\)\s*\.eq\("owner_id", ownerId\)\s*\.eq\("source_id", sourceUuid\)/s);
+  assert.match(cleanupBody, /\.from\("orbit_intelligence_source_links"\)\s*\.delete\(\)\s*\.eq\("owner_id", ownerId\)\s*\.eq\("source_id", sourceUuid\)/s);
+  assert.match(cleanupBody, /\.from\("orbit_intelligence_claims"\)\s*\.delete\(\)\s*\.eq\("owner_id", ownerId\)\s*\.eq\("source_id", sourceUuid\)/s);
+  assert.match(cleanupBody, /\.from\("orbit_intelligence_relationships"\)\s*\.delete\(\)\s*\.eq\("owner_id", ownerId\)\s*\.eq\("source_id", sourceUuid\)/s);
+  assert.match(cleanupBody, /if \(remainingLinks > 0\) continue/);
 });
 
 test("intelligence routes require auth and expose scoped endpoints", () => {

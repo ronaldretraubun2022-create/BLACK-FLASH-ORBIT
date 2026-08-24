@@ -286,6 +286,32 @@ async function upsertSource(source) {
   return mapSource(data);
 }
 
+async function updateSourceReprocessMetadata({ ownerId, reprocessedAt, sourceUuid }) {
+  const client = getClient();
+  const { data, error } = await client
+    .from("orbit_intelligence_sources")
+    .update({
+      metadata: safeMetadata({
+        extractorVersion: EXTRACTOR_VERSION,
+        reprocessedAt,
+      }),
+      processed_at: reprocessedAt,
+      status: "processed",
+      updated_at: reprocessedAt,
+    })
+    .eq("owner_id", ownerId)
+    .eq("id", sourceUuid)
+    .select(SOURCE_COLUMNS)
+    .maybeSingle();
+
+  if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_SOURCE_REPROCESS_UPDATE_FAILED");
+  if (!data) {
+    throw createHttpError("Intelligence source tidak ditemukan.", 404, "INTELLIGENCE_SOURCE_NOT_FOUND");
+  }
+
+  return mapSource(data);
+}
+
 async function countEntitySourceLinks({ entityId, ownerId }) {
   const client = getClient();
   const { count, error } = await client
@@ -618,13 +644,7 @@ function groupSourceLinksForPresentation(links = []) {
   }));
 }
 
-async function processSourceInput({ input, ownerId }) {
-  const normalized = normalizeSourceInput(input, ownerId);
-  const source = {
-    ...normalized,
-    reprocessedAt: input?.reprocessedAt || null,
-  };
-  const sourceRow = await upsertSource(source);
+async function persistExtractionForSource({ ownerId, source, sourceRow }) {
   const extraction = extractIntelligence(source);
   const entities = [];
   const entityByKey = new Map();
@@ -668,6 +688,17 @@ async function processSourceInput({ input, ownerId }) {
     },
     topics: extraction.topics,
   };
+}
+
+async function processSourceInput({ input, ownerId }) {
+  const normalized = normalizeSourceInput(input, ownerId);
+  const source = {
+    ...normalized,
+    reprocessedAt: input?.reprocessedAt || null,
+  };
+  const sourceRow = await upsertSource(source);
+
+  return persistExtractionForSource({ ownerId, source, sourceRow });
 }
 
 async function getSourceForReprocess({ ownerId, sourceUuid }) {
@@ -899,14 +930,22 @@ async function reprocessSource({ ownerId, sourceUuid }) {
 
   try {
     const input = await loadSourceInputForReprocess({ ownerId, sourceRow: source });
+    const normalized = normalizeSourceInput(input, ownerId);
+    const extractionSource = {
+      ...normalized,
+      reprocessedAt,
+    };
     const beforeCounts = await getDerivedCountsForSource({ ownerId, sourceUuid: source.id });
     const cleanup = await cleanupSourceDerivedData({ ownerId, sourceUuid: source.id });
-    const data = await processSourceInput({
-      input: {
-        ...input,
-        reprocessedAt,
-      },
+    const refreshedSource = await updateSourceReprocessMetadata({
       ownerId,
+      reprocessedAt,
+      sourceUuid: source.id,
+    });
+    const data = await persistExtractionForSource({
+      ownerId,
+      source: extractionSource,
+      sourceRow: refreshedSource,
     });
     const afterCounts = await getDerivedCountsForSource({ ownerId, sourceUuid: source.id });
     const auditMetadata = buildReprocessAuditMetadata({
