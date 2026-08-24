@@ -17,6 +17,13 @@ import { UserMenu } from "../components/auth/UserMenu.jsx";
 import { CommandCenterSidebar } from "../components/CommandCenterSidebar.jsx";
 import { useProfile } from "../hooks/useProfile.js";
 import { api } from "../services/api.js";
+import {
+  DEFAULT_MANUAL_NOTE,
+  buildManualNotePayload,
+  canSubmitManualNote,
+  getSafeIntelligenceIntakeError,
+  isValidManualSourceType,
+} from "../services/intelligenceIntake.mjs";
 
 const releaseState = [
   { label: "Branch", value: "feature/orbit-v1.2", tone: "text-[#f1c36f]" },
@@ -109,13 +116,16 @@ export function Intelligence() {
     keyword: "",
     sourceType: "",
   });
-  const [manualNote, setManualNote] = useState({
-    content: "",
-    title: "",
-  });
+  const [manualNote, setManualNote] = useState(DEFAULT_MANUAL_NOTE);
   const [error, setError] = useState("");
+  const [intakeMessage, setIntakeMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const canProcessManualNote = canSubmitManualNote({
+    content: manualNote.content,
+    isProcessing,
+    sourceType: manualNote.sourceType,
+  });
 
   async function loadIntelligence(nextFilters = filters) {
     setIsLoading(true);
@@ -205,23 +215,25 @@ export function Intelligence() {
 
   async function handleProcessManualNote(event) {
     event.preventDefault();
-    if (isProcessing || !manualNote.content.trim()) return;
+    const payload = buildManualNotePayload({
+      content: manualNote.content,
+      sourceType: manualNote.sourceType,
+      title: manualNote.title,
+    });
+
+    if (isProcessing || !payload) return;
 
     setIsProcessing(true);
     setError("");
+    setIntakeMessage("");
 
     try {
-      await api.processIntelligenceSource({
-        content: manualNote.content,
-        createdAt: new Date().toISOString(),
-        sourceId: `manual-${Date.now()}`,
-        sourceType: "manual_note",
-        title: manualNote.title || "Manual Intelligence Note",
-      });
-      setManualNote({ content: "", title: "" });
+      await api.processIntelligenceSource(payload);
+      setManualNote(DEFAULT_MANUAL_NOTE);
+      setIntakeMessage("Manual note processed.");
       await loadIntelligence(filters);
     } catch (processError) {
-      setError(processError?.message || "Gagal memproses intelligence source.");
+      setError(getSafeIntelligenceIntakeError(processError));
     } finally {
       setIsProcessing(false);
     }
@@ -301,29 +313,52 @@ export function Intelligence() {
                       placeholder="Source title"
                       value={manualNote.title}
                     />
-                    <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-3">
-                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-zinc-500">
-                        Source Type
+                    <label className="grid gap-2 text-[10px] font-black uppercase tracking-[0.14em] text-zinc-500">
+                      Source Type
+                      <select
+                        className="min-h-11 rounded-lg border border-white/10 bg-black/30 px-3 text-sm font-bold normal-case tracking-normal text-white outline-none focus:border-[#d9ad57]/45"
+                        onChange={(event) =>
+                          setManualNote((current) => ({
+                            ...current,
+                            sourceType: event.target.value,
+                          }))
+                        }
+                        value={manualNote.sourceType}>
+                        <option value="manual_note">Manual Note</option>
+                      </select>
+                    </label>
+                    <label
+                      className="grid gap-2 text-[10px] font-black uppercase tracking-[0.14em] text-zinc-500"
+                      htmlFor="manual-intelligence-note">
+                      Manual Note Content
+                      <textarea
+                        aria-label="Manual note content"
+                        className="min-h-28 rounded-lg border border-white/10 bg-black/30 px-3 py-3 text-sm font-semibold normal-case leading-6 tracking-normal text-white outline-none placeholder:text-zinc-600 focus:border-[#d9ad57]/45"
+                        id="manual-intelligence-note"
+                        maxLength={12000}
+                        onChange={(event) =>
+                          setManualNote((current) => ({
+                            ...current,
+                            content: event.target.value,
+                          }))
+                        }
+                        placeholder="Paste safe source text. Tokens, secrets, and authorization values are redacted server-side."
+                        value={manualNote.content}
+                      />
+                    </label>
+                    {!isValidManualSourceType(manualNote.sourceType) ? (
+                      <p className="rounded-lg border border-[#7d1f2f]/25 bg-[#7d1f2f]/10 px-3 py-2 text-xs font-bold text-rose-100">
+                        Source type tidak valid.
                       </p>
-                      <p className="mt-1 text-sm font-black text-white">
-                        Manual Note
+                    ) : null}
+                    {intakeMessage ? (
+                      <p className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-bold text-emerald-100">
+                        {intakeMessage}
                       </p>
-                    </div>
-                    <textarea
-                      className="min-h-28 rounded-lg border border-white/10 bg-black/30 px-3 py-3 text-sm font-semibold leading-6 text-white outline-none placeholder:text-zinc-600 focus:border-[#d9ad57]/45"
-                      maxLength={12000}
-                      onChange={(event) =>
-                        setManualNote((current) => ({
-                          ...current,
-                          content: event.target.value,
-                        }))
-                      }
-                      placeholder="Paste safe source text. Tokens, secrets, and authorization values are redacted server-side."
-                      value={manualNote.content}
-                    />
+                    ) : null}
                     <button
                       className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-[#d9ad57]/35 bg-[#d9ad57]/15 px-4 text-sm font-black text-[#f1c36f] transition hover:bg-[#d9ad57]/20 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={isProcessing || !manualNote.content.trim()}
+                      disabled={!canProcessManualNote}
                       type="submit">
                       <Sparkles size={16} />
                       {isProcessing ? "Processing..." : "Process Source"}

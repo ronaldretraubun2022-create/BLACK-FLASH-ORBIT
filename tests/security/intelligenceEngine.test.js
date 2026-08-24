@@ -1,6 +1,7 @@
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 
 const rootDir = path.resolve(__dirname, "../..");
@@ -15,6 +16,10 @@ const repositoryPath = path.join(
 );
 const pagePath = path.join(rootDir, "apps/web/src/pages/Intelligence.jsx");
 const apiPath = path.join(rootDir, "apps/web/src/services/api.js");
+const intakeHelperPath = path.join(
+  rootDir,
+  "apps/web/src/services/intelligenceIntake.mjs",
+);
 
 function read(filePath) {
   return fs.readFileSync(filePath, "utf8");
@@ -348,4 +353,97 @@ test("intelligence frontend renders untrusted content as text, not raw HTML", ()
   assert.doesNotMatch(source, /\beval\(/);
   assert.match(source, /\{claim\.claimText\}/);
   assert.match(source, /\{link\.evidenceText\}/);
+});
+
+test("manual note intake renders a bound textarea and explicit source type state", () => {
+  const source = read(pagePath);
+  const helperSource = read(intakeHelperPath);
+
+  assert.match(helperSource, /sourceType: "manual_note"/);
+  assert.match(source, /useState\(DEFAULT_MANUAL_NOTE\)/);
+  assert.match(source, /htmlFor="manual-intelligence-note"/);
+  assert.match(source, /id="manual-intelligence-note"/);
+  assert.match(source, /aria-label="Manual note content"/);
+  assert.match(source, /value=\{manualNote\.content\}/);
+  assert.match(source, /sourceType: event\.target\.value/);
+});
+
+test("manual note intake enablement follows source type, trimmed content, and loading state", async () => {
+  const { canSubmitManualNote } = await import(pathToFileURL(intakeHelperPath));
+
+  assert.strictEqual(
+    canSubmitManualNote({
+      content: "   ",
+      isProcessing: false,
+      sourceType: "manual_note",
+    }),
+    false,
+  );
+  assert.strictEqual(
+    canSubmitManualNote({
+      content: "ORBIT Intelligence Test melaporkan Project Alpha.",
+      isProcessing: false,
+      sourceType: "manual_note",
+    }),
+    true,
+  );
+  assert.strictEqual(
+    canSubmitManualNote({
+      content: "ORBIT Intelligence Test melaporkan Project Alpha.",
+      isProcessing: true,
+      sourceType: "manual_note",
+    }),
+    false,
+  );
+  assert.strictEqual(
+    canSubmitManualNote({
+      content: "ORBIT Intelligence Test melaporkan Project Alpha.",
+      isProcessing: false,
+      sourceType: "newsroom_generation",
+    }),
+    false,
+  );
+});
+
+test("manual note intake builds the authenticated process API payload shape", async () => {
+  const { buildManualNotePayload } = await import(pathToFileURL(intakeHelperPath));
+  const now = new Date("2026-08-24T03:00:00.000Z");
+  const payload = buildManualNotePayload({
+    content: "  ORBIT Intelligence Test melaporkan Project Alpha.  ",
+    now,
+    sourceType: "manual_note",
+    title: "  Smoke note  ",
+  });
+  const source = read(pagePath);
+  const apiSource = read(apiPath);
+
+  assert.deepStrictEqual(payload, {
+    content: "ORBIT Intelligence Test melaporkan Project Alpha.",
+    createdAt: "2026-08-24T03:00:00.000Z",
+    sourceId: "manual-1787540400000",
+    sourceType: "manual_note",
+    title: "Smoke note",
+  });
+  assert.match(source, /api\.processIntelligenceSource\(payload\)/);
+  assert.match(apiSource, /\/api\/v1\/intelligence\/process/);
+  assert.match(apiSource, /headers: await getAuthenticatedHeaders\(\)/);
+  assert.match(apiSource, /body: JSON\.stringify\(payload\)/);
+});
+
+test("manual note intake renders safe error text without secrets", async () => {
+  const { getSafeIntelligenceIntakeError } = await import(
+    pathToFileURL(intakeHelperPath)
+  );
+  const message = getSafeIntelligenceIntakeError({
+    message:
+      "Authorization: Bearer secret-token-value SUPABASE_SERVICE_ROLE_KEY=secret stack trace",
+  });
+
+  assert(!message.includes("secret-token-value"));
+  assert(!message.includes("SUPABASE_SERVICE_ROLE_KEY=secret"));
+  assert.strictEqual(message, "Gagal memproses intelligence source.");
+
+  const source = read(pagePath);
+  assert.match(source, /getSafeIntelligenceIntakeError\(processError\)/);
+  assert.match(source, /\{intakeMessage\}/);
 });
