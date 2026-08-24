@@ -6,8 +6,10 @@ const { createSafeChildEnv } = require("./commandAllowlist");
 const { redactObject, redactText, summarizeOutput } = require("./redaction");
 
 const CODEX_TIMEOUT_MS = 10 * 60 * 1000;
+const CODEX_TIMEOUT_GRACE_MS = 5 * 60 * 1000;
 const CODEX_STATUS_TIMEOUT_MS = 5000;
 const MAX_CODEX_OUTPUT_CHARS = 50000;
+const MAX_CODEX_TASK_CHARS = 12000;
 const CODEX_ENTRYPOINT_SEGMENTS = ["node_modules", "@openai", "codex", "bin", "codex.js"];
 const npmExecutable = process.platform === "win32" ? "npm.cmd" : "npm";
 
@@ -19,7 +21,7 @@ function createCodexError(message, statusCode = 503, code = "AGENT_CODEX_NOT_FOU
 }
 
 function normalizeTaskText(value) {
-  const taskText = redactText(value, 4000).trim();
+  const taskText = redactText(value, MAX_CODEX_TASK_CHARS).trim();
 
   if (taskText.length < 8) {
     const error = new Error("Task repair terlalu pendek.");
@@ -33,6 +35,18 @@ function normalizeTaskText(value) {
 
 function appendBounded(current, chunk) {
   return `${current}${chunk}`.slice(0, MAX_CODEX_OUTPUT_CHARS);
+}
+
+function createSafeCodexEnv(repoRoot = "") {
+  const env = createSafeChildEnv(repoRoot);
+
+  for (const key of ["APPDATA", "CODEX_HOME", "HOME", "LOCALAPPDATA", "USERPROFILE"]) {
+    if (process.env[key]) {
+      env[key] = process.env[key];
+    }
+  }
+
+  return env;
 }
 
 function isNetworkOrDevicePath(value) {
@@ -137,6 +151,14 @@ function mapCodexError(error) {
     return createCodexError("Codex CLI melewati batas waktu.", 504, "AGENT_CODEX_TIMEOUT");
   }
 
+  if (error?.code === "AGENT_CODEX_NONINTERACTIVE_REQUIRED") {
+    return createCodexError("Codex CLI membutuhkan mode non-interaktif.", 503, "AGENT_CODEX_NONINTERACTIVE_REQUIRED");
+  }
+
+  if (error?.code === "AGENT_CODEX_MODE_UNSUPPORTED") {
+    return createCodexError("Codex CLI tidak mendukung mode non-interaktif yang dibutuhkan.", 503, "AGENT_CODEX_MODE_UNSUPPORTED");
+  }
+
   if (error?.code && /^AGENT_CODEX_/.test(error.code)) return error;
 
   return createCodexError("Codex CLI gagal dijalankan.", 503, "AGENT_CODEX_NOT_EXECUTABLE");
@@ -156,16 +178,130 @@ function buildCodexFailureResult({ error, startedAt }) {
   };
 }
 
+function getSafeCodexInvocationSummary({ args, cwd, shell, stdio }) {
+  const safeArgs = (args || []).map((arg, index) => {
+    if (index === 0) return "codex.js";
+    if (arg === cwd) return "repoRoot";
+    return arg;
+  });
+
+  return [
+    "Codex invocation:",
+    "mode=node-entrypoint",
+    `executable=${path.basename(process.execPath)}`,
+    "usesProcessExecPath=true",
+    `argCount=${safeArgs.length}`,
+    `args=${safeArgs.join(" ")}`,
+    `execSubcommand=${safeArgs.includes("exec") ? "true" : "false"}`,
+    `hasExec=${safeArgs.includes("exec") ? "true" : "false"}`,
+    `stdinMode=${Array.isArray(stdio) ? stdio[0] : "unknown"}`,
+    `shell=${shell === true ? "true" : "false"}`,
+    `cwd=${path.basename(cwd || "")}`,
+  ].join(" ");
+}
+
+function shouldIncludeCodexDiagnostics() {
+  return process.env.NODE_ENV !== "production" || process.env.ORBIT_AGENT_DIAGNOSTICS === "true";
+}
+
+function buildCodexExecInvocation({ codexEntrypoint, repoRoot }) {
+  return {
+    args: [
+      codexEntrypoint,
+      "exec",
+      "--cd",
+      repoRoot,
+      "--sandbox",
+      "workspace-write",
+      "--color",
+      "never",
+      "-",
+    ],
+    executable: process.execPath,
+  };
+}
+
+function buildCodexSpawnSpec({ entrypoint, repoRoot }) {
+  const invocation = buildCodexExecInvocation({ codexEntrypoint: entrypoint, repoRoot });
+  const options = {
+    cwd: repoRoot,
+    env: createSafeCodexEnv(repoRoot),
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  };
+
+  return {
+    args: invocation.args,
+    command: invocation.executable,
+    options,
+    safeInvocationSummary: getSafeCodexInvocationSummary({
+      args: invocation.args,
+      cwd: repoRoot,
+      shell: options.shell,
+      stdio: options.stdio,
+    }),
+  };
+}
+
+function mapCodexExitFailure({ code, stderr = "", timedOut = false }) {
+  if (timedOut) {
+    return createCodexError("Codex CLI melewati batas waktu.", 504, "AGENT_CODEX_TIMEOUT");
+  }
+
+  const output = String(stderr || "").toLowerCase();
+
+  if (output.includes("stdin is not a terminal") || output.includes("not a terminal") || output.includes("tty")) {
+    return createCodexError("Codex CLI membutuhkan mode non-interaktif.", 503, "AGENT_CODEX_NONINTERACTIVE_REQUIRED");
+  }
+
+  if (output.includes("unrecognized subcommand") || output.includes("unknown command") || output.includes("invalid subcommand")) {
+    return createCodexError("Codex CLI tidak mendukung mode non-interaktif yang dibutuhkan.", 503, "AGENT_CODEX_MODE_UNSUPPORTED");
+  }
+
+  if (Number(code) === 127) {
+    return createCodexError("Codex CLI tidak ditemukan.", 503, "AGENT_CODEX_NOT_FOUND");
+  }
+
+  if (Number(code) === 126) {
+    return createCodexError("Codex CLI tidak dapat dieksekusi.", 503, "AGENT_CODEX_NOT_EXECUTABLE");
+  }
+
+  return null;
+}
+
+function getCodexExecHelp(entrypoint) {
+  return spawnSync(process.execPath, [entrypoint, "exec", "--help"], {
+    encoding: "utf8",
+    env: createSafeCodexEnv(),
+    shell: false,
+    timeout: CODEX_STATUS_TIMEOUT_MS,
+    windowsHide: true,
+  });
+}
+
+function hasNonInteractiveExecSupport(entrypoint) {
+  const result = getCodexExecHelp(entrypoint);
+
+  if (result.error) return false;
+  if (result.status !== 0) return false;
+
+  const helpText = `${result.stdout || ""}\n${result.stderr || ""}`;
+
+  return /Run Codex non-interactively/i.test(helpText) && /instructions are read from stdin/i.test(helpText);
+}
+
 function getCodexStatus() {
   try {
     const entrypoint = resolveCodexEntrypoint();
     const result = spawnSync(process.execPath, [entrypoint, "--version"], {
       encoding: "utf8",
-      env: createSafeChildEnv(),
+      env: createSafeCodexEnv(),
       shell: false,
       timeout: CODEX_STATUS_TIMEOUT_MS,
       windowsHide: true,
     });
+    const nonInteractive = hasNonInteractiveExecSupport(entrypoint);
 
     if (result.error) {
       const mapped = mapCodexError(result.error);
@@ -174,6 +310,7 @@ function getCodexStatus() {
         available: false,
         code: mapped.code,
         mode: "node-entrypoint",
+        nonInteractive,
         version: null,
       };
     }
@@ -183,6 +320,7 @@ function getCodexStatus() {
         available: false,
         code: "AGENT_CODEX_NOT_EXECUTABLE",
         mode: "node-entrypoint",
+        nonInteractive,
         version: null,
       };
     }
@@ -190,6 +328,7 @@ function getCodexStatus() {
     return {
       available: true,
       mode: "node-entrypoint",
+      nonInteractive,
       version: redactText(result.stdout || result.stderr || "", 120).trim(),
     };
   } catch (error) {
@@ -199,6 +338,7 @@ function getCodexStatus() {
       available: false,
       code: mapped.code,
       mode: "node-entrypoint",
+      nonInteractive: false,
       version: null,
     };
   }
@@ -222,6 +362,27 @@ async function buildCodexTask({ repoRoot, taskText }) {
   ].join("\n\n");
 }
 
+function writeCodexTaskToStdin(child, safeTaskPayload) {
+  if (!child.stdin) return;
+
+  child.stdin.on("error", () => {});
+  child.stdin.write(safeTaskPayload);
+  child.stdin.end();
+}
+
+function buildRunSummary({ mappedFailure, spec, stderr, stdout, timedOut, exitCode }) {
+  return [
+    shouldIncludeCodexDiagnostics() ? spec.safeInvocationSummary : "",
+    mappedFailure ? `${mappedFailure.code}: ${mappedFailure.message}` : "",
+    summarizeOutput({
+      exitCode,
+      stderr,
+      stdout,
+      timedOut,
+    }),
+  ].filter(Boolean).join("\n");
+}
+
 async function runCodexRepairJob({ repoRoot, taskText }) {
   const startedAt = Date.now();
   const safeTask = normalizeTaskText(taskText);
@@ -234,20 +395,81 @@ async function runCodexRepairJob({ repoRoot, taskText }) {
     return buildCodexFailureResult({ error, startedAt });
   }
 
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [entrypoint, prompt], {
-      cwd: repoRoot,
-      env: createSafeChildEnv(repoRoot),
-      shell: false,
-      windowsHide: true,
+  if (!hasNonInteractiveExecSupport(entrypoint)) {
+    return buildCodexFailureResult({
+      error: createCodexError(
+        "Codex CLI tidak mendukung mode non-interaktif yang dibutuhkan.",
+        503,
+        "AGENT_CODEX_MODE_UNSUPPORTED",
+      ),
+      startedAt,
     });
+  }
+
+  return new Promise((resolve) => {
+    const spec = buildCodexSpawnSpec({ entrypoint, repoRoot });
+    let child;
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let settled = false;
+    let forceTimer;
+    const finish = async (code, error = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(forceTimer);
+
+      if (error) {
+        const mapped = buildCodexFailureResult({ error, startedAt });
+
+        resolve({
+          changedFiles: await getChangedFiles().catch(() => []),
+          durationMs: mapped.durationMs,
+          errorCode: mapped.errorCode,
+          exitCode: mapped.exitCode,
+          safeSummary: [shouldIncludeCodexDiagnostics() ? spec.safeInvocationSummary : "", mapped.safeSummary]
+            .filter(Boolean)
+            .join("\n"),
+          timedOut: mapped.timedOut,
+        });
+        return;
+      }
+
+      const mappedFailure = mapCodexExitFailure({ code, stderr, timedOut });
+
+      resolve({
+        changedFiles: await getChangedFiles().catch(() => []),
+        durationMs: Date.now() - startedAt,
+        errorCode: mappedFailure?.code || null,
+        exitCode: timedOut ? 124 : code,
+        safeSummary: buildRunSummary({
+          exitCode: timedOut ? 124 : code,
+          mappedFailure,
+          spec,
+          stderr,
+          stdout,
+          timedOut,
+        }),
+        timedOut,
+      });
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      try {
+        child?.kill("SIGTERM");
+      } catch {
+        // close/error will still finalize the bounded run when available.
+      }
+      forceTimer = setTimeout(() => finish(124), CODEX_TIMEOUT_GRACE_MS);
     }, CODEX_TIMEOUT_MS);
+
+    try {
+      child = spawn(spec.command, spec.args, spec.options);
+    } catch (error) {
+      void finish(null, error);
+      return;
+    }
 
     child.stdout?.on("data", (chunk) => {
       stdout = appendBounded(stdout, chunk.toString("utf8"));
@@ -255,41 +477,21 @@ async function runCodexRepairJob({ repoRoot, taskText }) {
     child.stderr?.on("data", (chunk) => {
       stderr = appendBounded(stderr, chunk.toString("utf8"));
     });
-    child.on("error", async (error) => {
-      clearTimeout(timer);
-      const mapped = buildCodexFailureResult({ error, startedAt });
-
-      resolve({
-        changedFiles: await getChangedFiles().catch(() => []),
-        durationMs: mapped.durationMs,
-        errorCode: mapped.errorCode,
-        exitCode: mapped.exitCode,
-        safeSummary: mapped.safeSummary,
-        timedOut: mapped.timedOut,
-      });
-    });
-    child.on("close", async (code) => {
-      clearTimeout(timer);
-      resolve({
-        changedFiles: await getChangedFiles().catch(() => []),
-        durationMs: Date.now() - startedAt,
-        errorCode: timedOut ? "AGENT_CODEX_TIMEOUT" : null,
-        exitCode: timedOut ? 124 : code,
-        safeSummary: summarizeOutput({
-          exitCode: timedOut ? 124 : code,
-          stderr,
-          stdout,
-          timedOut,
-        }),
-        timedOut,
-      });
-    });
+    writeCodexTaskToStdin(child, prompt);
+    child.on("error", (error) => void finish(null, error));
+    child.on("close", (code) => void finish(code));
   });
 }
 
 module.exports = {
+  buildCodexExecInvocation,
   buildCodexTask,
+  buildCodexSpawnSpec,
+  createSafeCodexEnv,
+  getSafeCodexInvocationSummary,
   getCodexStatus,
+  hasNonInteractiveExecSupport,
+  mapCodexExitFailure,
   resolveCodexEntrypoint,
   runCodexRepairJob,
   validateCodexEntrypoint,

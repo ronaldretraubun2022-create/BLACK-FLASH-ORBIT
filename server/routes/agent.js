@@ -142,7 +142,7 @@ router.post(
       ownerId: getOwnerId(req),
     });
 
-    res.json({ success: true, data, message: "Agent repair run completed." });
+    res.status(202).json({ success: true, data, message: "Agent repair queued." });
   }),
 );
 

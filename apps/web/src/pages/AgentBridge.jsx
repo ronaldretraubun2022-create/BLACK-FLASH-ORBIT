@@ -22,6 +22,8 @@ const releaseState = [
   { label: "Module", value: "Agent Bridge", tone: "text-white" },
   { label: "Mode", value: "local-only", tone: "text-emerald-300" },
 ];
+const activeJobStatuses = new Set(["diagnosing", "running", "validating"]);
+const activeRunStatuses = new Set(["queued", "running"]);
 
 function getArray(value) {
   return Array.isArray(value) ? value : [];
@@ -76,12 +78,19 @@ export function AgentBridge() {
   const persistenceState = status?.persistence || {};
   const isBridgeEnabled = agentState.enabled === true;
   const isCodexAvailable = codexState.available === true;
+  const isCodexNonInteractive = codexState.nonInteractive === true;
   const isPersistenceAvailable = persistenceState.available !== false;
   const selectedJobId = selectedJob?.id || jobs[0]?.id || "";
+  const selectedRunStateKey = getArray(selectedJob?.runs)
+    .map((run) => `${run.id}:${run.status}`)
+    .join("|");
+  const isSelectedJobActive =
+    activeJobStatuses.has(selectedJob?.status) ||
+    getArray(selectedJob?.runs).some((run) => activeRunStatuses.has(run.status));
   const canUseJobs = isBridgeEnabled && isPersistenceAvailable;
   const canCreateJob = canUseJobs && taskText.trim().length >= 8 && !activeAction;
-  const canActOnJob = canUseJobs && Boolean(selectedJobId) && !activeAction;
-  const canRunRepair = canActOnJob && isCodexAvailable;
+  const canActOnJob = canUseJobs && Boolean(selectedJobId) && !activeAction && !isSelectedJobActive;
+  const canRunRepair = canActOnJob && isCodexAvailable && isCodexNonInteractive;
 
   const metrics = useMemo(() => {
     const data = status?.metrics || {};
@@ -134,6 +143,39 @@ export function AgentBridge() {
   useEffect(() => {
     loadAgentBridge();
   }, []);
+
+  useEffect(() => {
+    if (!selectedJobId || !isSelectedJobActive) return undefined;
+
+    let canceled = false;
+    const poll = async () => {
+      try {
+        const [statusResponse, jobsResponse, detailResponse] = await Promise.all([
+          api.getAgentStatus(),
+          api.getAgentJobs(),
+          api.getAgentJob(selectedJobId),
+        ]);
+
+        if (canceled) return;
+
+        setStatus(statusResponse?.data || null);
+        setJobs(getArray(jobsResponse?.data));
+        setSelectedJob(detailResponse?.data || null);
+      } catch (pollError) {
+        if (!canceled) {
+          setError(getSafeError(pollError));
+        }
+      }
+    };
+    const pollId = window.setInterval(poll, 3000);
+
+    poll();
+
+    return () => {
+      canceled = true;
+      window.clearInterval(pollId);
+    };
+  }, [isSelectedJobActive, selectedJob?.status, selectedJobId, selectedRunStateKey]);
 
   async function refreshSelectedJob(jobId = selectedJobId) {
     if (!jobId) return;
@@ -210,6 +252,25 @@ export function AgentBridge() {
     );
   }
 
+  async function handleRunRepair() {
+    if (!canRunRepair) return;
+
+    setActiveAction("run");
+    setError("");
+    setMessage("");
+
+    try {
+      await api.runAgentJob(selectedJobId, { taskText });
+      setMessage("Codex repair queued. Status will update automatically.");
+      await refreshSelectedJob(selectedJobId);
+      await loadAgentBridge();
+    } catch (runError) {
+      setError(getSafeError(runError));
+    } finally {
+      setActiveAction("");
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#050506] text-zinc-100">
       <div className="orbit-shell">
@@ -254,7 +315,7 @@ export function AgentBridge() {
                   <p className="mt-4 max-w-3xl text-sm leading-7 text-zinc-400">
                     {isBridgeEnabled
                       ? isPersistenceAvailable
-                        ? isCodexAvailable
+                        ? isCodexAvailable && isCodexNonInteractive
                           ? "Agent Bridge menjalankan command allowlist, menyiapkan Codex repair lewat wrapper lokal, dan menunggu approval manusia."
                           : "Agent Bridge lokal aktif. Diagnose dan Run Tests tersedia, tetapi Codex repair belum tersedia."
                         : "Agent Bridge lokal aktif, tetapi persistence Agent belum siap untuk menyimpan job."
@@ -330,13 +391,7 @@ export function AgentBridge() {
                       icon={Bot}
                       label="Prepare Codex Repair"
                       loading={activeAction === "run"}
-                      onClick={() =>
-                        runAction(
-                          "run",
-                          () => api.runAgentJob(selectedJobId, { taskText }),
-                          "Codex repair completed.",
-                        )
-                      }
+                      onClick={handleRunRepair}
                     />
                     <ActionButton
                       disabled={!canActOnJob}
@@ -432,6 +487,10 @@ function RepositoryStatus({ isLoading, status }) {
           label="Codex"
           value={codex.available ? codex.version || "available" : codex.code || "unavailable"}
         />
+        <StatusLine
+          label="Codex Exec"
+          value={codex.nonInteractive ? "non-interactive" : "unavailable"}
+        />
         <StatusLine label="Branch" value={repo.branch || "-"} />
         <StatusLine label="Working Tree" value={repo.status || "-"} />
         <StatusLine label="Dirty" value={repo.dirty ? "yes" : "no"} />
@@ -447,9 +506,9 @@ function RepositoryStatus({ isLoading, status }) {
           {persistence.message || "Agent persistence unavailable."}
         </p>
       ) : null}
-      {agentBridge.enabled && codex.available === false ? (
+      {agentBridge.enabled && (codex.available === false || codex.nonInteractive === false) ? (
         <p className="mt-3 rounded-lg border border-[#d9ad57]/20 bg-[#d9ad57]/10 px-3 py-2 text-xs font-bold leading-5 text-[#f1c36f]">
-          {codex.code || "AGENT_CODEX_NOT_FOUND"}: Codex repair unavailable.
+          {codex.code || "AGENT_CODEX_MODE_UNSUPPORTED"}: Codex repair unavailable.
         </p>
       ) : null}
     </div>

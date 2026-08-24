@@ -14,6 +14,8 @@ const { redactObject, redactText } = require("./redaction");
 const JOB_COLUMNS = "id, owner_id, title, status, created_at, updated_at";
 const RUN_COLUMNS =
   "id, owner_id, job_id, stage, status, exit_code, started_at, completed_at, safe_summary, changed_files";
+const ACTIVE_RUN_STATUSES = ["queued", "running"];
+const CODEX_STALE_RUN_MS = 15 * 60 * 1000;
 const VALIDATION_COMMANDS = [
   "npm run lint",
   "npm run test:security",
@@ -159,6 +161,109 @@ async function createRun({ changedFiles = [], exitCode = null, jobId, ownerId, s
   return mapRun(data);
 }
 
+async function updateRun({ changedFiles, exitCode, runId, ownerId, safeSummary, status }) {
+  const client = getClient();
+  const completedAt = ["succeeded", "failed", "blocked"].includes(status)
+    ? new Date().toISOString()
+    : null;
+  const patch = {
+    completed_at: completedAt,
+    status,
+  };
+
+  if (changedFiles !== undefined) patch.changed_files = redactObject(changedFiles).slice(0, 100);
+  if (exitCode !== undefined) patch.exit_code = exitCode;
+  if (safeSummary !== undefined) patch.safe_summary = redactText(safeSummary, 10000);
+
+  const { data, error } = await client
+    .from("orbit_agent_runs")
+    .update(patch)
+    .eq("owner_id", ownerId)
+    .eq("id", runId)
+    .select(RUN_COLUMNS)
+    .maybeSingle();
+
+  if (error) throw normalizeDbError(error, "AGENT_RUN_UPDATE_FAILED");
+  if (!data) throw createAgentError("Agent run tidak ditemukan.", 404, "AGENT_RUN_NOT_FOUND");
+
+  return mapRun(data);
+}
+
+async function findActiveRepairRun({ jobId, ownerId }) {
+  const client = getClient();
+  const { data, error } = await client
+    .from("orbit_agent_runs")
+    .select(RUN_COLUMNS)
+    .eq("owner_id", ownerId)
+    .eq("job_id", jobId)
+    .eq("stage", "codex_repair")
+    .in("status", ACTIVE_RUN_STATUSES)
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw normalizeDbError(error, "AGENT_RUN_LOOKUP_FAILED");
+
+  return data ? mapRun(data) : null;
+}
+
+const localCodexRuns = new Set();
+const pendingCodexJobs = new Set();
+
+function getStaleRunAgeMs() {
+  const configured = Number(process.env.ORBIT_AGENT_STALE_RUN_MS);
+
+  if (Number.isFinite(configured) && configured >= CODEX_STALE_RUN_MS && configured <= 24 * 60 * 60 * 1000) {
+    return configured;
+  }
+
+  return CODEX_STALE_RUN_MS;
+}
+
+async function reconcileStaleAgentRuns({ ownerId }) {
+  const client = getClient();
+  const { data, error } = await client
+    .from("orbit_agent_runs")
+    .select(RUN_COLUMNS)
+    .eq("owner_id", ownerId)
+    .eq("stage", "codex_repair")
+    .in("status", ACTIVE_RUN_STATUSES)
+    .order("started_at", { ascending: true })
+    .limit(50);
+
+  if (error) throw normalizeDbError(error, "AGENT_RUN_RECONCILE_FAILED");
+
+  const cutoff = Date.now() - getStaleRunAgeMs();
+  let reconciled = 0;
+
+  for (const row of data || []) {
+    if (localCodexRuns.has(row.id)) continue;
+
+    const startedAt = Date.parse(row.started_at || "");
+    if (!Number.isFinite(startedAt) || startedAt > cutoff) continue;
+
+    const safeSummary = "Codex repair marked failed after stale-run recovery.";
+    await updateRun({
+      changedFiles: [],
+      exitCode: 124,
+      runId: row.id,
+      ownerId,
+      safeSummary,
+      status: "failed",
+    });
+    await updateJobStatus({ jobId: row.job_id, ownerId, status: "failed" }).catch(() => null);
+    await recordAgentAudit({
+      eventType: "codex_repair_stale_reconciled",
+      jobId: row.job_id,
+      metadata: { runId: row.id, exitCode: 124 },
+      ownerId,
+    }).catch(() => null);
+    reconciled += 1;
+  }
+
+  return reconciled;
+}
+
 async function listRunsForJob({ jobId, ownerId }) {
   const client = getClient();
   const { data, error } = await client
@@ -214,6 +319,8 @@ async function getAgentStatus({ ownerId }) {
       repository: repoStatus,
     };
   }
+
+  await reconcileStaleAgentRuns({ ownerId }).catch(() => 0);
 
   const [jobsQueued, jobsRunning, jobsSucceeded, jobsFailed, lastRun, lastValidation] =
     await Promise.all([
@@ -365,45 +472,149 @@ async function runAgentRepair({ input = {}, jobId, ownerId }) {
   const taskText = input.taskText || input.task || job.title;
   const codex = getCodexStatus();
 
-  if (!codex.available) {
+  if (!codex.available || !codex.nonInteractive) {
     throw createAgentError(
       "Codex CLI tidak tersedia untuk Prepare Repair.",
       503,
-      codex.code || "AGENT_CODEX_NOT_FOUND",
+      codex.code || (codex.available ? "AGENT_CODEX_MODE_UNSUPPORTED" : "AGENT_CODEX_NOT_FOUND"),
     );
   }
 
-  await updateJobStatus({ jobId, ownerId, status: "running" });
+  const activeRun = await findActiveRepairRun({ jobId, ownerId });
 
-  const result = await runCodexRepairJob({ repoRoot, taskText });
-  const succeeded = Number(result.exitCode) === 0;
-  const run = await createRun({
-    changedFiles: result.changedFiles,
-    exitCode: result.exitCode,
-    jobId,
-    ownerId,
-    safeSummary: result.safeSummary,
-    stage: "codex_repair",
-    status: succeeded ? "succeeded" : "failed",
-  });
+  if (activeRun || pendingCodexJobs.has(`${ownerId}:${jobId}`)) {
+    throw createAgentError("Agent repair run sudah berjalan untuk job ini.", 409, "AGENT_RUN_ALREADY_ACTIVE");
+  }
 
-  await updateJobStatus({
+  const lockKey = `${ownerId}:${jobId}`;
+  pendingCodexJobs.add(lockKey);
+  let run;
+
+  try {
+    run = await createRun({
+      changedFiles: [],
+      exitCode: null,
+      jobId,
+      ownerId,
+      safeSummary: "Codex repair queued.",
+      stage: "codex_repair",
+      status: "queued",
+    });
+
+    await updateJobStatus({ jobId, ownerId, status: "running" });
+    await recordAgentAudit({
+      eventType: "codex_repair_queued",
+      jobId,
+      metadata: { runId: run.id },
+      ownerId,
+    });
+
+    queueCodexRepairExecution({ jobId, ownerId, repoRoot, runId: run.id, taskText });
+  } catch (error) {
+    if (run?.id) {
+      await updateRun({
+        changedFiles: [],
+        exitCode: 1,
+        runId: run.id,
+        ownerId,
+        safeSummary: "Codex repair could not be queued safely.",
+        status: "failed",
+      }).catch(() => null);
+      await updateJobStatus({ jobId, ownerId, status: "failed" }).catch(() => null);
+    }
+    pendingCodexJobs.delete(lockKey);
+    throw error;
+  }
+
+  return {
     jobId,
-    ownerId,
-    status: succeeded ? "awaiting_approval" : "failed",
+    run,
+    runId: run.id,
+    status: run.status,
+  };
+}
+
+function queueCodexRepairExecution({ jobId, ownerId, repoRoot, runId, taskText }) {
+  setImmediate(() => {
+    executeCodexRepairRun({ jobId, ownerId, repoRoot, runId, taskText }).catch(() => {
+      // executeCodexRepairRun persists its terminal state; this guard prevents detached rejections.
+    });
   });
-  await recordAgentAudit({
-    eventType: "codex_repair_completed",
-    jobId,
-    metadata: {
-      changedFileCount: result.changedFiles.length,
+}
+
+async function executeCodexRepairRun({ jobId, ownerId, repoRoot, runId, taskText }) {
+  const lockKey = `${ownerId}:${jobId}`;
+  pendingCodexJobs.delete(lockKey);
+  localCodexRuns.add(runId);
+
+  try {
+    await updateRun({
+      runId,
+      ownerId,
+      safeSummary: "Codex repair running.",
+      status: "running",
+    });
+    const result = await runCodexRepairJob({ repoRoot, taskText });
+    const succeeded = Number(result.exitCode) === 0;
+
+    await updateRun({
+      changedFiles: result.changedFiles,
       exitCode: result.exitCode,
-      timedOut: Boolean(result.timedOut),
-    },
-    ownerId,
-  });
+      runId,
+      ownerId,
+      safeSummary: result.safeSummary,
+      status: succeeded ? "succeeded" : "failed",
+    });
+    await updateJobStatus({
+      jobId,
+      ownerId,
+      status: succeeded ? "awaiting_approval" : "failed",
+    });
+    await recordAgentAudit({
+      eventType: "codex_repair_completed",
+      jobId,
+      metadata: {
+        changedFileCount: result.changedFiles.length,
+        exitCode: result.exitCode,
+        runId,
+        timedOut: Boolean(result.timedOut),
+      },
+      ownerId,
+    }).catch(() => null);
+  } catch (error) {
+    const errorCode = error?.code || "AGENT_CODEX_RUN_FAILED";
+    const safeSummary = `${errorCode}: ${redactText(error?.message || "Codex repair gagal.", 240)}`;
+    await updateRun({
+      changedFiles: [],
+      exitCode: error?.code === "AGENT_CODEX_TIMEOUT" ? 124 : 1,
+      runId,
+      ownerId,
+      safeSummary,
+      status: "failed",
+    }).catch(() => null);
+    await updateJobStatus({ jobId, ownerId, status: "failed" }).catch(() => null);
+    await recordAgentAudit({
+      eventType: "codex_repair_failed",
+      jobId,
+      metadata: { code: errorCode, runId },
+      ownerId,
+    }).catch(() => null);
+  } finally {
+    localCodexRuns.delete(runId);
+    pendingCodexJobs.delete(lockKey);
+  }
+}
 
-  return run;
+async function waitForCodexRepairCompletionForTest({ jobId, ownerId, runId, taskText }) {
+  const repoRoot = getConfiguredRepoRoot();
+
+  await executeCodexRepairRun({
+    jobId,
+    ownerId,
+    repoRoot,
+    runId,
+    taskText,
+  });
 }
 
 async function validateAgentJob({ jobId, ownerId }) {
@@ -472,6 +683,18 @@ async function getAgentJobDiff({ jobId, ownerId }) {
   return getSafeDiffSummary();
 }
 
+function getCodexRepairUnavailableError(codex = {}) {
+  const modeUnsupported = codex.available === true && codex.nonInteractive !== true;
+
+  return createAgentError(
+    modeUnsupported
+      ? "Codex CLI tersedia, tetapi mode exec non-interaktif belum didukung untuk Prepare Repair."
+      : "Codex CLI tidak tersedia untuk Prepare Repair.",
+    503,
+    codex.code || (modeUnsupported ? "AGENT_CODEX_MODE_UNSUPPORTED" : "AGENT_CODEX_NOT_FOUND"),
+  );
+}
+
 module.exports = {
   approveAgentJob,
   createAgentJob,
@@ -482,5 +705,7 @@ module.exports = {
   rejectAgentJob,
   runAgentDiagnostics,
   runAgentRepair,
+  reconcileStaleAgentRuns,
   validateAgentJob,
+  waitForCodexRepairCompletionForTest,
 };
