@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Clock3,
   FileSearch,
-  GitBranch,
   Layers3,
   Link2,
   RefreshCcw,
@@ -86,6 +85,14 @@ function getStatusClass(status) {
   }
 
   return "border-[#d9ad57]/30 bg-[#d9ad57]/10 text-[#f1c36f]";
+}
+
+function getLinkTypes(link) {
+  if (Array.isArray(link?.linkTypes) && link.linkTypes.length) {
+    return link.linkTypes;
+  }
+
+  return link?.linkType ? [link.linkType] : [];
 }
 
 export function Intelligence() {
@@ -608,10 +615,25 @@ function EvidencePanel({ isLoading, links }) {
                 {link.source?.title || "Source evidence"}
               </p>
               <p className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-[#f1c36f]">
-                {link.linkType}
+                {getLinkTypes(link).join(" + ") || "source_evidence"}
               </p>
             </div>
             <Link2 className="shrink-0 text-zinc-500" size={16} />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {getLinkTypes(link).map((type) => (
+              <span
+                className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase text-zinc-400"
+                key={type}>
+                {type}
+              </span>
+            ))}
+            <span className="rounded-md border border-[#d9ad57]/20 bg-[#d9ad57]/10 px-2 py-1 text-[10px] font-black uppercase text-[#f1c36f]">
+              {getArray(link.entityIds).length} entities
+            </span>
+            <span className="rounded-md border border-[#d9ad57]/20 bg-[#d9ad57]/10 px-2 py-1 text-[10px] font-black uppercase text-[#f1c36f]">
+              {getArray(link.claimIds).length} claims
+            </span>
           </div>
           <p className="mt-3 text-xs leading-5 text-zinc-400">
             {link.evidenceText}

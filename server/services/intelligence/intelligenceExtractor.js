@@ -22,12 +22,44 @@ const SOURCE_TYPES = new Set([
   "automation_record",
   "manual_note",
 ]);
-const MONTH_PATTERN =
-  "Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember|January|February|March|April|May|June|July|August|September|October|November|December";
+const INDONESIAN_MONTHS = new Map([
+  ["januari", 1],
+  ["februari", 2],
+  ["maret", 3],
+  ["april", 4],
+  ["mei", 5],
+  ["juni", 6],
+  ["juli", 7],
+  ["agustus", 8],
+  ["september", 9],
+  ["oktober", 10],
+  ["november", 11],
+  ["desember", 12],
+]);
+const ENGLISH_MONTHS = new Map([
+  ["january", 1],
+  ["february", 2],
+  ["march", 3],
+  ["april", 4],
+  ["may", 5],
+  ["june", 6],
+  ["july", 7],
+  ["august", 8],
+  ["september", 9],
+  ["october", 10],
+  ["november", 11],
+  ["december", 12],
+]);
+const MONTHS = new Map([...INDONESIAN_MONTHS, ...ENGLISH_MONTHS]);
+const MONTH_PATTERN = Array.from(MONTHS.keys()).join("|");
 const SENSITIVE_TEXT_PATTERN =
   /(authorization\s*[:=]\s*bearer\s+[a-z0-9._~+/=-]+|bearer\s+[a-z0-9._~+/=-]+|[a-z0-9_.-]*(api[_-]?key|service[_-]?role|access[_-]?token|refresh[_-]?token|password|passwd|secret)[a-z0-9_.-]*\s*[:=]\s*['"]?[^'",;\s)}\]]+)/gi;
 const SAFE_URL_PROTOCOLS = new Set(["http:", "https:"]);
 const NEGATION_PATTERN = /\b(tidak|bukan|belum|denied|not|never|no)\b/i;
+const CLAIM_VERB_PATTERN =
+  /\b(adalah|merupakan|mengatakan|menyatakan|melaporkan|mencatat|menunjukkan|mengumumkan|disebut|akan|telah|sudah|belum|memiliki|berada|terjadi|dimulai|mulai|selesai|menargetkan|mengklaim|confirmed|reported|said|will|has|is|are|was)\b/i;
+const NON_CLAIM_FRAGMENT_PATTERN =
+  /^(loading|search|filter|refresh|source type|manual note|process source|apply|entity|claim|timeline|evidence|dashboard|overview)\b/i;
 
 function createHttpError(message, statusCode = 500, code = "INTELLIGENCE_ERROR") {
   const error = new Error(message);
@@ -51,6 +83,14 @@ function normalizeKeyword(value, maxLength = 120) {
     .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeMonthName(value) {
+  return normalizeKeyword(value, 40);
+}
+
+function isMonthName(value) {
+  return MONTHS.has(normalizeMonthName(value));
 }
 
 function normalizeTitle(value) {
@@ -155,6 +195,14 @@ function inferEntityType(name, sentence = "") {
   const cleanName = sanitizeText(name, 120);
   const cleanSentence = sentence.toLowerCase();
 
+  if (isMonthName(cleanName)) {
+    return "";
+  }
+
+  if (/^[A-Z0-9]{2,}(?:\s+[A-Z0-9]{2,})?$/.test(cleanName)) {
+    return "organization";
+  }
+
   if (/\b(pt|cv|dinas|kementerian|komisi|universitas|pemda|polres|polda|badan|bank|media|redaksi)\b/i.test(cleanName)) {
     return "organization";
   }
@@ -186,33 +234,57 @@ function extractNamedEntities(sentences) {
   const capitalizedPhrasePattern =
     /\b([A-Z][\p{L}\p{N}.&'-]*(?:\s+(?:[A-Z][\p{L}\p{N}.&'-]*|di|dan|of|for|the)){0,5})\b/gu;
 
+  function addEntity({ confidence = 0.62, entityType, name, sentence }) {
+    const normalizedName = normalizeKeyword(name, 120);
+    const key = `${entityType}:${normalizedName}`;
+    const existing = entities.get(key);
+
+    if (existing) {
+      existing.mentions += 1;
+      existing.evidence.push(sentence);
+      existing.confidence = Math.min(0.92, existing.confidence + 0.03);
+    } else {
+      entities.set(key, {
+        confidence,
+        entityType,
+        evidence: [sentence],
+        mentions: 1,
+        name,
+        normalizedName,
+      });
+    }
+  }
+
   sentences.forEach((sentence) => {
     for (const match of sentence.matchAll(capitalizedPhrasePattern)) {
       const name = sanitizeText(match[1], 120);
       const normalizedName = normalizeKeyword(name, 120);
 
       if (!normalizedName || normalizedName.length < 3) continue;
-      if (/^(dan|atau|the|a|an|ini|itu)$/i.test(name)) continue;
+      if (/^(dan|atau|the|a|an|ini|itu|sumber|catatan)$/i.test(name)) continue;
+      if (isMonthName(name)) continue;
       if (/^\d+$/.test(normalizedName)) continue;
 
-      const entityType = inferEntityType(name, sentence);
-      const key = `${entityType}:${normalizedName}`;
-      const existing = entities.get(key);
+      const words = name.split(/\s+/).filter(Boolean);
+      const firstWord = words[0] || "";
 
-      if (existing) {
-        existing.mentions += 1;
-        existing.evidence.push(sentence);
-        existing.confidence = Math.min(0.92, existing.confidence + 0.03);
-      } else {
-        entities.set(key, {
-          confidence: 0.62,
-          entityType,
-          evidence: [sentence],
-          mentions: 1,
-          name,
-          normalizedName,
+      if (
+        words.length > 1 &&
+        /^[A-Z0-9]{2,}$/.test(firstWord) &&
+        !/^(PT|CV)$/i.test(firstWord)
+      ) {
+        addEntity({
+          confidence: 0.7,
+          entityType: "organization",
+          name: firstWord,
+          sentence,
         });
+        continue;
       }
+
+      const entityType = inferEntityType(name, sentence);
+      if (!entityType) continue;
+      addEntity({ entityType, name, sentence });
     }
   });
 
@@ -220,22 +292,119 @@ function extractNamedEntities(sentences) {
 }
 
 function extractDates(sentences) {
-  const datePattern = new RegExp(
-    `\\b(\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\s+(?:${MONTH_PATTERN})\\s+\\d{4}|\\d{1,2}/\\d{1,2}/\\d{2,4})\\b`,
+  const fullTextDatePattern = new RegExp(
+    `\\b(\\d{1,2})\\s+(${MONTH_PATTERN})\\s+(\\d{4})\\b`,
     "gi",
   );
+  const dayMonthPattern = new RegExp(
+    `\\b(\\d{1,2})\\s+(${MONTH_PATTERN})\\b(?!\\s+\\d{4})`,
+    "gi",
+  );
+  const monthYearPattern = new RegExp(
+    `\\b(${MONTH_PATTERN})\\s+(\\d{4})\\b`,
+    "gi",
+  );
+  const isoDatePattern = /\b(\d{4})-(\d{2})-(\d{2})\b/g;
+  const slashDatePattern = /\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/g;
   const dates = [];
 
   sentences.forEach((sentence) => {
-    for (const match of sentence.matchAll(datePattern)) {
+    const seenInSentence = new Set();
+    const pushDate = (date) => {
+      const key = `${date.dateText}:${date.precision}`;
+      if (seenInSentence.has(key)) return;
+      seenInSentence.add(key);
       dates.push({
-        dateText: sanitizeText(match[1], 80),
+        ...date,
         evidence: sentence,
+      });
+    };
+
+    for (const match of sentence.matchAll(fullTextDatePattern)) {
+      pushDate(
+        normalizeDateParts({
+          day: match[1],
+          monthName: match[2],
+          raw: match[0],
+          year: match[3],
+        }),
+      );
+    }
+
+    for (const match of sentence.matchAll(isoDatePattern)) {
+      pushDate(
+        normalizeDateParts({
+          day: match[3],
+          month: match[2],
+          raw: match[0],
+          year: match[1],
+        }),
+      );
+    }
+
+    for (const match of sentence.matchAll(slashDatePattern)) {
+      const year = String(match[3]).length === 2 ? `20${match[3]}` : match[3];
+      pushDate(
+        normalizeDateParts({
+          day: match[1],
+          month: match[2],
+          raw: match[0],
+          year,
+        }),
+      );
+    }
+
+    for (const match of sentence.matchAll(dayMonthPattern)) {
+      pushDate({
+        dateText: sanitizeText(match[0], 80),
+        day: Number(match[1]),
+        isoDate: null,
+        month: MONTHS.get(normalizeMonthName(match[2])) || null,
+        precision: "month_day",
+      });
+    }
+
+    for (const match of sentence.matchAll(monthYearPattern)) {
+      pushDate({
+        dateText: sanitizeText(match[0], 80),
+        day: null,
+        isoDate: null,
+        month: MONTHS.get(normalizeMonthName(match[1])) || null,
+        precision: "month_year",
+        year: Number(match[2]),
       });
     }
   });
 
   return dates.slice(0, 40);
+}
+
+function normalizeDateParts({ day, month, monthName, raw, year }) {
+  const numericDay = Number(day);
+  const numericMonth = Number(month || MONTHS.get(normalizeMonthName(monthName)));
+  const numericYear = Number(year);
+  const isFullDate =
+    Number.isInteger(numericDay) &&
+    numericDay >= 1 &&
+    numericDay <= 31 &&
+    Number.isInteger(numericMonth) &&
+    numericMonth >= 1 &&
+    numericMonth <= 12 &&
+    Number.isInteger(numericYear) &&
+    numericYear >= 1000 &&
+    numericYear <= 9999;
+  const isoDate = isFullDate
+    ? `${String(numericYear).padStart(4, "0")}-${String(numericMonth).padStart(2, "0")}-${String(numericDay).padStart(2, "0")}`
+    : null;
+
+  return {
+    dateText: sanitizeText(raw, 80),
+    day: Number.isInteger(numericDay) ? numericDay : null,
+    isoDate,
+    month: Number.isInteger(numericMonth) ? numericMonth : null,
+    precision: isoDate ? "day" : "partial",
+    year: Number.isInteger(numericYear) ? numericYear : null,
+  };
 }
 
 function extractTopics(content, title) {
@@ -269,30 +438,62 @@ function extractTopics(content, title) {
 }
 
 function buildConflictKey(text) {
-  return normalizeKeyword(text, 500)
+  const normalized = normalizeKeyword(text, 500)
+    .replace(
+      /^.*\b(project\s+[a-z0-9]+\s+(?:belum\s+)?(?:dimulai|selesai|berada|terjadi|memiliki|mengumumkan|menyatakan|akan|telah))\b/,
+      "$1",
+    )
     .replace(/\b(tidak|bukan|belum|denied|not|never|no|adalah|merupakan|is|are|was)\b/g, " ")
+    .replace(/\b(melaporkan|mengatakan|menyatakan|disebut|kembali|dalam|catatan|operasional|sumber|lain|pada|di)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  const projectDateMatch = normalized.match(
+    /\b(project\s+[a-z0-9]+\s+dimulai\s+\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4})\b/,
+  );
+
+  return projectDateMatch ? projectDateMatch[1] : normalized;
 }
 
-function extractClaims(sentences, source) {
-  const claimPattern =
-    /\b(adalah|merupakan|mengatakan|menyatakan|melaporkan|mencatat|menunjukkan|akan|telah|sudah|memiliki|berada|menargetkan|mengklaim|confirmed|reported|said|will|has|is|are|was)\b/i;
+function isClaimCandidate(sentence) {
+  const cleanSentence = sanitizeText(sentence, 800);
+  const wordCount = cleanSentence.split(/\s+/).filter(Boolean).length;
 
+  return (
+    wordCount >= 4 &&
+    cleanSentence.length >= 24 &&
+    cleanSentence.length <= 800 &&
+    CLAIM_VERB_PATTERN.test(cleanSentence) &&
+    !NON_CLAIM_FRAGMENT_PATTERN.test(cleanSentence)
+  );
+}
+
+function extractClaims(sentences, source, dates = []) {
   return sentences
-    .filter((sentence) => claimPattern.test(sentence))
+    .filter(isClaimCandidate)
     .slice(0, 80)
     .map((sentence) => {
       const normalizedClaim = normalizeKeyword(sentence, 500);
       const polarity = NEGATION_PATTERN.test(sentence) ? "negative" : "positive";
+      const dateMentions = dates
+        .filter((date) => date.evidence === sentence)
+        .map(({ dateText, day, isoDate, month, precision, year }) => ({
+          dateText,
+          day,
+          isoDate,
+          month,
+          precision,
+          year,
+        }));
+      const fullDate = dateMentions.find((date) => date.precision === "day" && date.isoDate);
 
       return {
         claimText: sentence,
         confidence: 0.58,
         conflictKey: buildConflictKey(sentence),
+        dateMentions,
         extractedAt: new Date().toISOString(),
         normalizedClaim,
-        observedAt: source.createdAt,
+        observedAt: fullDate ? `${fullDate.isoDate}T00:00:00.000Z` : null,
         polarity,
         status: "unverified",
       };
@@ -345,8 +546,8 @@ function extractRelationships(entities, claims) {
 function extractIntelligence(source) {
   const sentences = splitSentences(source.content);
   const entities = extractNamedEntities(sentences);
-  const claims = extractClaims(sentences, source);
   const dates = extractDates(sentences);
+  const claims = extractClaims(sentences, source, dates);
   const topics = extractTopics(source.content, source.title);
   const relationships = extractRelationships(entities, claims);
 
@@ -374,12 +575,15 @@ function getEntityKey(entity) {
 module.exports = {
   CLAIM_STATUSES,
   ENTITY_TYPES,
+  INDONESIAN_MONTHS,
   SOURCE_TYPES,
   buildConflictKey,
   createHttpError,
   extractIntelligence,
+  extractDates,
   getEntityKey,
   hashText,
+  isMonthName,
   normalizeClaimStatus,
   normalizeEntityType,
   normalizeKeyword,

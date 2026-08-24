@@ -73,6 +73,154 @@ test("intelligence extractor defaults claims to unverified with source evidence"
   assert(!extracted.claims.some((claim) => claim.status === "confirmed"));
 });
 
+test("intelligence extractor parses Indonesian dates without fabricating partial dates", () => {
+  const {
+    extractDates,
+  } = require("../../server/services/intelligence/intelligenceExtractor");
+  const dates = extractDates([
+    "Project Alpha dimulai pada 20 Agustus 2026 di Merauke.",
+    "Rapat lanjutan direncanakan pada 20 Agustus.",
+    "Evaluasi berlangsung Agustus 2026.",
+  ]);
+  const fullDate = dates.find((date) => date.dateText === "20 Agustus 2026");
+  const dayMonth = dates.find((date) => date.dateText === "20 Agustus");
+  const monthYear = dates.find((date) => date.dateText === "Agustus 2026");
+
+  assert.strictEqual(fullDate.isoDate, "2026-08-20");
+  assert.strictEqual(fullDate.precision, "day");
+  assert.strictEqual(dayMonth.isoDate, null);
+  assert.strictEqual(dayMonth.precision, "month_day");
+  assert.strictEqual(monthYear.isoDate, null);
+  assert.strictEqual(monthYear.precision, "month_year");
+});
+
+test("Indonesian month names are temporal tokens, not persisted entities", () => {
+  const {
+    extractIntelligence,
+    normalizeSourceInput,
+  } = require("../../server/services/intelligence/intelligenceExtractor");
+  const source = normalizeSourceInput(
+    {
+      content:
+        "ORBIT Intelligence Test melaporkan Project Alpha dimulai pada 20 Agustus 2026 di Merauke.",
+      sourceId: "manual-month",
+      sourceType: "manual_note",
+      title: "Month entity regression",
+    },
+    "user-1",
+  );
+  const extracted = extractIntelligence(source);
+
+  assert(
+    !extracted.entities.some(
+      (entity) =>
+        entity.normalizedName === "agustus" &&
+        ["organization", "person", "project", "location", "product"].includes(
+          entity.entityType,
+        ),
+    ),
+  );
+  assert(
+    extracted.entities.some(
+      (entity) =>
+        entity.normalizedName === "project alpha" &&
+        entity.entityType === "project",
+    ),
+  );
+  assert(
+    extracted.entities.some(
+      (entity) =>
+        entity.normalizedName === "orbit" &&
+        entity.entityType === "organization",
+    ),
+  );
+  assert(
+    extracted.entities.some(
+      (entity) =>
+        entity.normalizedName === "merauke" &&
+        entity.entityType === "location",
+    ),
+  );
+});
+
+test("Indonesian declarative project start sentence creates unverified dated claim", () => {
+  const {
+    extractIntelligence,
+    normalizeSourceInput,
+  } = require("../../server/services/intelligence/intelligenceExtractor");
+  const source = normalizeSourceInput(
+    {
+      content:
+        "ORBIT Intelligence Test melaporkan Project Alpha dimulai pada 20 Agustus 2026 di Merauke.",
+      sourceId: "manual-claim",
+      sourceType: "manual_note",
+      title: "Claim regression",
+    },
+    "user-1",
+  );
+  const extracted = extractIntelligence(source);
+  const claim = extracted.claims.find((item) =>
+    item.normalizedClaim.includes("project alpha dimulai"),
+  );
+
+  assert(claim);
+  assert.strictEqual(claim.status, "unverified");
+  assert.strictEqual(claim.observedAt, "2026-08-20T00:00:00.000Z");
+  assert(
+    claim.dateMentions.some(
+      (date) => date.dateText === "20 Agustus 2026" && date.isoDate === "2026-08-20",
+    ),
+  );
+});
+
+test("controlled notes keep recurring entities and contradictory start claims comparable", () => {
+  const {
+    buildConflictKey,
+    extractIntelligence,
+    normalizeSourceInput,
+  } = require("../../server/services/intelligence/intelligenceExtractor");
+  const notes = [
+    "ORBIT Intelligence Test melaporkan Project Alpha dimulai pada 20 Agustus 2026 di Merauke.",
+    "Project Alpha disebut kembali dalam catatan operasional ORBIT pada 22 Agustus 2026 di Merauke.",
+    "Sumber lain menyatakan Project Alpha belum dimulai pada 20 Agustus 2026.",
+  ].map((content, index) =>
+    extractIntelligence(
+      normalizeSourceInput(
+        {
+          content,
+          sourceId: `controlled-${index + 1}`,
+          sourceType: "manual_note",
+          title: `Controlled ${index + 1}`,
+        },
+        "user-1",
+      ),
+    ),
+  );
+  const entities = notes.flatMap((note) => note.entities);
+  const claims = notes.flatMap((note) => note.claims);
+  const dates = notes.flatMap((note) => note.dates);
+  const positiveKey = buildConflictKey(notes[0].claims[0].claimText);
+  const negativeKey = buildConflictKey(notes[2].claims[0].claimText);
+
+  assert.strictEqual(
+    entities.filter((entity) => entity.normalizedName === "project alpha").length,
+    3,
+  );
+  assert.strictEqual(
+    entities.filter((entity) => entity.normalizedName === "merauke").length,
+    2,
+  );
+  assert(dates.some((date) => date.isoDate === "2026-08-20"));
+  assert(dates.some((date) => date.isoDate === "2026-08-22"));
+  assert(claims.length >= 2);
+  assert(claims.every((claim) => claim.status === "unverified"));
+  assert(!claims.some((claim) => claim.status === "confirmed"));
+  assert.strictEqual(notes[0].claims[0].polarity, "positive");
+  assert.strictEqual(notes[1].claims[0].observedAt, "2026-08-22T00:00:00.000Z");
+  assert.strictEqual(notes[2].claims[0].polarity, "negative");
+  assert.strictEqual(positiveKey, negativeKey);
+});
+
 test("intelligence normalization redacts secrets and rejects unsafe source URLs", () => {
   const { normalizeSafeSourceUrl, normalizeSourceInput } =
     require("../../server/services/intelligence/intelligenceExtractor");
@@ -100,6 +248,44 @@ test("intelligence claim conflict keys represent positive and negative claim con
   const negative = buildConflictKey("ORBIT bukan sistem intelligence aktif.");
 
   assert.strictEqual(positive, negative);
+});
+
+test("source evidence grouping deduplicates cards while preserving target links", () => {
+  const { groupSourceLinksForPresentation } = require("../../server/services/intelligence/intelligenceRepository");
+  const grouped = groupSourceLinksForPresentation([
+    {
+      claimId: null,
+      confidence: 0.62,
+      entityId: "entity-1",
+      evidenceText: "Project Alpha dimulai pada 20 Agustus 2026 di Merauke.",
+      id: "link-1",
+      linkType: "entity_mention",
+      relationshipId: null,
+      source: { id: "source-1", title: "Controlled 1" },
+      sourceId: "source-1",
+      targetKey: "entity:entity-1",
+    },
+    {
+      claimId: "claim-1",
+      confidence: 0.58,
+      entityId: null,
+      evidenceText: "Project Alpha dimulai pada 20 Agustus 2026 di Merauke.",
+      id: "link-2",
+      linkType: "claim_evidence",
+      relationshipId: null,
+      source: { id: "source-1", title: "Controlled 1" },
+      sourceId: "source-1",
+      targetKey: "claim:claim-1",
+    },
+  ]);
+
+  assert.strictEqual(grouped.length, 1);
+  assert.deepStrictEqual(grouped[0].entityIds, ["entity-1"]);
+  assert.deepStrictEqual(grouped[0].claimIds, ["claim-1"]);
+  assert.deepStrictEqual(grouped[0].linkTypes.sort(), [
+    "claim_evidence",
+    "entity_mention",
+  ]);
 });
 
 test("intelligence routes require auth and expose scoped endpoints", () => {

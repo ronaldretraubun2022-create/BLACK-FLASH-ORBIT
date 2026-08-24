@@ -18,7 +18,7 @@ const SOURCE_COLUMNS =
 const ENTITY_COLUMNS =
   "id, owner_id, entity_type, canonical_name, normalized_name, confidence, mention_count, first_seen_at, last_seen_at, created_at, updated_at";
 const CLAIM_COLUMNS =
-  "id, owner_id, source_id, claim_text, normalized_claim, conflict_key, claim_status, confidence, polarity, observed_at, created_at, updated_at";
+  "id, owner_id, source_id, claim_text, normalized_claim, conflict_key, claim_status, confidence, polarity, observed_at, metadata, created_at, updated_at";
 const RELATIONSHIP_COLUMNS =
   "id, owner_id, source_id, subject_entity_id, object_entity_id, relationship_type, status, confidence, evidence_text, created_at, updated_at";
 const SOURCE_LINK_COLUMNS =
@@ -106,6 +106,9 @@ function mapClaim(row, links = []) {
     conflictKey: row.conflict_key,
     createdAt: row.created_at,
     id: row.id,
+    dateMentions: Array.isArray(row.metadata?.dateMentions)
+      ? row.metadata.dateMentions
+      : [],
     normalizedClaim: row.normalized_claim,
     observedAt: row.observed_at || null,
     ownerId: row.owner_id,
@@ -140,9 +143,12 @@ function mapSourceLink(row) {
   return {
     confidence: Number(row.confidence || 0),
     createdAt: row.created_at,
+    claimId: row.claim_id || null,
+    entityId: row.entity_id || null,
     evidenceText: row.evidence_text || "",
     id: row.id,
     linkType: row.link_type,
+    relationshipId: row.relationship_id || null,
     source: source
       ? {
           createdAt: source.created_at,
@@ -154,6 +160,7 @@ function mapSourceLink(row) {
         }
       : null,
     sourceId: row.source_id,
+    targetKey: row.target_key || null,
   };
 }
 
@@ -323,6 +330,11 @@ async function upsertClaim({ claim, ownerId, sourceRow }) {
         claim_text: sanitizeText(claim.claimText, 1200),
         confidence: Number(claim.confidence || 0.5),
         conflict_key: conflictKey,
+        metadata: {
+          dateMentions: Array.isArray(claim.dateMentions)
+            ? claim.dateMentions
+            : [],
+        },
         normalized_claim: normalizedClaim,
         observed_at: claim.observedAt || null,
         owner_id: ownerId,
@@ -485,6 +497,47 @@ async function upsertSourceLink({
   if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_SOURCE_LINK_UPSERT_FAILED");
 
   return mapSourceLink(data);
+}
+
+function groupSourceLinksForPresentation(links = []) {
+  const groups = new Map();
+
+  links.forEach((link) => {
+    const mappedLink = link.sourceId ? link : mapSourceLink(link);
+    const key = [
+      mappedLink.sourceId,
+      normalizeKeyword(mappedLink.evidenceText, 500),
+    ].join("|");
+    const current =
+      groups.get(key) || {
+        ...mappedLink,
+        claimIds: [],
+        entityIds: [],
+        linkTypes: [],
+        relationshipIds: [],
+        targetKeys: [],
+      };
+
+    if (mappedLink.claimId) current.claimIds.push(mappedLink.claimId);
+    if (mappedLink.entityId) current.entityIds.push(mappedLink.entityId);
+    if (mappedLink.relationshipId) current.relationshipIds.push(mappedLink.relationshipId);
+    if (mappedLink.linkType && !current.linkTypes.includes(mappedLink.linkType)) {
+      current.linkTypes.push(mappedLink.linkType);
+    }
+    if (mappedLink.targetKey && !current.targetKeys.includes(mappedLink.targetKey)) {
+      current.targetKeys.push(mappedLink.targetKey);
+    }
+
+    current.confidence = Math.max(current.confidence || 0, mappedLink.confidence || 0);
+    groups.set(key, current);
+  });
+
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    claimIds: Array.from(new Set(group.claimIds)),
+    entityIds: Array.from(new Set(group.entityIds)),
+    relationshipIds: Array.from(new Set(group.relationshipIds)),
+  }));
 }
 
 async function processSourceInput({ input, ownerId }) {
@@ -850,7 +903,7 @@ async function listSourceLinks({ filters = {}, ownerId }) {
 
   if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_SOURCE_LINK_LIST_FAILED");
 
-  return (data || []).map(mapSourceLink);
+  return groupSourceLinksForPresentation((data || []).map(mapSourceLink));
 }
 
 async function listSources({ filters = {}, ownerId }) {
@@ -874,6 +927,7 @@ async function listSources({ filters = {}, ownerId }) {
 module.exports = {
   getEntityDetail,
   getOverview,
+  groupSourceLinksForPresentation,
   listEntities,
   listSourceLinks,
   listSources,
