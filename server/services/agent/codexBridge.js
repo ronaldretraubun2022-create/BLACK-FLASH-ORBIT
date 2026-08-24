@@ -11,6 +11,7 @@ const CODEX_STATUS_TIMEOUT_MS = 5000;
 const MAX_CODEX_OUTPUT_CHARS = 50000;
 const MAX_CODEX_TASK_CHARS = 12000;
 const CODEX_ENTRYPOINT_SEGMENTS = ["node_modules", "@openai", "codex", "bin", "codex.js"];
+const activeCodexProcesses = new Map();
 const npmExecutable = process.platform === "win32" ? "npm.cmd" : "npm";
 
 function createCodexError(message, statusCode = 503, code = "AGENT_CODEX_NOT_FOUND") {
@@ -370,6 +371,10 @@ function writeCodexTaskToStdin(child, safeTaskPayload) {
   child.stdin.end();
 }
 
+function hasActiveCodexProcess(repoRoot) {
+  return Boolean(activeCodexProcesses.get(repoRoot)?.active);
+}
+
 function buildRunSummary({ mappedFailure, spec, stderr, stdout, timedOut, exitCode }) {
   return [
     shouldIncludeCodexDiagnostics() ? spec.safeInvocationSummary : "",
@@ -417,6 +422,8 @@ async function runCodexRepairJob({ repoRoot, taskText }) {
     const finish = async (code, error = null) => {
       if (settled) return;
       settled = true;
+      const processState = activeCodexProcesses.get(repoRoot);
+      if (processState?.child === child) activeCodexProcesses.delete(repoRoot);
       clearTimeout(timer);
       clearTimeout(forceTimer);
 
@@ -466,6 +473,7 @@ async function runCodexRepairJob({ repoRoot, taskText }) {
 
     try {
       child = spawn(spec.command, spec.args, spec.options);
+      activeCodexProcesses.set(repoRoot, { active: true, child });
     } catch (error) {
       void finish(null, error);
       return;
@@ -490,6 +498,7 @@ module.exports = {
   createSafeCodexEnv,
   getSafeCodexInvocationSummary,
   getCodexStatus,
+  hasActiveCodexProcess,
   hasNonInteractiveExecSupport,
   mapCodexExitFailure,
   resolveCodexEntrypoint,

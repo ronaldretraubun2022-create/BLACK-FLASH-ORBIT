@@ -1,6 +1,6 @@
 const { getSupabaseAdmin } = require("../supabaseAdmin");
 const { runAllowedCommand } = require("./commandAllowlist");
-const { getCodexStatus, runCodexRepairJob } = require("./codexBridge");
+const { getCodexStatus, hasActiveCodexProcess, runCodexRepairJob } = require("./codexBridge");
 const { recordAgentAudit } = require("./agentAudit");
 const {
   getChangedFiles,
@@ -15,6 +15,7 @@ const JOB_COLUMNS = "id, owner_id, title, status, created_at, updated_at";
 const RUN_COLUMNS =
   "id, owner_id, job_id, stage, status, exit_code, started_at, completed_at, safe_summary, changed_files";
 const ACTIVE_RUN_STATUSES = ["queued", "running"];
+const ACTIVE_PROCESS_STATUSES = ["running"];
 const CODEX_STALE_RUN_MS = 15 * 60 * 1000;
 const VALIDATION_COMMANDS = [
   "npm run lint",
@@ -252,7 +253,7 @@ async function reconcileStaleAgentRuns({ ownerId = null } = {}) {
     .from("orbit_agent_runs")
     .select(RUN_COLUMNS)
     .eq("stage", "codex_repair")
-    .in("status", ACTIVE_RUN_STATUSES)
+    .in("status", ACTIVE_PROCESS_STATUSES)
     .order("started_at", { ascending: true })
     .limit(50);
   if (ownerId) query = query.eq("owner_id", ownerId);
@@ -268,8 +269,15 @@ async function reconcileStaleAgentRuns({ ownerId = null } = {}) {
     const startedAt = Date.parse(row.started_at || "");
     const localStartedAt = localCodexRuns.get(row.id);
     const localAgeMs = localStartedAt ? Date.now() - localStartedAt : 0;
+    const locallyLocked = repositoryRepairLock?.runId === row.id;
+    const childAlive = typeof hasActiveCodexProcess === "function"
+      ? hasActiveCodexProcess(repositoryRepairLock?.repoRoot || "")
+      : Boolean(localStartedAt && localAgeMs < getStaleRunAgeMs());
 
-    if (localStartedAt && localAgeMs < getStaleRunAgeMs()) continue;
+    if (
+      (repositoryRepairLock?.runId == null && pendingCodexJobs.size > 0) ||
+      (localStartedAt && localAgeMs < getStaleRunAgeMs() && (childAlive || locallyLocked))
+    ) continue;
     if (!Number.isFinite(startedAt) || startedAt > cutoff) continue;
 
     const safeSummary = "Codex repair marked failed after stale-run recovery.";
@@ -302,7 +310,7 @@ async function findActiveRepositoryRun() {
     .from("orbit_agent_runs")
     .select(RUN_COLUMNS)
     .eq("stage", "codex_repair")
-    .in("status", ACTIVE_RUN_STATUSES)
+    .in("status", ACTIVE_PROCESS_STATUSES)
     .order("started_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -310,6 +318,79 @@ async function findActiveRepositoryRun() {
   if (error) throw normalizeDbError(error, "AGENT_RUN_LOOKUP_FAILED");
 
   return data || null;
+}
+
+async function reconcileOrphanedAgentJobs() {
+  const client = getClient();
+  const [{ data: jobs, error: jobsError }, { data: runs, error: runsError }] = await Promise.all([
+    client
+      .from("orbit_agent_jobs")
+      .select(JOB_COLUMNS)
+      .in("status", ["diagnosing", "running", "validating"])
+      .order("updated_at", { ascending: true })
+      .limit(50),
+    client
+      .from("orbit_agent_runs")
+      .select(RUN_COLUMNS)
+      .in("status", ACTIVE_RUN_STATUSES)
+      .limit(100),
+  ]);
+
+  if (jobsError) throw normalizeDbError(jobsError, "AGENT_JOB_RECONCILE_FAILED");
+  if (runsError) throw normalizeDbError(runsError, "AGENT_RUN_RECONCILE_FAILED");
+
+  const activeJobIds = new Set((runs || []).map((run) => run.job_id));
+  const cutoff = Date.now() - getStaleRunAgeMs();
+  let reconciled = 0;
+
+  for (const job of jobs || []) {
+    if (activeJobIds.has(job.id)) continue;
+    const updatedAt = Date.parse(job.updated_at || "");
+    if (!Number.isFinite(updatedAt) || updatedAt > cutoff) continue;
+
+    await updateJobStatus({ jobId: job.id, ownerId: job.owner_id, status: "failed" });
+    await recordAgentAudit({
+      eventType: "agent_job_orphan_reconciled",
+      jobId: job.id,
+      metadata: { reason: "no_active_run_after_runtime_limit" },
+      ownerId: job.owner_id,
+    }).catch(() => null);
+    reconciled += 1;
+  }
+
+  return reconciled;
+}
+
+async function getRepositoryRepairState({ reconcile = true } = {}) {
+  const repoRoot = getConfiguredRepoRoot();
+
+  if (repositoryRepairLock?.repoRoot === repoRoot) {
+    const activeChild = typeof hasActiveCodexProcess === "function"
+      ? hasActiveCodexProcess(repoRoot)
+      : Boolean(repositoryRepairLock.runId && localCodexRuns.has(repositoryRepairLock.runId));
+    const queuedLocally = repositoryRepairLock.runId == null || pendingCodexJobs.has(
+      `${repositoryRepairLock.ownerId}:${repositoryRepairLock.jobId}`,
+    );
+
+    if (activeChild || queuedLocally) {
+      return { activeRepair: true, status: "busy" };
+    }
+
+    const localStartedAt = localCodexRuns.get(repositoryRepairLock.runId);
+    if (localStartedAt && Date.now() - localStartedAt < getStaleRunAgeMs()) {
+      return { activeRepair: true, status: "busy" };
+    }
+
+    releaseRepositoryRepairLock(repositoryRepairLock.runId);
+  }
+
+  if (reconcile) await reconcileStaleAgentRuns();
+
+  const activeRun = await findActiveRepositoryRun();
+
+  return activeRun
+    ? { activeRepair: false, status: "stale" }
+    : { activeRepair: false, status: "idle" };
 }
 
 async function listRunsForJob({ jobId, ownerId }) {
@@ -369,18 +450,18 @@ async function getAgentStatus({ ownerId }) {
     };
   }
 
-  await reconcileStaleAgentRuns().catch(() => 0);
-  let activeRepositoryRun = null;
+  let repositoryRepair;
   try {
-    activeRepositoryRun = await findActiveRepositoryRun();
+    repositoryRepair = await getRepositoryRepairState();
+    await reconcileOrphanedAgentJobs();
   } catch {
-    activeRepositoryRun = null;
+    repositoryRepair = { activeRepair: false, status: "stale" };
   }
 
-  const [jobsQueued, jobsRunning, jobsSucceeded, jobsFailed, lastRun, lastValidation] =
+  const [jobsQueued, activeRepairRuns, jobsSucceeded, jobsFailed, lastRun, lastValidation] =
     await Promise.all([
       client.from("orbit_agent_jobs").select("id", { count: "exact", head: true }).eq("owner_id", ownerId).eq("status", "queued"),
-      client.from("orbit_agent_jobs").select("id", { count: "exact", head: true }).eq("owner_id", ownerId).in("status", ["diagnosing", "running", "validating"]),
+      client.from("orbit_agent_runs").select("id", { count: "exact", head: true }).eq("owner_id", ownerId).eq("stage", "codex_repair").eq("status", "running"),
       client.from("orbit_agent_jobs").select("id", { count: "exact", head: true }).eq("owner_id", ownerId).in("status", ["succeeded", "approved"]),
       client.from("orbit_agent_jobs").select("id", { count: "exact", head: true }).eq("owner_id", ownerId).eq("status", "failed"),
       client.from("orbit_agent_runs").select(RUN_COLUMNS).eq("owner_id", ownerId).order("started_at", { ascending: false }).limit(1).maybeSingle(),
@@ -388,7 +469,7 @@ async function getAgentStatus({ ownerId }) {
     ]);
   const firstError =
     jobsQueued.error ||
-    jobsRunning.error ||
+    activeRepairRuns.error ||
     jobsSucceeded.error ||
     jobsFailed.error ||
     lastRun.error ||
@@ -412,7 +493,7 @@ async function getAgentStatus({ ownerId }) {
       currentRepoBranch: repoStatus.branch,
       jobsFailed: Number(jobsFailed.count || 0),
       jobsQueued: Number(jobsQueued.count || 0),
-      jobsRunning: Number(jobsRunning.count || 0),
+      jobsRunning: Number(activeRepairRuns.count || 0),
       jobsSucceeded: Number(jobsSucceeded.count || 0),
       lastRun: lastRun.data ? mapRun(lastRun.data) : null,
       lastValidation: lastValidation.data ? mapRun(lastValidation.data) : null,
@@ -425,9 +506,7 @@ async function getAgentStatus({ ownerId }) {
       status: "ready",
     },
     repository: repoStatus,
-    repositoryRepair: activeRepositoryRun || repositoryRepairLock
-      ? { activeRepair: true, status: "busy" }
-      : { activeRepair: false, status: "idle" },
+    repositoryRepair,
   };
 }
 
@@ -535,11 +614,10 @@ async function runAgentRepair({ input = {}, jobId, ownerId }) {
     throw getCodexRepairUnavailableError(codex);
   }
 
-  await reconcileStaleAgentRuns().catch(() => 0);
   const repoStatus = await getRepositoryStatus();
-  const activeRepositoryRun = await findActiveRepositoryRun();
+  const repositoryRepair = await getRepositoryRepairState();
 
-  if (activeRepositoryRun || repositoryRepairLock) {
+  if (repositoryRepair.status !== "idle") {
     throw createRepositoryBusyError();
   }
 
