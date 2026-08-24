@@ -66,6 +66,7 @@ test("agent bridge routes require auth and never accept client owner id", () => 
   assert.match(route, /rateLimit\(\{/);
   assert.match(route, /router\.get\(\s*["']\/status["']/);
   assert.match(route, /router\.use\(requireAgentBridgeEnabled\)/);
+  assert.match(route, /metadata: safeMetadata/);
   assert.match(route, /ownerId: getOwnerId\(req\)/);
   assert.doesNotMatch(route, /ownerId:\s*req\.body/);
   assert.doesNotMatch(route, /ORBIT_CODEX_ENTRYPOINT|codexEntrypoint|entrypoint:\s*req\.body|req\.query\.entrypoint/);
@@ -673,6 +674,13 @@ test("agent repair queues background Codex work without waiting for completion",
       status: "queued",
       title: "Inspect repository status only.",
       updated_at: "2026-08-24T00:00:00.000Z",
+    }, {
+      created_at: "2026-08-24T00:00:00.000Z",
+      id: "job-2",
+      owner_id: "owner-1",
+      status: "queued",
+      title: "Inspect another repair task.",
+      updated_at: "2026-08-24T00:00:00.000Z",
     }],
   });
   let codexStarted = false;
@@ -743,6 +751,15 @@ test("agent repair queues background Codex work without waiting for completion",
         ownerId: "owner-1",
       }),
       /sudah berjalan|already/i,
+    );
+
+    await assert.rejects(
+      () => service.runAgentRepair({
+        input: { taskText: "Inspect another repair task." },
+        jobId: "job-2",
+        ownerId: "owner-1",
+      }),
+      (error) => error.code === "AGENT_REPOSITORY_BUSY" && error.statusCode === 409,
     );
 
     await new Promise((resolve) => setImmediate(resolve));
@@ -976,6 +993,64 @@ test("agent status reconciles old non-local Codex runs without touching active l
   assert.strictEqual(client.state.jobs.find((job) => job.id === "fresh-job").status, "running");
 });
 
+test("active local Codex run is not reconciled before its runtime limit", async () => {
+  const client = createAgentMemoryClient({
+    jobs: [{
+      created_at: "2020-01-01T00:00:00.000Z",
+      id: "job-1",
+      owner_id: "owner-1",
+      status: "running",
+      title: "Long repair",
+      updated_at: "2020-01-01T00:00:00.000Z",
+    }],
+    runs: [{
+      id: "run-1",
+      job_id: "job-1",
+      owner_id: "owner-1",
+      stage: "codex_repair",
+      status: "running",
+      started_at: "2020-01-01T00:00:00.000Z",
+      safe_summary: "Codex repair running.",
+      changed_files: [],
+    }],
+  });
+  let releaseCodex;
+  const codexGate = new Promise((resolve) => { releaseCodex = resolve; });
+  const service = loadModuleWithMocks(jobServicePath, {
+    "../supabaseAdmin": { getSupabaseAdmin: () => client },
+    "./agentAudit": { recordAgentAudit: async () => null },
+    "./agentConfig": {
+      getAgentBridgeState: () => ({ enabled: true }),
+      isAgentBridgeEnabled: () => true,
+    },
+    "./codexBridge": {
+      getCodexStatus: () => ({ available: true, nonInteractive: true, mode: "node-entrypoint" }),
+      runCodexRepairJob: async () => {
+        await codexGate;
+        return { changedFiles: [], exitCode: 0, safeSummary: "repair complete", timedOut: false };
+      },
+    },
+    "./repositoryInspector": {
+      getChangedFiles: async () => [],
+      getConfiguredRepoRoot: () => rootDir,
+      getRepositoryStatus: async () => ({ branch: "feature/orbit-v1.3-agent-bridge", dirty: false }),
+    },
+  });
+
+  const completion = service.waitForCodexRepairCompletionForTest({
+    jobId: "job-1",
+    ownerId: "owner-1",
+    runId: "run-1",
+    taskText: "Inspect repository status only.",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await service.reconcileStaleAgentRuns();
+  assert.strictEqual(client.state.runs[0].status, "running");
+  releaseCodex();
+  await completion;
+  assert.strictEqual(client.state.runs[0].status, "succeeded");
+});
+
 test("agent repair remains owner scoped for queued background runs", async () => {
   const client = createAgentMemoryClient({
     jobs: [{
@@ -1141,6 +1216,9 @@ test("agent service enforces approval without commit push merge or tags", () => 
   assert.match(service, /queueCodexRepairExecution/);
   assert.match(service, /setImmediate/);
   assert.match(service, /AGENT_RUN_ALREADY_ACTIVE/);
+  assert.match(service, /AGENT_REPOSITORY_BUSY/);
+  assert.match(service, /acquireRepositoryRepairLock/);
+  assert.match(service, /releaseRepositoryRepairLock/);
   assert.match(service, /findActiveRepairRun/);
   assert.match(service, /status: "approved"/);
   assert.match(service, /commitCreated: false/);
@@ -1193,6 +1271,8 @@ test("agent API client and UI do not expose service role or provider secrets", (
   assert.match(app, /\/agent-bridge/);
   assert.match(app, /open-agent-bridge/);
   assert.match(sidebar, /Agent Bridge/);
+  assert.match(page, /isRepositoryBusy/);
+  assert.match(page, /Repository Repair/);
   assert.match(page, /disabled=\{!canUseJobs \|\| Boolean\(activeAction\)\}/);
   assert.match(page, /persistence/);
   assert.match(page, /codex/);

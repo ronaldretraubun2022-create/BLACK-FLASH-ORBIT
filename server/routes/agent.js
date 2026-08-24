@@ -42,12 +42,16 @@ function sendAgentError(res, error) {
     isKnownAgentError || safeStatus < 500
       ? error?.message || "Agent Bridge request gagal."
       : "Agent Bridge request gagal.";
+  const safeMetadata = error?.safeMetadata?.active === true && error?.safeMetadata?.stage === "codex_repair"
+    ? { active: true, stage: "codex_repair" }
+    : undefined;
 
   return res.status(safeStatus).json({
     success: false,
     code,
     message: safeMessage,
     status: safeStatus,
+    ...(safeMetadata ? { metadata: safeMetadata } : {}),
   });
 }
 

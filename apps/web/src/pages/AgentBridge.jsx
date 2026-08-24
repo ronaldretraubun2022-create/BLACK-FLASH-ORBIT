@@ -80,6 +80,7 @@ export function AgentBridge() {
   const isCodexAvailable = codexState.available === true;
   const isCodexNonInteractive = codexState.nonInteractive === true;
   const isPersistenceAvailable = persistenceState.available !== false;
+  const isRepositoryBusy = status?.repositoryRepair?.status === "busy";
   const selectedJobId = selectedJob?.id || jobs[0]?.id || "";
   const selectedRunStateKey = getArray(selectedJob?.runs)
     .map((run) => `${run.id}:${run.status}`)
@@ -90,7 +91,7 @@ export function AgentBridge() {
   const canUseJobs = isBridgeEnabled && isPersistenceAvailable;
   const canCreateJob = canUseJobs && taskText.trim().length >= 8 && !activeAction;
   const canActOnJob = canUseJobs && Boolean(selectedJobId) && !activeAction && !isSelectedJobActive;
-  const canRunRepair = canActOnJob && isCodexAvailable && isCodexNonInteractive;
+  const canRunRepair = canActOnJob && !isRepositoryBusy && isCodexAvailable && isCodexNonInteractive;
 
   const metrics = useMemo(() => {
     const data = status?.metrics || {};
@@ -494,6 +495,10 @@ function RepositoryStatus({ isLoading, status }) {
         <StatusLine label="Branch" value={repo.branch || "-"} />
         <StatusLine label="Working Tree" value={repo.status || "-"} />
         <StatusLine label="Dirty" value={repo.dirty ? "yes" : "no"} />
+        <StatusLine
+          label="Repository Repair"
+          value={status?.repositoryRepair?.status || "idle"}
+        />
       </div>
       {!agentBridge.enabled ? (
         <p className="mt-3 rounded-lg border border-[#d9ad57]/20 bg-[#d9ad57]/10 px-3 py-2 text-xs font-bold leading-5 text-[#f1c36f]">
