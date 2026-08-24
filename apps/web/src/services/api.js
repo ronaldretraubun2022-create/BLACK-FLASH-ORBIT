@@ -1014,6 +1014,51 @@ export const api = {
     });
   },
 
+  async getIntelligenceOverview({ signal } = {}) {
+    return request("/api/v1/intelligence/overview", {
+      headers: await getAuthenticatedHeaders(),
+      signal,
+    });
+  },
+
+  async getIntelligenceEntities(params = {}) {
+    return request(`/api/v1/intelligence/entities${createQueryString(params)}`, {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async getIntelligenceClaims(params = {}) {
+    return request(`/api/v1/intelligence/claims${createQueryString(params)}`, {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async getIntelligenceTimeline(params = {}) {
+    return request(`/api/v1/intelligence/timeline${createQueryString(params)}`, {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async searchIntelligence(params = {}) {
+    return request(`/api/v1/intelligence/search${createQueryString(params)}`, {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async getIntelligenceSourceLinks(params = {}) {
+    return request(`/api/v1/intelligence/source-links${createQueryString(params)}`, {
+      headers: await getAuthenticatedHeaders(),
+    });
+  },
+
+  async processIntelligenceSource(payload) {
+    return request("/api/v1/intelligence/process", {
+      method: "POST",
+      headers: await getAuthenticatedHeaders(),
+      body: JSON.stringify(payload),
+    });
+  },
+
   async createAutomationRun(payload) {
     return request("/api/v1/automation/runs", {
       method: "POST",
