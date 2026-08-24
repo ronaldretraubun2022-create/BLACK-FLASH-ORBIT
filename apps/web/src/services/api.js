@@ -1059,6 +1059,16 @@ export const api = {
     });
   },
 
+  async dedupeIntelligenceSources({ dryRun = false } = {}) {
+    return request(
+      `/api/v1/intelligence/maintenance/dedupe${createQueryString({ dryRun })}`,
+      {
+        method: "POST",
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
   async reprocessIntelligenceSource(sourceId) {
     return request(
       `/api/v1/intelligence/sources/${encodeURIComponent(sourceId)}/reprocess`,

@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock3,
   FileSearch,
+  GitMerge,
   Layers3,
   Link2,
   RefreshCcw,
@@ -123,6 +124,10 @@ export function Intelligence() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [reprocessMessage, setReprocessMessage] = useState("");
   const [reprocessingSourceId, setReprocessingSourceId] = useState("");
+  const [dedupeSummary, setDedupeSummary] = useState(null);
+  const [dedupeMessage, setDedupeMessage] = useState("");
+  const [isScanningDuplicates, setIsScanningDuplicates] = useState(false);
+  const [isMergingDuplicates, setIsMergingDuplicates] = useState(false);
   const canProcessManualNote = canSubmitManualNote({
     content: manualNote.content,
     isProcessing,
@@ -262,6 +267,59 @@ export function Intelligence() {
       setError(getSafeIntelligenceIntakeError(reprocessError));
     } finally {
       setReprocessingSourceId("");
+    }
+  }
+
+  async function handleScanDuplicateSources() {
+    if (isScanningDuplicates || isMergingDuplicates) return;
+
+    setIsScanningDuplicates(true);
+    setDedupeMessage("");
+    setError("");
+
+    try {
+      const response = await api.dedupeIntelligenceSources({ dryRun: true });
+      const summary = response?.data || null;
+
+      setDedupeSummary(summary);
+      setDedupeMessage(
+        summary?.duplicateSources
+          ? "Duplicate source scan completed."
+          : "No duplicate intelligence sources found.",
+      );
+    } catch (scanError) {
+      setError(getSafeIntelligenceIntakeError(scanError));
+    } finally {
+      setIsScanningDuplicates(false);
+    }
+  }
+
+  async function handleMergeDuplicateSources() {
+    if (isScanningDuplicates || isMergingDuplicates || !dedupeSummary?.duplicateSources) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Merge duplicate intelligence sources and rebuild derived intelligence with the current extractor?",
+    );
+
+    if (!confirmed) return;
+
+    setIsMergingDuplicates(true);
+    setDedupeMessage("");
+    setError("");
+
+    try {
+      const response = await api.dedupeIntelligenceSources({ dryRun: false });
+      const summary = response?.data || null;
+
+      setDedupeSummary(summary);
+      setDedupeMessage("Duplicate sources merged.");
+      await loadIntelligence(filters);
+    } catch (mergeError) {
+      setError(getSafeIntelligenceIntakeError(mergeError));
+    } finally {
+      setIsMergingDuplicates(false);
     }
   }
 
@@ -484,6 +542,14 @@ export function Intelligence() {
                   <Timeline items={timeline} isLoading={isLoading} />
                 </Panel>
                 <Panel icon={Link2} kicker="Evidence" title="Source Evidence">
+                  <DedupeMaintenance
+                    isMerging={isMergingDuplicates}
+                    isScanning={isScanningDuplicates}
+                    message={dedupeMessage}
+                    onMerge={handleMergeDuplicateSources}
+                    onScan={handleScanDuplicateSources}
+                    summary={dedupeSummary}
+                  />
                   <EvidencePanel
                     links={sourceLinks}
                     isLoading={isLoading}
@@ -666,6 +732,71 @@ function SearchResults({ results }) {
           </p>
         </div>
       ))}
+    </div>
+  );
+}
+
+function DedupeMaintenance({
+  isMerging,
+  isScanning,
+  message,
+  onMerge,
+  onScan,
+  summary,
+}) {
+  const duplicateSources = Number(summary?.duplicateSources || 0);
+  const isBusy = isScanning || isMerging;
+
+  return (
+    <div className="mb-3 rounded-lg border border-[#d9ad57]/20 bg-[#d9ad57]/10 p-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-[0.14em] text-[#f1c36f]">
+            Legacy Dedupe
+          </p>
+          <p className="mt-1 text-xs font-bold leading-5 text-zinc-300">
+            Scan duplicate sources before merging stale legacy rows.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-white/10 bg-black/25 px-3 text-xs font-black text-white transition hover:border-[#d9ad57]/35 hover:text-[#f1c36f] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={isBusy}
+            onClick={onScan}
+            type="button">
+            <FileSearch size={14} />
+            {isScanning ? "Scanning..." : "Scan duplicate sources"}
+          </button>
+          <button
+            className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-[#d9ad57]/35 bg-[#d9ad57]/15 px-3 text-xs font-black text-[#f1c36f] transition hover:bg-[#d9ad57]/20 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={isBusy || !duplicateSources}
+            onClick={onMerge}
+            type="button">
+            <GitMerge size={14} />
+            {isMerging ? "Merging..." : "Merge duplicates"}
+          </button>
+        </div>
+      </div>
+      {summary ? (
+        <div className="mt-3 grid gap-2 text-[10px] font-black uppercase tracking-[0.12em] text-zinc-400 sm:grid-cols-4">
+          <span>{summary.duplicateGroups || 0} groups</span>
+          <span>{summary.duplicateSources || 0} duplicate sources</span>
+          <span>{summary.estimatedSourcesAfter || 0} sources after</span>
+          <span>{summary.orphanCandidates || 0} orphan candidates</span>
+        </div>
+      ) : null}
+      {summary?.sourcesMerged ? (
+        <div className="mt-2 grid gap-2 text-[10px] font-black uppercase tracking-[0.12em] text-emerald-100 sm:grid-cols-3">
+          <span>{summary.sourcesMerged} merged</span>
+          <span>{summary.sourcesDeleted || 0} deleted</span>
+          <span>{summary.cleanup?.orphanEntitiesDeleted || 0} stale orphans removed</span>
+        </div>
+      ) : null}
+      {message ? (
+        <p className="mt-3 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-bold text-emerald-100">
+          {message}
+        </p>
+      ) : null}
     </div>
   );
 }

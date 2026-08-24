@@ -2,6 +2,7 @@ const express = require("express");
 
 const { requireAuth } = require("../middleware/requireAuth");
 const {
+  dedupeIntelligenceSources,
   getEntityDetail,
   getOverview,
   listEntities,
@@ -173,6 +174,24 @@ router.get(
     res.json({
       success: true,
       data,
+    });
+  }),
+);
+
+router.post(
+  "/maintenance/dedupe",
+  wrapAsync(async (req, res) => {
+    const data = await dedupeIntelligenceSources({
+      dryRun: String(req.query.dryRun || req.query.dry_run || "").toLowerCase() === "true",
+      ownerId: getOwnerId(req),
+    });
+
+    res.json({
+      success: true,
+      data,
+      message: data.dryRun
+        ? "Intelligence duplicate source scan completed."
+        : "Intelligence duplicate sources merged.",
     });
   }),
 );

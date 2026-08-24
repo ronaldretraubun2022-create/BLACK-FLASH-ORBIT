@@ -26,6 +26,7 @@ const RELATIONSHIP_COLUMNS =
 const SOURCE_LINK_COLUMNS =
   "id, owner_id, source_id, entity_id, claim_id, relationship_id, link_type, target_key, evidence_text, confidence, created_at";
 const MAX_LIMIT = 100;
+const MAX_DEDUPE_SOURCE_SCAN = 1000;
 
 function getClient() {
   const client = getSupabaseAdmin();
@@ -101,6 +102,10 @@ function redactPersistedSourceContent(content) {
     /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,
     "[REDACTED_EMAIL]",
   );
+}
+
+function normalizeDedupeContent(content) {
+  return normalizeKeyword(redactPersistedSourceContent(content || ""), 20000);
 }
 
 function mapEntity(row, links = []) {
@@ -644,6 +649,139 @@ function groupSourceLinksForPresentation(links = []) {
   }));
 }
 
+function getSourceDedupeKeys(source) {
+  const keys = [];
+  const ownerId = source.ownerId || source.owner_id || "";
+  const sourceType = source.sourceType || source.source_type || "";
+  const contentHash = source.contentHash || source.content_hash || "";
+  const contentSnapshot = source.contentSnapshot || source.content_snapshot || "";
+  const normalizedContent = normalizeDedupeContent(contentSnapshot);
+  const prefix = `${ownerId}|${sourceType}`;
+
+  if (normalizedContent) keys.push(`${prefix}|content:${normalizedContent}`);
+  if (contentHash) keys.push(`${prefix}|hash:${contentHash}`);
+
+  return keys;
+}
+
+function hasCurrentExtractorMetadata(source) {
+  return source?.metadata?.extractorVersion === EXTRACTOR_VERSION;
+}
+
+function getSourceTimestamp(value) {
+  const timestamp = new Date(value || 0).getTime();
+
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function selectCanonicalDuplicateSource(sources = []) {
+  return [...sources].sort((left, right) => {
+    const leftHasContent = normalizeDedupeContent(left.contentSnapshot || "").length > 0;
+    const rightHasContent = normalizeDedupeContent(right.contentSnapshot || "").length > 0;
+
+    if (leftHasContent !== rightHasContent) return leftHasContent ? -1 : 1;
+
+    const leftCurrent = hasCurrentExtractorMetadata(left);
+    const rightCurrent = hasCurrentExtractorMetadata(right);
+
+    if (leftCurrent !== rightCurrent) return leftCurrent ? -1 : 1;
+
+    const leftProcessedAt = getSourceTimestamp(
+      left.reprocessedAt || left.processedAt || left.updatedAt,
+    );
+    const rightProcessedAt = getSourceTimestamp(
+      right.reprocessedAt || right.processedAt || right.updatedAt,
+    );
+
+    if (leftProcessedAt !== rightProcessedAt) return rightProcessedAt - leftProcessedAt;
+
+    const leftCreatedAt = getSourceTimestamp(left.createdAt);
+    const rightCreatedAt = getSourceTimestamp(right.createdAt);
+
+    if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt;
+
+    return String(left.id || "").localeCompare(String(right.id || ""));
+  })[0];
+}
+
+function buildDuplicateSourceGroups(sources = []) {
+  const parent = new Map();
+  const byKey = new Map();
+
+  function find(id) {
+    const current = parent.get(id) || id;
+
+    if (current === id) return id;
+
+    const root = find(current);
+    parent.set(id, root);
+
+    return root;
+  }
+
+  function union(left, right) {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+
+    if (leftRoot !== rightRoot) parent.set(rightRoot, leftRoot);
+  }
+
+  sources.forEach((source) => {
+    if (!source?.id) return;
+
+    parent.set(source.id, source.id);
+
+    getSourceDedupeKeys(source).forEach((key) => {
+      const existing = byKey.get(key);
+
+      if (existing) {
+        union(existing, source.id);
+      } else {
+        byKey.set(key, source.id);
+      }
+    });
+  });
+
+  const sourceById = new Map(sources.map((source) => [source.id, source]));
+  const grouped = new Map();
+
+  sources.forEach((source) => {
+    if (!source?.id) return;
+
+    const root = find(source.id);
+    const group = grouped.get(root) || [];
+    group.push(source);
+    grouped.set(root, group);
+  });
+
+  return Array.from(grouped.values())
+    .filter((group) => group.length > 1)
+    .filter((group) =>
+      group.some((source) => normalizeDedupeContent(source.contentSnapshot || "")),
+    )
+    .filter((group) => {
+      const contentKeys = new Set(
+        group
+          .map((source) => normalizeDedupeContent(source.contentSnapshot || ""))
+          .filter(Boolean),
+      );
+
+      return contentKeys.size <= 1;
+    })
+    .map((group) => {
+      const canonical = selectCanonicalDuplicateSource(group);
+      const duplicateSources = group
+        .filter((source) => source.id !== canonical.id)
+        .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+
+      return {
+        canonical,
+        duplicateSources,
+        sources: [canonical, ...duplicateSources].map((source) => sourceById.get(source.id)),
+      };
+    });
+}
+
 async function persistExtractionForSource({ ownerId, source, sourceRow }) {
   const extraction = extractIntelligence(source);
   const entities = [];
@@ -720,6 +858,20 @@ async function getSourceForReprocess({ ownerId, sourceUuid }) {
   }
 
   return mapSource(data, { includeContent: true });
+}
+
+async function listSourcesForDedupe({ ownerId }) {
+  const client = getClient();
+  const { data, error } = await client
+    .from("orbit_intelligence_sources")
+    .select(SOURCE_COLUMNS)
+    .eq("owner_id", ownerId)
+    .order("created_at", { ascending: true })
+    .limit(MAX_DEDUPE_SOURCE_SCAN);
+
+  if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_DEDUPE_SOURCE_SCAN_FAILED");
+
+  return (data || []).map((row) => mapSource(row, { includeContent: true }));
 }
 
 async function markSourceReprocessFailed({ ownerId, sourceUuid }) {
@@ -899,6 +1051,60 @@ async function cleanupSourceDerivedData({ ownerId, sourceUuid }) {
   };
 }
 
+function addCleanupTotals(left, right) {
+  return {
+    claimsDeleted: Number(left.claimsDeleted || 0) + Number(right.claimsDeleted || 0),
+    conflictKeysReviewed:
+      Number(left.conflictKeysReviewed || 0) + Number(right.conflictKeysReviewed || 0),
+    orphanEntitiesDeleted:
+      Number(left.orphanEntitiesDeleted || 0) + Number(right.orphanEntitiesDeleted || 0),
+    relationshipsDeleted:
+      Number(left.relationshipsDeleted || 0) + Number(right.relationshipsDeleted || 0),
+    sourceLinksDeleted:
+      Number(left.sourceLinksDeleted || 0) + Number(right.sourceLinksDeleted || 0),
+  };
+}
+
+async function countOrphanEntityCandidatesForSourceIds({ ownerId, sourceIds }) {
+  const ids = Array.from(new Set(sourceIds.filter(Boolean)));
+
+  if (!ids.length) return 0;
+
+  const client = getClient();
+  const { data: links, error } = await client
+    .from("orbit_intelligence_source_links")
+    .select("entity_id, source_id")
+    .eq("owner_id", ownerId)
+    .in("source_id", ids)
+    .not("entity_id", "is", null);
+
+  if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_DEDUPE_ORPHAN_SCAN_FAILED");
+
+  const entityIds = Array.from(
+    new Set((links || []).map((link) => link.entity_id).filter(Boolean)),
+  );
+  let orphanCandidates = 0;
+
+  for (const entityId of entityIds) {
+    const { data: allLinks, error: linkError } = await client
+      .from("orbit_intelligence_source_links")
+      .select("source_id")
+      .eq("owner_id", ownerId)
+      .eq("entity_id", entityId)
+      .limit(100);
+
+    if (linkError) {
+      throw normalizeSupabaseError(linkError, "INTELLIGENCE_DEDUPE_ENTITY_LINK_SCAN_FAILED");
+    }
+
+    const hasOutsideLink = (allLinks || []).some((link) => !ids.includes(link.source_id));
+
+    if (!hasOutsideLink) orphanCandidates += 1;
+  }
+
+  return orphanCandidates;
+}
+
 function buildReprocessAuditMetadata({ afterCounts, beforeCounts, cleanup, reprocessedAt, source }) {
   return safeMetadata({
     afterCounts,
@@ -922,6 +1128,195 @@ async function recordIntelligenceAuditEvent({ eventType, metadata = {}, ownerId,
   });
 
   if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_AUDIT_EVENT_FAILED");
+}
+
+function buildDedupeAuditMetadata({
+  canonicalSourceIds,
+  cleanup,
+  dedupedAt,
+  duplicateGroups,
+  duplicateSources,
+  sourcesDeleted,
+}) {
+  return safeMetadata({
+    canonicalSourceIds,
+    cleanup,
+    dedupedAt,
+    duplicateGroups,
+    duplicateSources,
+    extractorVersion: EXTRACTOR_VERSION,
+    sourcesDeleted,
+  });
+}
+
+function buildDedupeSummary({ groups, orphanCandidates, sourceCount }) {
+  const duplicateSources = groups.reduce(
+    (total, group) => total + group.duplicateSources.length,
+    0,
+  );
+
+  return {
+    duplicateGroups: groups.length,
+    duplicateSources,
+    estimatedSourcesAfter: Math.max(0, sourceCount - duplicateSources),
+    orphanCandidates,
+  };
+}
+
+async function deleteDuplicateSourceRows({ ownerId, sourceIds }) {
+  const ids = Array.from(new Set(sourceIds.filter(Boolean)));
+
+  if (!ids.length) return 0;
+
+  const client = getClient();
+  const { data, error } = await client
+    .from("orbit_intelligence_sources")
+    .delete()
+    .eq("owner_id", ownerId)
+    .in("id", ids)
+    .select("id");
+
+  if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_DEDUPE_SOURCE_DELETE_FAILED");
+
+  return (data || []).length;
+}
+
+async function mergeDuplicateSourceGroup({ group, ownerId }) {
+  const canonical = group.canonical;
+  const duplicateIds = group.duplicateSources.map((source) => source.id);
+  const dedupedAt = new Date().toISOString();
+  const input = await loadSourceInputForReprocess({ ownerId, sourceRow: canonical });
+  const normalized = normalizeSourceInput(input, ownerId);
+  const extractionSource = {
+    ...normalized,
+    reprocessedAt: dedupedAt,
+  };
+  let cleanup = {
+    claimsDeleted: 0,
+    conflictKeysReviewed: 0,
+    orphanEntitiesDeleted: 0,
+    relationshipsDeleted: 0,
+    sourceLinksDeleted: 0,
+  };
+
+  cleanup = addCleanupTotals(
+    cleanup,
+    await cleanupSourceDerivedData({ ownerId, sourceUuid: canonical.id }),
+  );
+
+  const refreshedSource = await updateSourceReprocessMetadata({
+    ownerId,
+    reprocessedAt: dedupedAt,
+    sourceUuid: canonical.id,
+  });
+  const data = await persistExtractionForSource({
+    ownerId,
+    source: extractionSource,
+    sourceRow: refreshedSource,
+  });
+
+  for (const duplicateId of duplicateIds) {
+    cleanup = addCleanupTotals(
+      cleanup,
+      await cleanupSourceDerivedData({ ownerId, sourceUuid: duplicateId }),
+    );
+  }
+
+  const sourcesDeleted = await deleteDuplicateSourceRows({
+    ownerId,
+    sourceIds: duplicateIds,
+  });
+
+  return {
+    canonicalSourceId: canonical.id,
+    cleanup,
+    data,
+    dedupedAt,
+    duplicateSources: duplicateIds.length,
+    sourcesDeleted,
+  };
+}
+
+async function dedupeIntelligenceSources({ dryRun = false, ownerId }) {
+  if (!ownerId) {
+    throw createHttpError("Owner intelligence wajib tersedia.", 401, "INTELLIGENCE_OWNER_REQUIRED");
+  }
+
+  const sources = await listSourcesForDedupe({ ownerId });
+  const groups = buildDuplicateSourceGroups(sources);
+  const sourceIdsForOrphanScan = groups.flatMap((group) =>
+    group.sources.map((source) => source.id),
+  );
+  const orphanCandidates = await countOrphanEntityCandidatesForSourceIds({
+    ownerId,
+    sourceIds: sourceIdsForOrphanScan,
+  });
+  const summary = buildDedupeSummary({
+    groups,
+    orphanCandidates,
+    sourceCount: sources.length,
+  });
+
+  if (dryRun || !groups.length) {
+    return {
+      ...summary,
+      dryRun: Boolean(dryRun),
+      canonicalSourceIds: dryRun ? [] : groups.map((group) => group.canonical.id),
+      cleanup: {
+        claimsDeleted: 0,
+        conflictKeysReviewed: 0,
+        orphanEntitiesDeleted: 0,
+        relationshipsDeleted: 0,
+        sourceLinksDeleted: 0,
+      },
+      sourcesDeleted: 0,
+      sourcesMerged: 0,
+    };
+  }
+
+  let cleanup = {
+    claimsDeleted: 0,
+    conflictKeysReviewed: 0,
+    orphanEntitiesDeleted: 0,
+    relationshipsDeleted: 0,
+    sourceLinksDeleted: 0,
+  };
+  let sourcesDeleted = 0;
+  let sourcesMerged = 0;
+  const canonicalSourceIds = [];
+  const dedupedAt = new Date().toISOString();
+
+  for (const group of groups) {
+    const result = await mergeDuplicateSourceGroup({ group, ownerId });
+
+    canonicalSourceIds.push(result.canonicalSourceId);
+    cleanup = addCleanupTotals(cleanup, result.cleanup);
+    sourcesDeleted += result.sourcesDeleted;
+    sourcesMerged += result.duplicateSources;
+  }
+
+  await recordIntelligenceAuditEvent({
+    eventType: "source_deduplicated",
+    metadata: buildDedupeAuditMetadata({
+      canonicalSourceIds,
+      cleanup,
+      dedupedAt,
+      duplicateGroups: groups.length,
+      duplicateSources: summary.duplicateSources,
+      sourcesDeleted,
+    }),
+    ownerId,
+    sourceId: canonicalSourceIds[0] || null,
+  });
+
+  return {
+    ...summary,
+    canonicalSourceIds,
+    cleanup,
+    dryRun: false,
+    sourcesDeleted,
+    sourcesMerged,
+  };
 }
 
 async function reprocessSource({ ownerId, sourceUuid }) {
@@ -1320,6 +1715,8 @@ async function listSources({ filters = {}, ownerId }) {
 }
 
 module.exports = {
+  buildDuplicateSourceGroups,
+  dedupeIntelligenceSources,
   buildReprocessAuditMetadata,
   buildReprocessSourceInput,
   getEntityDetail,

@@ -13,6 +13,10 @@ const reprocessMigrationPath = path.join(
   rootDir,
   "supabase/migrations/20260824040000_orbit_intelligence_reprocess_v1_2.sql",
 );
+const dedupeMigrationPath = path.join(
+  rootDir,
+  "supabase/migrations/20260824050000_orbit_intelligence_legacy_dedupe_v1_2_5.sql",
+);
 const routePath = path.join(rootDir, "server/routes/intelligence.js");
 const repositoryPath = path.join(
   rootDir,
@@ -30,7 +34,10 @@ function read(filePath) {
 }
 
 function getFunctionSource(source, functionName) {
-  const start = source.indexOf(`async function ${functionName}`);
+  const asyncStart = source.indexOf(`async function ${functionName}`);
+  const syncStart = source.indexOf(`function ${functionName}`);
+  const start = asyncStart >= 0 ? asyncStart : syncStart;
+
   assert(start >= 0, `${functionName} missing`);
 
   const nextFunction = source.indexOf("\nasync function ", start + 1);
@@ -83,6 +90,17 @@ test("intelligence reprocess migration stores source snapshots and owner-scoped 
   assert.match(sql, /using \(owner_id = auth\.uid\(\)\)/);
   assert.match(sql, /for insert\s+with check \(false\)/);
   assert.match(sql, /metadata::text !~\* '\(authorization\|cookie\|password/);
+});
+
+test("intelligence dedupe migration adds safe audit event and source hash index", () => {
+  const sql = read(dedupeMigrationPath);
+
+  assert.match(sql, /drop constraint if exists orbit_intelligence_audit_events_type_check/);
+  assert.match(sql, /event_type in \('source_reprocessed', 'source_deduplicated'\)/);
+  assert.match(
+    sql,
+    /on public\.orbit_intelligence_sources \(owner_id, source_type, content_hash\)/,
+  );
 });
 
 test("intelligence extractor defaults claims to unverified with source evidence", () => {
@@ -441,6 +459,127 @@ test("source evidence grouping deduplicates cards while preserving target links"
   ]);
 });
 
+test("legacy duplicate source grouping is owner scoped and content based", () => {
+  const {
+    buildDuplicateSourceGroups,
+  } = require("../../server/services/intelligence/intelligenceRepository");
+  const duplicateContent =
+    "ORBIT Reprocess Test melaporkan Project Gamma dimulai pada 15 Oktober 2026 di Sorong.";
+  const groups = buildDuplicateSourceGroups([
+    {
+      contentHash: "hash-gamma",
+      contentSnapshot: duplicateContent,
+      createdAt: "2026-08-20T00:00:00.000Z",
+      id: "legacy-gamma",
+      metadata: { extractorVersion: "legacy" },
+      ownerId: "owner-a",
+      processedAt: "2026-08-20T00:00:00.000Z",
+      sourceType: "manual_note",
+      title: "Manual Intelligence Note",
+    },
+    {
+      contentHash: "hash-gamma",
+      contentSnapshot: duplicateContent,
+      createdAt: "2026-08-21T00:00:00.000Z",
+      id: "current-gamma",
+      metadata: { extractorVersion: "orbit-intelligence-extractor-v1.2-reprocess" },
+      ownerId: "owner-a",
+      processedAt: "2026-08-24T00:00:00.000Z",
+      sourceType: "manual_note",
+      title: duplicateContent,
+    },
+    {
+      contentHash: "hash-gamma",
+      contentSnapshot: duplicateContent,
+      createdAt: "2026-08-21T00:00:00.000Z",
+      id: "other-owner-gamma",
+      metadata: { extractorVersion: "legacy" },
+      ownerId: "owner-b",
+      processedAt: "2026-08-21T00:00:00.000Z",
+      sourceType: "manual_note",
+      title: "Other owner",
+    },
+    {
+      contentHash: "hash-delta",
+      contentSnapshot:
+        "ORBIT Live Test melaporkan Project Delta dimulai pada 24 Agustus 2026 di Timika.",
+      createdAt: "2026-08-21T00:00:00.000Z",
+      id: "different-content",
+      metadata: { extractorVersion: "legacy" },
+      ownerId: "owner-a",
+      processedAt: "2026-08-21T00:00:00.000Z",
+      sourceType: "manual_note",
+      title: "Different content",
+    },
+  ]);
+
+  assert.strictEqual(groups.length, 1);
+  assert.strictEqual(groups[0].canonical.id, "current-gamma");
+  assert.deepStrictEqual(
+    groups[0].duplicateSources.map((source) => source.id),
+    ["legacy-gamma"],
+  );
+});
+
+test("legacy duplicate source grouping can use normalized snapshots when hashes differ", () => {
+  const {
+    buildDuplicateSourceGroups,
+  } = require("../../server/services/intelligence/intelligenceRepository");
+  const groups = buildDuplicateSourceGroups([
+    {
+      contentHash: "old-hash",
+      contentSnapshot: "Project Alpha dimulai pada 20 Agustus 2026 di Merauke.",
+      createdAt: "2026-08-20T00:00:00.000Z",
+      id: "old-alpha",
+      metadata: {},
+      ownerId: "owner-a",
+      processedAt: "2026-08-20T00:00:00.000Z",
+      sourceType: "manual_note",
+      title: "Alpha old",
+    },
+    {
+      contentHash: "new-hash",
+      contentSnapshot: " Project Alpha   dimulai pada 20 Agustus 2026 di Merauke. ",
+      createdAt: "2026-08-21T00:00:00.000Z",
+      id: "new-alpha",
+      metadata: { extractorVersion: "orbit-intelligence-extractor-v1.2-reprocess" },
+      ownerId: "owner-a",
+      processedAt: "2026-08-24T00:00:00.000Z",
+      sourceType: "manual_note",
+      title: "Alpha new",
+    },
+  ]);
+
+  assert.strictEqual(groups.length, 1);
+  assert.strictEqual(groups[0].canonical.id, "new-alpha");
+});
+
+test("legacy duplicate source grouping refuses same hash with conflicting snapshots", () => {
+  const {
+    buildDuplicateSourceGroups,
+  } = require("../../server/services/intelligence/intelligenceRepository");
+  const groups = buildDuplicateSourceGroups([
+    {
+      contentHash: "hash-collision",
+      contentSnapshot: "Project Gamma dimulai pada 15 Oktober 2026 di Sorong.",
+      id: "gamma",
+      metadata: {},
+      ownerId: "owner-a",
+      sourceType: "manual_note",
+    },
+    {
+      contentHash: "hash-collision",
+      contentSnapshot: "Project Delta dimulai pada 24 Agustus 2026 di Timika.",
+      id: "delta",
+      metadata: {},
+      ownerId: "owner-a",
+      sourceType: "manual_note",
+    },
+  ]);
+
+  assert.strictEqual(groups.length, 0);
+});
+
 test("reprocess source input preserves the original persisted source identity", () => {
   const {
     buildReprocessSourceInput,
@@ -588,6 +727,62 @@ test("reprocess cleanup targets only derived rows for the requested source id", 
   assert.match(cleanupBody, /if \(remainingLinks > 0\) continue/);
 });
 
+test("legacy dedupe rebuilds canonical source before deleting duplicate source rows", () => {
+  const source = read(repositoryPath);
+  const mergeBody = getFunctionSource(source, "mergeDuplicateSourceGroup");
+  const persistIndex = mergeBody.indexOf("await persistExtractionForSource");
+  const deleteIndex = mergeBody.indexOf("await deleteDuplicateSourceRows");
+
+  assert.match(mergeBody, /const input = await loadSourceInputForReprocess\(\{ ownerId, sourceRow: canonical \}\)/);
+  assert.match(mergeBody, /await cleanupSourceDerivedData\(\{ ownerId, sourceUuid: canonical\.id \}\)/);
+  assert.match(mergeBody, /sourceUuid: canonical\.id/);
+  assert.match(mergeBody, /sourceRow: refreshedSource/);
+  assert.match(mergeBody, /await cleanupSourceDerivedData\(\{ ownerId, sourceUuid: duplicateId \}\)/);
+  assert.match(mergeBody, /sourceIds: duplicateIds/);
+  assert(persistIndex > -1);
+  assert(deleteIndex > persistIndex);
+});
+
+test("legacy dedupe dry run returns safe counts without mutating sources", () => {
+  const source = read(repositoryPath);
+  const dedupeBody = getFunctionSource(source, "dedupeIntelligenceSources");
+  const dryRunBranch = dedupeBody.slice(
+    dedupeBody.indexOf("if (dryRun || !groups.length)"),
+    dedupeBody.indexOf("let cleanup ="),
+  );
+
+  assert.match(dedupeBody, /const groups = buildDuplicateSourceGroups\(sources\)/);
+  assert.match(dedupeBody, /const summary = buildDedupeSummary\(\{/);
+  assert.match(dryRunBranch, /dryRun: Boolean\(dryRun\)/);
+  assert.match(dryRunBranch, /sourcesDeleted: 0/);
+  assert.match(dryRunBranch, /sourcesMerged: 0/);
+  assert.doesNotMatch(dryRunBranch, /deleteDuplicateSourceRows/);
+  assert.doesNotMatch(dryRunBranch, /persistExtractionForSource/);
+});
+
+test("legacy dedupe cleanup is source-link aware and preserves shared entities", () => {
+  const source = read(repositoryPath);
+  const orphanBody = getFunctionSource(source, "countOrphanEntityCandidatesForSourceIds");
+  const cleanupBody = getFunctionSource(source, "cleanupSourceDerivedData");
+
+  assert.match(orphanBody, /\.eq\("owner_id", ownerId\)\s*\.in\("source_id", ids\)/s);
+  assert.match(orphanBody, /const hasOutsideLink = \(allLinks \|\| \[\]\)\.some\(\(link\) => !ids\.includes\(link\.source_id\)\)/);
+  assert.match(orphanBody, /if \(!hasOutsideLink\) orphanCandidates \+= 1/);
+  assert.match(cleanupBody, /const remainingLinks = await countEntitySourceLinks\(\{ entityId, ownerId \}\)/);
+  assert.match(cleanupBody, /if \(remainingLinks > 0\) continue/);
+});
+
+test("legacy dedupe audit metadata excludes raw source text and secrets", () => {
+  const source = read(repositoryPath);
+  const auditBody = getFunctionSource(source, "buildDedupeAuditMetadata");
+
+  assert.match(source, /eventType: "source_deduplicated"/);
+  assert.match(auditBody, /canonicalSourceIds/);
+  assert.match(auditBody, /duplicateGroups/);
+  assert.match(auditBody, /duplicateSources/);
+  assert.doesNotMatch(auditBody, /contentSnapshot|content|title/);
+});
+
 test("intelligence routes require auth and expose scoped endpoints", () => {
   const source = read(routePath);
 
@@ -599,11 +794,14 @@ test("intelligence routes require auth and expose scoped endpoints", () => {
     "/timeline",
     "/search",
     "/source-links",
+    "/maintenance/dedupe",
     "/sources/:id/reprocess",
     "/process",
   ]) {
     assert(source.includes(endpoint), `${endpoint} route missing`);
   }
+  assert.match(source, /dedupeIntelligenceSources\(\{\s*dryRun:/s);
+  assert.match(source, /ownerId: getOwnerId\(req\)/);
   assert.match(source, /reprocessSource\(\{\s*ownerId: getOwnerId\(req\),\s*sourceUuid: req\.params\.id/s);
   assert.doesNotMatch(source, /ownerId:\s*req\.body/);
   assert.doesNotMatch(source, /content:\s*req\.body[^,}]*reprocess/s);
@@ -645,12 +843,15 @@ test("intelligence API client attaches authenticated v1 requests", () => {
     "searchIntelligence",
     "getIntelligenceSourceLinks",
     "processIntelligenceSource",
+    "dedupeIntelligenceSources",
     "reprocessIntelligenceSource",
   ]) {
     assert(source.includes(method), `${method} missing`);
   }
 
   assert.match(source, /\/api\/v1\/intelligence\/overview/);
+  assert.match(source, /\/api\/v1\/intelligence\/maintenance\/dedupe/);
+  assert.match(source, /createQueryString\(\{ dryRun \}\)/);
   assert.match(source, /\/api\/v1\/intelligence\/sources\/\$\{encodeURIComponent\(sourceId\)\}\/reprocess/);
   assert.match(source, /headers: await getAuthenticatedHeaders\(\)/);
 });
@@ -675,6 +876,19 @@ test("intelligence frontend renders reprocess only for valid source evidence", (
   assert.match(source, /getSafeIntelligenceIntakeError\(reprocessError\)/);
   assert.match(source, /\{link\.source\?\.id \? \(/);
   assert.match(source, /Reprocess Source/);
+});
+
+test("intelligence frontend exposes dedupe dry-run before confirmed merge", () => {
+  const source = read(pagePath);
+
+  assert.match(source, /api\.dedupeIntelligenceSources\(\{ dryRun: true \}\)/);
+  assert.match(source, /api\.dedupeIntelligenceSources\(\{ dryRun: false \}\)/);
+  assert.match(source, /window\.confirm\(/);
+  assert.match(source, /Scan duplicate sources/);
+  assert.match(source, /Merge duplicates/);
+  assert.match(source, /disabled=\{isBusy \|\| !duplicateSources\}/);
+  assert.match(source, /summary\.cleanup\?\.orphanEntitiesDeleted/);
+  assert.doesNotMatch(source, /dangerouslySetInnerHTML/);
 });
 
 test("manual note intake renders a bound textarea and explicit source type state", () => {
