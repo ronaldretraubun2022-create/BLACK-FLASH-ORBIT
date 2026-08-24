@@ -24,10 +24,15 @@ import {
   getSafeIntelligenceIntakeError,
   isValidManualSourceType,
 } from "../services/intelligenceIntake.mjs";
+import { ORBIT_RELEASE_METADATA } from "../config/releaseMetadata.js";
 
 const releaseState = [
-  { label: "Branch", value: "feature/orbit-v1.2", tone: "text-[#f1c36f]" },
-  { label: "Module", value: "Personal Intelligence Engine", tone: "text-white" },
+  {
+    label: "Branch",
+    value: ORBIT_RELEASE_METADATA.releaseChannel,
+    tone: "text-[#f1c36f]",
+  },
+  { label: "Module", value: ORBIT_RELEASE_METADATA.module, tone: "text-white" },
   { label: "Status", value: "owner-scoped", tone: "text-emerald-300" },
 ];
 

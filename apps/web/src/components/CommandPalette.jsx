@@ -9,6 +9,7 @@ import {
   Search,
   Sparkles,
 } from "lucide-react";
+import { ORBIT_RELEASE_METADATA } from "../config/releaseMetadata.js";
 
 export function CommandPalette({ commands = [], isOpen, onClose, onSelect }) {
   const inputRef = useRef(null);
@@ -137,7 +138,9 @@ export function CommandPalette({ commands = [], isOpen, onClose, onSelect }) {
           </div>
 
           <div className="min-w-0">
-            <p className="orbit-kicker">AI Command Bar v0.8</p>
+            <p className="orbit-kicker">
+              {ORBIT_RELEASE_METADATA.module} {ORBIT_RELEASE_METADATA.releaseVersion}
+            </p>
             <h2 className="truncate text-sm font-black text-white">
               Search or run slash commands
             </h2>

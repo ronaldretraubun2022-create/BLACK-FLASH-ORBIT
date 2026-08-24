@@ -50,6 +50,7 @@ import {
   getObjectValues,
   resolveCommandCenterTelemetryState,
 } from "./services/dashboardTelemetryState.mjs";
+import { ORBIT_RELEASE_STATE } from "./config/releaseMetadata.js";
 
 
 const AINewsroom = lazy(() =>
@@ -108,15 +109,7 @@ const Register = lazy(() =>
 
 const adminRoles = new Set(["admin", "owner", "super_admin"]);
 
-const releaseState = [
-  {
-    label: "Branch",
-    value: "feature/orbit-v0.8",
-    tone: "text-amber-300",
-  },
-  { label: "Tag", value: "Operational Intelligence v0.8", tone: "text-white" },
-  { label: "Status", value: "deployment-aware", tone: "text-emerald-300" },
-];
+const releaseState = ORBIT_RELEASE_STATE;
 
 const commandStats = [
   {

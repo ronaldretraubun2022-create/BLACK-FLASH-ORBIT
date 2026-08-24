@@ -16,11 +16,16 @@ import { UserMenu } from "../components/auth/UserMenu.jsx";
 import { CommandCenterSidebar } from "../components/CommandCenterSidebar.jsx";
 import { useProfile } from "../hooks/useProfile.js";
 import { api } from "../services/api.js";
+import { ORBIT_RELEASE_METADATA } from "../config/releaseMetadata.js";
 
 const releaseState = [
-  { label: "Branch", value: "feature/orbit-v1.3", tone: "text-[#f1c36f]" },
-  { label: "Module", value: "Agent Bridge", tone: "text-white" },
-  { label: "Mode", value: "local-only", tone: "text-emerald-300" },
+  {
+    label: "Branch",
+    value: ORBIT_RELEASE_METADATA.releaseChannel,
+    tone: "text-[#f1c36f]",
+  },
+  { label: "Module", value: ORBIT_RELEASE_METADATA.module, tone: "text-white" },
+  { label: "Mode", value: ORBIT_RELEASE_METADATA.status, tone: "text-emerald-300" },
 ];
 const activeJobStatuses = new Set(["diagnosing", "running", "validating"]);
 const activeRunStatuses = new Set(["queued", "running"]);

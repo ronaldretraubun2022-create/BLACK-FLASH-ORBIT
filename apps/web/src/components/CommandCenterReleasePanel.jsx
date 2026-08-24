@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   TerminalSquare,
 } from "lucide-react";
+import { ORBIT_RELEASE_METADATA } from "../config/releaseMetadata.js";
 
 const projectHealthItems = [
   {
@@ -18,15 +19,15 @@ const projectHealthItems = [
   },
   {
     label: "Git Branch",
-    value: "feature/project-health-v0.7",
+    value: ORBIT_RELEASE_METADATA.releaseChannel,
     detail: "current release branch",
     icon: GitBranch,
     tone: "text-amber-200",
   },
   {
-    label: "Latest Commit",
-    value: "Security Center v0.6 -> v0.7",
-    detail: "metadata checkpoint updated",
+    label: "Release Module",
+    value: `${ORBIT_RELEASE_METADATA.module} ${ORBIT_RELEASE_METADATA.releaseVersion}`,
+    detail: "current module metadata",
     icon: FileText,
     tone: "text-white",
   },
@@ -74,7 +75,10 @@ const systemReport = [
   { label: "Mode", value: "Dark glass dashboard" },
   { label: "Routing", value: "Current routes preserved" },
   { label: "UI Scope", value: "Mobile-first responsive" },
-  { label: "Release", value: "Project Health Monitor v0.7" },
+  {
+    label: "Release",
+    value: `${ORBIT_RELEASE_METADATA.module} ${ORBIT_RELEASE_METADATA.releaseVersion}`,
+  },
 ];
 
 export function CommandCenterReleasePanel() {
@@ -83,9 +87,9 @@ export function CommandCenterReleasePanel() {
       <article className="orbit-card p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="orbit-kicker">Project Health Monitor</p>
+            <p className="orbit-kicker">{ORBIT_RELEASE_METADATA.module}</p>
             <h3 className="mt-2 text-2xl font-black text-white">
-              v0.7 release status
+              {ORBIT_RELEASE_METADATA.releaseVersion} release status
             </h3>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
               Live dashboard ringkasan build, branch, commit terakhir, runtime,

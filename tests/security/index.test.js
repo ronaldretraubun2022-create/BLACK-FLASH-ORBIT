@@ -19,3 +19,4 @@ require("./newsroomHistory.test.js");
 require("./newsroomHistoryClient.test.js");
 require("./intelligenceEngine.test.js");
 require("./agentBridge.test.js");
+require("./releaseMetadata.test.js");
