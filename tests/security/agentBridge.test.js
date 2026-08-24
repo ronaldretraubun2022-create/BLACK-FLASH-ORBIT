@@ -1,6 +1,7 @@
 const assert = require("node:assert");
 const express = require("express");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const {
@@ -66,6 +67,7 @@ test("agent bridge routes require auth and never accept client owner id", () => 
   assert.match(route, /router\.use\(requireAgentBridgeEnabled\)/);
   assert.match(route, /ownerId: getOwnerId\(req\)/);
   assert.doesNotMatch(route, /ownerId:\s*req\.body/);
+  assert.doesNotMatch(route, /ORBIT_CODEX_ENTRYPOINT|codexEntrypoint|entrypoint:\s*req\.body|req\.query\.entrypoint/);
   for (const endpoint of [
     "/status",
     "/jobs",
@@ -115,6 +117,99 @@ test("agent bridge is disabled by default unless local server flag is explicit",
   assert.match(page, /ORBIT_AGENT_BRIDGE_ENABLED=true/);
 });
 
+function createFakeCodexEntrypoint() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-codex-"));
+  const entrypoint = path.join(
+    root,
+    "node_modules",
+    "@openai",
+    "codex",
+    "bin",
+    "codex.js",
+  );
+
+  fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+  fs.writeFileSync(
+    entrypoint,
+    [
+      "#!/usr/bin/env node",
+      "if (process.argv.includes('--version')) {",
+      "  console.log('codex-cli 0.149.0');",
+      "  process.exit(0);",
+      "}",
+      "console.log('fake codex repair completed');",
+    ].join("\n"),
+  );
+
+  return { entrypoint, root };
+}
+
+test("codex resolver uses verified node entrypoint without ps1 or cmd shims", async () => {
+  const previous = process.env.ORBIT_CODEX_ENTRYPOINT;
+  const { entrypoint } = createFakeCodexEntrypoint();
+  const bridge = loadModuleWithMocks(codexBridgePath, {
+    "./repositoryInspector": {
+      getChangedFiles: async () => [],
+      getRepositoryStatus: async () => ({
+        branch: "feature/orbit-v1.3-agent-bridge",
+        dirty: false,
+      }),
+    },
+  });
+
+  process.env.ORBIT_CODEX_ENTRYPOINT = entrypoint;
+
+  try {
+    assert.strictEqual(bridge.validateCodexEntrypoint(entrypoint), fs.realpathSync.native(entrypoint));
+    assert.strictEqual(bridge.getCodexStatus().available, true);
+    assert.strictEqual(bridge.getCodexStatus().mode, "node-entrypoint");
+    assert.strictEqual(bridge.getCodexStatus().version, "codex-cli 0.149.0");
+
+    const result = await bridge.runCodexRepairJob({
+      repoRoot: rootDir,
+      taskText: `Use this task text only. ORBIT_CODEX_ENTRYPOINT=C:/unsafe/codex.js`,
+    });
+
+    assert.strictEqual(result.exitCode, 0);
+    assert.match(result.safeSummary, /fake codex repair completed/);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.ORBIT_CODEX_ENTRYPOINT;
+    } else {
+      process.env.ORBIT_CODEX_ENTRYPOINT = previous;
+    }
+  }
+});
+
+test("codex resolver rejects missing unsafe or non-package entrypoints safely", () => {
+  const bridge = require("../../server/services/agent/codexBridge");
+  const previous = process.env.ORBIT_CODEX_ENTRYPOINT;
+  const unsafeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-codex-unsafe-"));
+  const unsafeFile = path.join(unsafeRoot, "codex.js");
+
+  fs.writeFileSync(unsafeFile, "console.log('unsafe');");
+
+  assert.throws(() => bridge.validateCodexEntrypoint(""), /entrypoint|Codex/i);
+  assert.throws(() => bridge.validateCodexEntrypoint("\\\\server\\share\\codex.js"), /entrypoint|Codex/i);
+  assert.throws(() => bridge.validateCodexEntrypoint(unsafeFile), /@openai\/codex|entrypoint|Codex/i);
+
+  process.env.ORBIT_CODEX_ENTRYPOINT = path.join(unsafeRoot, "missing.js");
+
+  try {
+    const status = bridge.getCodexStatus();
+
+    assert.strictEqual(status.available, false);
+    assert.strictEqual(status.code, "AGENT_CODEX_NOT_FOUND");
+    assert(!JSON.stringify(status).includes(unsafeRoot));
+  } finally {
+    if (previous === undefined) {
+      delete process.env.ORBIT_CODEX_ENTRYPOINT;
+    } else {
+      process.env.ORBIT_CODEX_ENTRYPOINT = previous;
+    }
+  }
+});
+
 test("agent status reports persistence failure without generic runtime failure", async () => {
   const previous = process.env.ORBIT_AGENT_BRIDGE_ENABLED;
 
@@ -140,6 +235,18 @@ test("agent status reports persistence failure without generic runtime failure",
         safeSummary: "",
       }),
     },
+    "./codexBridge": {
+      getCodexStatus: () => ({
+        available: true,
+        mode: "node-entrypoint",
+        version: "codex-cli 0.149.0",
+      }),
+      runCodexRepairJob: async () => ({
+        changedFiles: [],
+        exitCode: 0,
+        safeSummary: "",
+      }),
+    },
   });
 
   const status = await service.getAgentStatus({ ownerId: "owner-1" });
@@ -151,6 +258,7 @@ test("agent status reports persistence failure without generic runtime failure",
   }
 
   assert.strictEqual(status.agentBridge.enabled, true);
+  assert.strictEqual(status.codex.available, true);
   assert.strictEqual(status.repository.branch, "feature/orbit-v1.3-agent-bridge");
   assert.strictEqual(status.persistence.available, false);
   assert.strictEqual(status.persistence.code, "AGENT_PERSISTENCE_NOT_CONFIGURED");
@@ -232,13 +340,15 @@ test("agent process execution uses spawn argument arrays without shell access", 
   const codex = read(codexBridgePath);
 
   assert.match(allowlist, /spawn\(allowed\.command, allowed\.args/);
-  assert.match(codex, /spawn\(CODEX_EXECUTABLE, \[prompt\]/);
+  assert.match(codex, /spawn\(process\.execPath, \[entrypoint, prompt\]/);
+  assert.match(codex, /spawnSync\(process\.execPath, \[entrypoint, "--version"\]/);
   assert.match(allowlist, /shell: false/);
   assert.match(codex, /shell: false/);
   assert.doesNotMatch(allowlist, /exec\(/);
   assert.doesNotMatch(codex, /exec\(/);
-  assert.match(codex, /const CODEX_EXECUTABLE = "codex"/);
-  assert.doesNotMatch(codex, /ORBIT_CODEX_EXECUTABLE/);
+  assert.match(codex, /ORBIT_CODEX_ENTRYPOINT/);
+  assert.doesNotMatch(codex, /codex\.ps1|codex\.cmd|shell:\s*true|cmd\.exe|powershell/i);
+  assert.doesNotMatch(codex, /CODEX_EXECUTABLE = "codex"|spawn\("codex"/);
 });
 
 test("agent repository inspector confines paths to configured repo", () => {
@@ -285,6 +395,7 @@ test("agent service enforces approval without commit push merge or tags", () => 
   assert.doesNotMatch(service, /git push/);
   assert.doesNotMatch(service, /git merge/);
   assert.doesNotMatch(service, /git tag/);
+  assert.doesNotMatch(service, /entrypoint:\s*input|codexEntrypoint|ORBIT_CODEX_ENTRYPOINT:\s*input/);
 });
 
 test("agent service stores safe summaries and bounded changed file lists", () => {
@@ -295,6 +406,8 @@ test("agent service stores safe summaries and bounded changed file lists", () =>
   assert.match(service, /safe_summary: redactText\(safeSummary, 10000\)/);
   assert.match(service, /changed_files: redactObject\(changedFiles\)\.slice\(0, 100\)/);
   assert.match(allowlist, /const MAX_OUTPUT_CHARS = 40000/);
+  assert.match(read(codexBridgePath), /const MAX_CODEX_OUTPUT_CHARS = 50000/);
+  assert.match(read(codexBridgePath), /const CODEX_TIMEOUT_MS = 10 \* 60 \* 1000/);
   assert.match(allowlist, /setTimeout\(\(\) => \{/);
   assert.match(redaction, /SECRET_PATTERNS/);
 });
@@ -327,6 +440,8 @@ test("agent API client and UI do not expose service role or provider secrets", (
   assert.match(sidebar, /Agent Bridge/);
   assert.match(page, /disabled=\{!canUseJobs \|\| Boolean\(activeAction\)\}/);
   assert.match(page, /persistence/);
+  assert.match(page, /codex/);
+  assert.match(page, /canRunRepair/);
   assert.match(page, /error\?\.body\?\.code/);
   assert.match(page, /error\?\.body\?\.status/);
   assert.match(page, /disabled=\{!canCreateJob\}/);

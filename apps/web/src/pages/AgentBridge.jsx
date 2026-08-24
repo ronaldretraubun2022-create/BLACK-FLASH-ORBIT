@@ -72,13 +72,16 @@ export function AgentBridge() {
   const [message, setMessage] = useState("");
 
   const agentState = status?.agentBridge || {};
+  const codexState = status?.codex || {};
   const persistenceState = status?.persistence || {};
   const isBridgeEnabled = agentState.enabled === true;
+  const isCodexAvailable = codexState.available === true;
   const isPersistenceAvailable = persistenceState.available !== false;
   const selectedJobId = selectedJob?.id || jobs[0]?.id || "";
   const canUseJobs = isBridgeEnabled && isPersistenceAvailable;
   const canCreateJob = canUseJobs && taskText.trim().length >= 8 && !activeAction;
   const canActOnJob = canUseJobs && Boolean(selectedJobId) && !activeAction;
+  const canRunRepair = canActOnJob && isCodexAvailable;
 
   const metrics = useMemo(() => {
     const data = status?.metrics || {};
@@ -251,7 +254,9 @@ export function AgentBridge() {
                   <p className="mt-4 max-w-3xl text-sm leading-7 text-zinc-400">
                     {isBridgeEnabled
                       ? isPersistenceAvailable
-                        ? "Agent Bridge menjalankan command allowlist, menyiapkan Codex repair lewat wrapper lokal, dan menunggu approval manusia."
+                        ? isCodexAvailable
+                          ? "Agent Bridge menjalankan command allowlist, menyiapkan Codex repair lewat wrapper lokal, dan menunggu approval manusia."
+                          : "Agent Bridge lokal aktif. Diagnose dan Run Tests tersedia, tetapi Codex repair belum tersedia."
                         : "Agent Bridge lokal aktif, tetapi persistence Agent belum siap untuk menyimpan job."
                       : "Agent Bridge tidak menjalankan command sampai server lokal mengaktifkan ORBIT_AGENT_BRIDGE_ENABLED=true."}
                   </p>
@@ -321,7 +326,7 @@ export function AgentBridge() {
                       }
                     />
                     <ActionButton
-                      disabled={!canActOnJob}
+                      disabled={!canRunRepair}
                       icon={Bot}
                       label="Prepare Codex Repair"
                       loading={activeAction === "run"}
@@ -403,6 +408,7 @@ export function AgentBridge() {
 function RepositoryStatus({ isLoading, status }) {
   const repo = status?.repository || {};
   const agentBridge = status?.agentBridge || {};
+  const codex = status?.codex || {};
   const persistence = status?.persistence || {};
 
   if (isLoading) return <EmptyState label="Loading repository status..." />;
@@ -422,6 +428,10 @@ function RepositoryStatus({ isLoading, status }) {
           label="Persistence"
           value={persistence.available === false ? "unavailable" : persistence.status || "ready"}
         />
+        <StatusLine
+          label="Codex"
+          value={codex.available ? codex.version || "available" : codex.code || "unavailable"}
+        />
         <StatusLine label="Branch" value={repo.branch || "-"} />
         <StatusLine label="Working Tree" value={repo.status || "-"} />
         <StatusLine label="Dirty" value={repo.dirty ? "yes" : "no"} />
@@ -435,6 +445,11 @@ function RepositoryStatus({ isLoading, status }) {
         <p className="mt-3 rounded-lg border border-[#7d1f2f]/30 bg-[#7d1f2f]/10 px-3 py-2 text-xs font-bold leading-5 text-rose-100">
           {persistence.code ? `${persistence.code}: ` : ""}
           {persistence.message || "Agent persistence unavailable."}
+        </p>
+      ) : null}
+      {agentBridge.enabled && codex.available === false ? (
+        <p className="mt-3 rounded-lg border border-[#d9ad57]/20 bg-[#d9ad57]/10 px-3 py-2 text-xs font-bold leading-5 text-[#f1c36f]">
+          {codex.code || "AGENT_CODEX_NOT_FOUND"}: Codex repair unavailable.
         </p>
       ) : null}
     </div>

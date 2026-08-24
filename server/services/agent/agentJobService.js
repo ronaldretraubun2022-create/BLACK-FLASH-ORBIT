@@ -1,6 +1,6 @@
 const { getSupabaseAdmin } = require("../supabaseAdmin");
 const { runAllowedCommand } = require("./commandAllowlist");
-const { runCodexRepairJob } = require("./codexBridge");
+const { getCodexStatus, runCodexRepairJob } = require("./codexBridge");
 const { recordAgentAudit } = require("./agentAudit");
 const {
   getChangedFiles,
@@ -176,6 +176,7 @@ async function listRunsForJob({ jobId, ownerId }) {
 
 async function getAgentStatus({ ownerId }) {
   const agentBridge = getAgentBridgeState();
+  const codex = getCodexStatus();
   const disabledRepoStatus = {
     branch: "disabled",
     dirty: false,
@@ -187,6 +188,7 @@ async function getAgentStatus({ ownerId }) {
   if (!isAgentBridgeEnabled()) {
     return {
       agentBridge,
+      codex,
       metrics: buildEmptyMetrics(disabledRepoStatus),
       persistence: {
         available: false,
@@ -206,6 +208,7 @@ async function getAgentStatus({ ownerId }) {
   } catch (error) {
     return {
       agentBridge,
+      codex,
       metrics: buildEmptyMetrics(repoStatus),
       persistence: mapPersistenceError(error),
       repository: repoStatus,
@@ -232,6 +235,7 @@ async function getAgentStatus({ ownerId }) {
   if (firstError) {
     return {
       agentBridge,
+      codex,
       metrics: buildEmptyMetrics(repoStatus),
       persistence: mapPersistenceError(firstError),
       repository: repoStatus,
@@ -240,6 +244,7 @@ async function getAgentStatus({ ownerId }) {
 
   return {
     agentBridge,
+    codex,
     metrics: {
       currentRepoBranch: repoStatus.branch,
       jobsFailed: Number(jobsFailed.count || 0),
@@ -358,6 +363,15 @@ async function runAgentRepair({ input = {}, jobId, ownerId }) {
   const repoRoot = getConfiguredRepoRoot();
   const job = await getAgentJob({ jobId, ownerId });
   const taskText = input.taskText || input.task || job.title;
+  const codex = getCodexStatus();
+
+  if (!codex.available) {
+    throw createAgentError(
+      "Codex CLI tidak tersedia untuk Prepare Repair.",
+      503,
+      codex.code || "AGENT_CODEX_NOT_FOUND",
+    );
+  }
 
   await updateJobStatus({ jobId, ownerId, status: "running" });
 
