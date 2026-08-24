@@ -1059,6 +1059,16 @@ export const api = {
     });
   },
 
+  async reprocessIntelligenceSource(sourceId) {
+    return request(
+      `/api/v1/intelligence/sources/${encodeURIComponent(sourceId)}/reprocess`,
+      {
+        method: "POST",
+        headers: await getAuthenticatedHeaders(),
+      },
+    );
+  },
+
   async createAutomationRun(payload) {
     return request("/api/v1/automation/runs", {
       method: "POST",

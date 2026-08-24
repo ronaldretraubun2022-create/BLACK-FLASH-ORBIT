@@ -1,4 +1,5 @@
 const { getSupabaseAdmin } = require("../supabaseAdmin");
+const { redactValue } = require("../observability/logger");
 const {
   buildConflictKey,
   createHttpError,
@@ -13,8 +14,9 @@ const {
   sanitizeText,
 } = require("./intelligenceExtractor");
 
+const EXTRACTOR_VERSION = "orbit-intelligence-extractor-v1.2-reprocess";
 const SOURCE_COLUMNS =
-  "id, owner_id, source_type, source_id, title, content_hash, source_url, duplicate_of_source_id, status, processed_at, created_at, updated_at";
+  "id, owner_id, source_type, source_id, title, content_hash, content_snapshot, source_url, duplicate_of_source_id, status, metadata, processed_at, created_at, updated_at";
 const ENTITY_COLUMNS =
   "id, owner_id, entity_type, canonical_name, normalized_name, confidence, mention_count, first_seen_at, last_seen_at, created_at, updated_at";
 const CLAIM_COLUMNS =
@@ -65,14 +67,16 @@ function normalizeLimit(value, fallback = 25) {
   return Math.max(1, Math.min(MAX_LIMIT, Math.floor(limit)));
 }
 
-function mapSource(row) {
-  return {
+function mapSource(row, options = {}) {
+  const mapped = {
     contentHash: row.content_hash,
     createdAt: row.created_at,
     duplicateOfSourceId: row.duplicate_of_source_id || null,
     id: row.id,
+    metadata: row.metadata || {},
     ownerId: row.owner_id,
     processedAt: row.processed_at || null,
+    reprocessedAt: row.metadata?.reprocessedAt || null,
     sourceId: row.source_id,
     sourceType: row.source_type,
     sourceUrl: row.source_url || null,
@@ -80,6 +84,23 @@ function mapSource(row) {
     title: row.title,
     updatedAt: row.updated_at,
   };
+
+  if (options.includeContent) {
+    mapped.contentSnapshot = row.content_snapshot || "";
+  }
+
+  return mapped;
+}
+
+function safeMetadata(metadata = {}) {
+  return JSON.parse(JSON.stringify(redactValue(metadata || {}) || {}));
+}
+
+function redactPersistedSourceContent(content) {
+  return sanitizeText(content, 20000).replace(
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,
+    "[REDACTED_EMAIL]",
+  );
 }
 
 function mapEntity(row, links = []) {
@@ -231,21 +252,27 @@ async function findDuplicateSource({ contentHash, ownerId, sourceId, sourceType 
 async function upsertSource(source) {
   const duplicate = await findDuplicateSource(source);
   const client = getClient();
+  const now = new Date().toISOString();
   const { data, error } = await client
     .from("orbit_intelligence_sources")
     .upsert(
       {
         content_hash: source.contentHash,
+        content_snapshot: redactPersistedSourceContent(source.content),
         duplicate_of_source_id:
           duplicate && duplicate.sourceId !== source.sourceId ? duplicate.id : null,
+        metadata: safeMetadata({
+          extractorVersion: EXTRACTOR_VERSION,
+          ...(source.reprocessedAt ? { reprocessedAt: source.reprocessedAt } : {}),
+        }),
         owner_id: source.ownerId,
-        processed_at: new Date().toISOString(),
+        processed_at: now,
         source_id: source.sourceId,
         source_type: source.sourceType,
         source_url: source.sourceUrl,
         status: duplicate && duplicate.sourceId !== source.sourceId ? "duplicate" : "processed",
         title: source.title,
-        updated_at: new Date().toISOString(),
+        updated_at: now,
       },
       {
         onConflict: "owner_id,source_type,source_id",
@@ -257,6 +284,19 @@ async function upsertSource(source) {
   if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_SOURCE_UPSERT_FAILED");
 
   return mapSource(data);
+}
+
+async function countEntitySourceLinks({ entityId, ownerId }) {
+  const client = getClient();
+  const { count, error } = await client
+    .from("orbit_intelligence_source_links")
+    .select("id", { count: "exact", head: true })
+    .eq("owner_id", ownerId)
+    .eq("entity_id", entityId);
+
+  if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_ENTITY_LINK_COUNT_FAILED");
+
+  return Number(count || 0);
 }
 
 async function upsertEntity({ entity, ownerId, source, sourceRow }) {
@@ -274,6 +314,9 @@ async function upsertEntity({ entity, ownerId, source, sourceRow }) {
 
   if (lookupError) throw normalizeSupabaseError(lookupError, "INTELLIGENCE_ENTITY_LOOKUP_FAILED");
 
+  const existingLinkCount = existing
+    ? await countEntitySourceLinks({ entityId: existing.id, ownerId })
+    : 0;
   const payload = {
     canonical_name: sanitizeText(entity.name, 120),
     confidence: existing
@@ -282,7 +325,9 @@ async function upsertEntity({ entity, ownerId, source, sourceRow }) {
     entity_type: entityType,
     first_seen_at: existing?.first_seen_at || source.createdAt,
     last_seen_at: source.createdAt,
-    mention_count: Number(existing?.mention_count || 0) + Number(entity.mentions || 1),
+    mention_count: existing
+      ? Math.max(1, existingLinkCount + Number(entity.mentions || 1))
+      : Number(entity.mentions || 1),
     normalized_name: normalizedName,
     owner_id: ownerId,
     updated_at: now,
@@ -399,6 +444,39 @@ async function applyConflictStatus({ claim, ownerId }) {
     ...claim,
     status: "conflicting",
   };
+}
+
+async function refreshConflictStatuses({ conflictKeys = [], ownerId }) {
+  const uniqueKeys = Array.from(new Set(conflictKeys.filter(Boolean)));
+  const client = getClient();
+
+  for (const conflictKey of uniqueKeys) {
+    const { data, error } = await client
+      .from("orbit_intelligence_claims")
+      .select("id, polarity")
+      .eq("owner_id", ownerId)
+      .eq("conflict_key", conflictKey)
+      .limit(50);
+
+    if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_CONFLICT_REFRESH_LOOKUP_FAILED");
+    if (!data?.length) continue;
+
+    const hasPositive = data.some((claim) => claim.polarity === "positive");
+    const hasNegative = data.some((claim) => claim.polarity === "negative");
+    const nextStatus = hasPositive && hasNegative ? "conflicting" : "unverified";
+    const { error: updateError } = await client
+      .from("orbit_intelligence_claims")
+      .update({
+        claim_status: nextStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("owner_id", ownerId)
+      .eq("conflict_key", conflictKey);
+
+    if (updateError) {
+      throw normalizeSupabaseError(updateError, "INTELLIGENCE_CONFLICT_REFRESH_UPDATE_FAILED");
+    }
+  }
 }
 
 async function upsertRelationship({ entityByKey, ownerId, relationship, sourceRow }) {
@@ -541,7 +619,11 @@ function groupSourceLinksForPresentation(links = []) {
 }
 
 async function processSourceInput({ input, ownerId }) {
-  const source = normalizeSourceInput(input, ownerId);
+  const normalized = normalizeSourceInput(input, ownerId);
+  const source = {
+    ...normalized,
+    reprocessedAt: input?.reprocessedAt || null,
+  };
   const sourceRow = await upsertSource(source);
   const extraction = extractIntelligence(source);
   const entities = [];
@@ -586,6 +668,280 @@ async function processSourceInput({ input, ownerId }) {
     },
     topics: extraction.topics,
   };
+}
+
+async function getSourceForReprocess({ ownerId, sourceUuid }) {
+  const client = getClient();
+  const { data, error } = await client
+    .from("orbit_intelligence_sources")
+    .update({
+      status: "processing",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("owner_id", ownerId)
+    .eq("id", sourceUuid)
+    .select(SOURCE_COLUMNS)
+    .maybeSingle();
+
+  if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_SOURCE_REPROCESS_LOCK_FAILED");
+  if (!data) {
+    throw createHttpError("Intelligence source tidak ditemukan.", 404, "INTELLIGENCE_SOURCE_NOT_FOUND");
+  }
+
+  return mapSource(data, { includeContent: true });
+}
+
+async function markSourceReprocessFailed({ ownerId, sourceUuid }) {
+  const client = getClient();
+  const { error } = await client
+    .from("orbit_intelligence_sources")
+    .update({
+      status: "failed",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("owner_id", ownerId)
+    .eq("id", sourceUuid);
+
+  if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_SOURCE_REPROCESS_FAIL_FAILED");
+}
+
+function buildReprocessSourceInput(sourceRow) {
+  const content = redactPersistedSourceContent(sourceRow?.contentSnapshot || "").trim();
+
+  if (!content) return null;
+
+  return {
+    content,
+    createdAt: sourceRow.createdAt,
+    sourceId: sourceRow.sourceId,
+    sourceType: sourceRow.sourceType,
+    sourceUrl: sourceRow.sourceUrl,
+    title: sourceRow.title,
+  };
+}
+
+async function loadSourceInputForReprocess({ ownerId, sourceRow }) {
+  const persistedInput = buildReprocessSourceInput(sourceRow);
+
+  if (persistedInput) return persistedInput;
+
+  if (sourceRow.sourceType === "knowledge_document") {
+    return loadKnowledgeSource({ ownerId, sourceId: sourceRow.sourceId });
+  }
+
+  if (sourceRow.sourceType === "newsroom_generation") {
+    return loadNewsroomSource({ ownerId, sourceId: sourceRow.sourceId });
+  }
+
+  if (sourceRow.sourceType === "workflow_run" || sourceRow.sourceType === "automation_record") {
+    return loadWorkflowSource({ ownerId, sourceId: sourceRow.sourceId });
+  }
+
+  throw createHttpError(
+    "Persisted source content tidak tersedia untuk reprocess.",
+    409,
+    "INTELLIGENCE_SOURCE_CONTENT_UNAVAILABLE",
+  );
+}
+
+async function getDerivedCountsForSource({ ownerId, sourceUuid }) {
+  const client = getClient();
+  const [
+    { count: sourceLinks, error: sourceLinksError },
+    { count: claims, error: claimsError },
+    { count: relationships, error: relationshipsError },
+    { count: entityLinks, error: entityLinksError },
+  ] = await Promise.all([
+    client
+      .from("orbit_intelligence_source_links")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", ownerId)
+      .eq("source_id", sourceUuid),
+    client
+      .from("orbit_intelligence_claims")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", ownerId)
+      .eq("source_id", sourceUuid),
+    client
+      .from("orbit_intelligence_relationships")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", ownerId)
+      .eq("source_id", sourceUuid),
+    client
+      .from("orbit_intelligence_source_links")
+      .select("entity_id", { count: "exact", head: true })
+      .eq("owner_id", ownerId)
+      .eq("source_id", sourceUuid)
+      .not("entity_id", "is", null),
+  ]);
+  const firstError = sourceLinksError || claimsError || relationshipsError || entityLinksError;
+
+  if (firstError) throw normalizeSupabaseError(firstError, "INTELLIGENCE_SOURCE_COUNTS_FAILED");
+
+  return {
+    claims: Number(claims || 0),
+    entityLinks: Number(entityLinks || 0),
+    relationships: Number(relationships || 0),
+    sourceLinks: Number(sourceLinks || 0),
+  };
+}
+
+async function cleanupSourceDerivedData({ ownerId, sourceUuid }) {
+  const client = getClient();
+  const { data: links, error: linkLookupError } = await client
+    .from("orbit_intelligence_source_links")
+    .select("id, entity_id")
+    .eq("owner_id", ownerId)
+    .eq("source_id", sourceUuid);
+
+  if (linkLookupError) {
+    throw normalizeSupabaseError(linkLookupError, "INTELLIGENCE_SOURCE_LINK_CLEANUP_LOOKUP_FAILED");
+  }
+
+  const entityIds = Array.from(
+    new Set((links || []).map((link) => link.entity_id).filter(Boolean)),
+  );
+  const [
+    { data: deletedLinks, error: deleteLinksError },
+    { data: deletedRelationships, error: deleteRelationshipsError },
+    { data: deletedClaims, error: deleteClaimsError },
+  ] = await Promise.all([
+    client
+      .from("orbit_intelligence_source_links")
+      .delete()
+      .eq("owner_id", ownerId)
+      .eq("source_id", sourceUuid)
+      .select("id"),
+    client
+      .from("orbit_intelligence_relationships")
+      .delete()
+      .eq("owner_id", ownerId)
+      .eq("source_id", sourceUuid)
+      .select("id"),
+    client
+      .from("orbit_intelligence_claims")
+      .delete()
+      .eq("owner_id", ownerId)
+      .eq("source_id", sourceUuid)
+      .select("id, conflict_key"),
+  ]);
+  const firstDeleteError = deleteLinksError || deleteRelationshipsError || deleteClaimsError;
+
+  if (firstDeleteError) {
+    throw normalizeSupabaseError(firstDeleteError, "INTELLIGENCE_SOURCE_DERIVED_CLEANUP_FAILED");
+  }
+
+  const conflictKeysReviewed = Array.from(
+    new Set((deletedClaims || []).map((claim) => claim.conflict_key).filter(Boolean)),
+  );
+
+  await refreshConflictStatuses({ conflictKeys: conflictKeysReviewed, ownerId });
+
+  let orphanEntitiesDeleted = 0;
+
+  for (const entityId of entityIds) {
+    const remainingLinks = await countEntitySourceLinks({ entityId, ownerId });
+
+    if (remainingLinks > 0) continue;
+
+    const { data: deletedEntity, error: deleteEntityError } = await client
+      .from("orbit_intelligence_entities")
+      .delete()
+      .eq("owner_id", ownerId)
+      .eq("id", entityId)
+      .select("id")
+      .maybeSingle();
+
+    if (deleteEntityError) {
+      throw normalizeSupabaseError(deleteEntityError, "INTELLIGENCE_ORPHAN_ENTITY_DELETE_FAILED");
+    }
+
+    if (deletedEntity) orphanEntitiesDeleted += 1;
+  }
+
+  return {
+    claimsDeleted: (deletedClaims || []).length,
+    conflictKeysReviewed: conflictKeysReviewed.length,
+    orphanEntitiesDeleted,
+    relationshipsDeleted: (deletedRelationships || []).length,
+    sourceLinksDeleted: (deletedLinks || []).length,
+  };
+}
+
+function buildReprocessAuditMetadata({ afterCounts, beforeCounts, cleanup, reprocessedAt, source }) {
+  return safeMetadata({
+    afterCounts,
+    beforeCounts,
+    cleanup,
+    extractorVersion: EXTRACTOR_VERSION,
+    reprocessedAt,
+    sourceHash: source.contentHash,
+    sourceRecordId: source.id,
+    sourceType: source.sourceType,
+  });
+}
+
+async function recordIntelligenceAuditEvent({ eventType, metadata = {}, ownerId, sourceId }) {
+  const client = getClient();
+  const { error } = await client.from("orbit_intelligence_audit_events").insert({
+    event_type: eventType,
+    metadata: safeMetadata(metadata),
+    owner_id: ownerId,
+    source_id: sourceId,
+  });
+
+  if (error) throw normalizeSupabaseError(error, "INTELLIGENCE_AUDIT_EVENT_FAILED");
+}
+
+async function reprocessSource({ ownerId, sourceUuid }) {
+  const source = await getSourceForReprocess({ ownerId, sourceUuid });
+  const reprocessedAt = new Date().toISOString();
+
+  try {
+    const input = await loadSourceInputForReprocess({ ownerId, sourceRow: source });
+    const beforeCounts = await getDerivedCountsForSource({ ownerId, sourceUuid: source.id });
+    const cleanup = await cleanupSourceDerivedData({ ownerId, sourceUuid: source.id });
+    const data = await processSourceInput({
+      input: {
+        ...input,
+        reprocessedAt,
+      },
+      ownerId,
+    });
+    const afterCounts = await getDerivedCountsForSource({ ownerId, sourceUuid: source.id });
+    const auditMetadata = buildReprocessAuditMetadata({
+      afterCounts,
+      beforeCounts,
+      cleanup,
+      reprocessedAt,
+      source,
+    });
+
+    await recordIntelligenceAuditEvent({
+      eventType: "source_reprocessed",
+      metadata: auditMetadata,
+      ownerId,
+      sourceId: source.id,
+    });
+
+    return {
+      ...data,
+      reprocess: {
+        afterCounts,
+        beforeCounts,
+        cleanup,
+        extractorVersion: EXTRACTOR_VERSION,
+        reprocessedAt,
+      },
+    };
+  } catch (error) {
+    try {
+      await markSourceReprocessFailed({ ownerId, sourceUuid: source.id });
+    } catch (_statusError) {
+      // Preserve the original safe error; status repair is best effort.
+    }
+    throw error;
+  }
 }
 
 async function loadKnowledgeSource({ ownerId, sourceId }) {
@@ -925,6 +1281,8 @@ async function listSources({ filters = {}, ownerId }) {
 }
 
 module.exports = {
+  buildReprocessAuditMetadata,
+  buildReprocessSourceInput,
   getEntityDetail,
   getOverview,
   groupSourceLinksForPresentation,
@@ -934,6 +1292,7 @@ module.exports = {
   listTimeline,
   processExistingSource,
   processSourceInput,
+  reprocessSource,
   searchClaims,
   searchIntelligence,
 };

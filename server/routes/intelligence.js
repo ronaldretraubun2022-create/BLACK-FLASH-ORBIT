@@ -10,6 +10,7 @@ const {
   listTimeline,
   processExistingSource,
   processSourceInput,
+  reprocessSource,
   searchClaims,
   searchIntelligence,
 } = require("../services/intelligence/intelligenceRepository");
@@ -172,6 +173,22 @@ router.get(
     res.json({
       success: true,
       data,
+    });
+  }),
+);
+
+router.post(
+  "/sources/:id/reprocess",
+  wrapAsync(async (req, res) => {
+    const data = await reprocessSource({
+      ownerId: getOwnerId(req),
+      sourceUuid: req.params.id,
+    });
+
+    res.json({
+      success: true,
+      data,
+      message: "Intelligence source reprocessed.",
     });
   }),
 );

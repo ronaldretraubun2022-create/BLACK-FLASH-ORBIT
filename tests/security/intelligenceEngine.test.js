@@ -9,6 +9,10 @@ const migrationPath = path.join(
   rootDir,
   "supabase/migrations/20260824030000_orbit_intelligence_engine_v1_2.sql",
 );
+const reprocessMigrationPath = path.join(
+  rootDir,
+  "supabase/migrations/20260824040000_orbit_intelligence_reprocess_v1_2.sql",
+);
 const routePath = path.join(rootDir, "server/routes/intelligence.js");
 const repositoryPath = path.join(
   rootDir,
@@ -49,6 +53,24 @@ test("intelligence migration creates owner-scoped RLS tables", () => {
   assert.match(sql, /num_nonnulls\(entity_id, claim_id, relationship_id\) = 1/);
   assert.match(sql, /evidence_text text not null/);
   assert.match(sql, /source_url ~\* '\^https\?:\/\//);
+});
+
+test("intelligence reprocess migration stores source snapshots and owner-scoped audit", () => {
+  const sql = read(reprocessMigrationPath);
+
+  assert.match(sql, /add column if not exists content_snapshot text/);
+  assert.match(sql, /add column if not exists metadata jsonb not null default '\{\}'::jsonb/);
+  assert.match(sql, /create table if not exists public\.orbit_intelligence_audit_events/);
+  assert.match(sql, /owner_id uuid not null references auth\.users\(id\)/);
+  assert.match(sql, /source_id uuid references public\.orbit_intelligence_sources\(id\)/);
+  assert.match(sql, /event_type in \('source_reprocessed'\)/);
+  assert.match(
+    sql,
+    /alter table public\.orbit_intelligence_audit_events enable row level security/,
+  );
+  assert.match(sql, /using \(owner_id = auth\.uid\(\)\)/);
+  assert.match(sql, /for insert\s+with check \(false\)/);
+  assert.match(sql, /metadata::text !~\* '\(authorization\|cookie\|password/);
 });
 
 test("intelligence extractor defaults claims to unverified with source evidence", () => {
@@ -293,6 +315,119 @@ test("source evidence grouping deduplicates cards while preserving target links"
   ]);
 });
 
+test("reprocess source input preserves the original persisted source identity", () => {
+  const {
+    buildReprocessSourceInput,
+  } = require("../../server/services/intelligence/intelligenceRepository");
+  const input = buildReprocessSourceInput({
+    contentSnapshot:
+      "ORBIT Intelligence Test melaporkan Project Alpha dimulai pada 20 Agustus 2026 di Merauke.",
+    createdAt: "2026-08-24T01:00:00.000Z",
+    id: "source-row-1",
+    sourceId: "manual-1",
+    sourceType: "manual_note",
+    sourceUrl: "https://example.test/source",
+    title: "Original Source",
+  });
+
+  assert.deepStrictEqual(input, {
+    content:
+      "ORBIT Intelligence Test melaporkan Project Alpha dimulai pada 20 Agustus 2026 di Merauke.",
+    createdAt: "2026-08-24T01:00:00.000Z",
+    sourceId: "manual-1",
+    sourceType: "manual_note",
+    sourceUrl: "https://example.test/source",
+    title: "Original Source",
+  });
+});
+
+test("reprocess audit metadata excludes raw source text and sensitive values", () => {
+  const {
+    buildReprocessAuditMetadata,
+  } = require("../../server/services/intelligence/intelligenceRepository");
+  const rawText =
+    "ORBIT Intelligence Test melaporkan Project Alpha dimulai pada 20 Agustus 2026 di Merauke.";
+  const metadata = buildReprocessAuditMetadata({
+    afterCounts: { claims: 1, entityLinks: 3, relationships: 1, sourceLinks: 5 },
+    beforeCounts: { claims: 0, entityLinks: 4, relationships: 0, sourceLinks: 4 },
+    cleanup: {
+      claimsDeleted: 0,
+      orphanEntitiesDeleted: 1,
+      relationshipsDeleted: 0,
+      sourceLinksDeleted: 4,
+    },
+    reprocessedAt: "2026-08-24T04:00:00.000Z",
+    source: {
+      contentHash: "hash-1",
+      contentSnapshot: rawText,
+      id: "source-row-1",
+      sourceType: "manual_note",
+      title: rawText,
+    },
+  });
+  const serialized = JSON.stringify(metadata);
+
+  assert(!serialized.includes(rawText));
+  assert(!serialized.includes("Bearer"));
+  assert(!serialized.includes("service_role"));
+  assert.strictEqual(metadata.sourceRecordId, "source-row-1");
+  assert.strictEqual(metadata.sourceHash, "hash-1");
+});
+
+test("reprocess with current extractor removes stale month entity and creates claim timeline", () => {
+  const {
+    extractIntelligence,
+    normalizeSourceInput,
+  } = require("../../server/services/intelligence/intelligenceExtractor");
+  const source = normalizeSourceInput(
+    {
+      content:
+        "ORBIT Intelligence Test melaporkan Project Alpha dimulai pada 20 Agustus 2026 di Merauke.",
+      sourceId: "manual-reprocess-current",
+      sourceType: "manual_note",
+      title: "Reprocess current extractor",
+    },
+    "user-1",
+  );
+  const extracted = extractIntelligence(source);
+
+  assert(
+    !extracted.entities.some(
+      (entity) =>
+        entity.normalizedName === "agustus" &&
+        entity.entityType === "organization",
+    ),
+  );
+  assert(
+    extracted.claims.some(
+      (claim) =>
+        claim.status === "unverified" &&
+        claim.observedAt === "2026-08-20T00:00:00.000Z",
+    ),
+  );
+});
+
+test("reprocess cleanup is source-link aware so shared entities survive", () => {
+  const source = read(repositoryPath);
+
+  assert.match(source, /const entityIds = Array\.from\(/);
+  assert.match(source, /\.from\("orbit_intelligence_source_links"\)\s*\.delete\(\)\s*\.eq\("owner_id", ownerId\)\s*\.eq\("source_id", sourceUuid\)/s);
+  assert.match(source, /const remainingLinks = await countEntitySourceLinks\(\{ entityId, ownerId \}\)/);
+  assert.match(source, /if \(remainingLinks > 0\) continue/);
+  assert.match(source, /\.from\("orbit_intelligence_entities"\)\s*\.delete\(\)\s*\.eq\("owner_id", ownerId\)\s*\.eq\("id", entityId\)/s);
+});
+
+test("reprocess remains idempotent through cleanup and scoped upsert keys", () => {
+  const source = read(repositoryPath);
+
+  assert.match(source, /const cleanup = await cleanupSourceDerivedData\(\{ ownerId, sourceUuid: source\.id \}\)/);
+  assert.match(source, /await processSourceInput\(\{/);
+  assert.match(source, /onConflict: "owner_id,source_type,source_id"/);
+  assert.match(source, /onConflict: "owner_id,source_id,normalized_claim"/);
+  assert.match(source, /onConflict: "owner_id,source_id,link_type,target_key"/);
+  assert.match(source, /mention_count: existing\s*\?\s*Math\.max\(1, existingLinkCount \+ Number\(entity\.mentions \|\| 1\)\)/s);
+});
+
 test("intelligence routes require auth and expose scoped endpoints", () => {
   const source = read(routePath);
 
@@ -304,23 +439,36 @@ test("intelligence routes require auth and expose scoped endpoints", () => {
     "/timeline",
     "/search",
     "/source-links",
+    "/sources/:id/reprocess",
     "/process",
   ]) {
     assert(source.includes(endpoint), `${endpoint} route missing`);
   }
+  assert.match(source, /reprocessSource\(\{\s*ownerId: getOwnerId\(req\),\s*sourceUuid: req\.params\.id/s);
+  assert.doesNotMatch(source, /ownerId:\s*req\.body/);
+  assert.doesNotMatch(source, /content:\s*req\.body[^,}]*reprocess/s);
 });
 
 test("intelligence repository scopes persistence and search by owner", () => {
   const source = read(repositoryPath);
 
   assert.match(source, /\.eq\("owner_id", ownerId\)/);
+  assert.match(source, /\.eq\("id", sourceUuid\)/);
   assert.match(source, /owner_id: ownerId/);
   assert.match(source, /onConflict: "owner_id,source_type,source_id"/);
+  assert.match(source, /onConflict: "owner_id,source_id,normalized_claim"/);
+  assert.match(source, /onConflict: "owner_id,source_id,link_type,target_key"/);
   assert.match(source, /duplicate_of_source_id/);
   assert.match(source, /claim_status: "conflicting"/);
   assert.match(source, /INTELLIGENCE_SOURCE_LINK_REQUIRED/);
   assert.match(source, /const sourceLink = await upsertSourceLink/);
   assert.match(source, /sourceReferences: \[sourceLink\]/);
+  assert.match(source, /cleanupSourceDerivedData/);
+  assert.match(source, /refreshConflictStatuses/);
+  assert.match(source, /conflictKeysReviewed/);
+  assert.match(source, /orphanEntitiesDeleted/);
+  assert.match(source, /countEntitySourceLinks\(\{ entityId, ownerId \}\)/);
+  assert.match(source, /source_id: sourceRow\.id/);
   assert.doesNotMatch(source, /Authorization\s*[:=]/);
   assert.doesNotMatch(source, /OPENROUTER_API_KEY/);
   assert.doesNotMatch(source, /SUPABASE_SERVICE_ROLE_KEY/);
@@ -337,11 +485,13 @@ test("intelligence API client attaches authenticated v1 requests", () => {
     "searchIntelligence",
     "getIntelligenceSourceLinks",
     "processIntelligenceSource",
+    "reprocessIntelligenceSource",
   ]) {
     assert(source.includes(method), `${method} missing`);
   }
 
   assert.match(source, /\/api\/v1\/intelligence\/overview/);
+  assert.match(source, /\/api\/v1\/intelligence\/sources\/\$\{encodeURIComponent\(sourceId\)\}\/reprocess/);
   assert.match(source, /headers: await getAuthenticatedHeaders\(\)/);
 });
 
@@ -353,6 +503,18 @@ test("intelligence frontend renders untrusted content as text, not raw HTML", ()
   assert.doesNotMatch(source, /\beval\(/);
   assert.match(source, /\{claim\.claimText\}/);
   assert.match(source, /\{link\.evidenceText\}/);
+});
+
+test("intelligence frontend renders reprocess only for valid source evidence", () => {
+  const source = read(pagePath);
+
+  assert.match(source, /api\.reprocessIntelligenceSource\(source\.id\)/);
+  assert.match(source, /window\.confirm/);
+  assert.match(source, /disabled=\{Boolean\(reprocessingSourceId\)\}/);
+  assert.match(source, /await loadIntelligence\(filters\)/);
+  assert.match(source, /getSafeIntelligenceIntakeError\(reprocessError\)/);
+  assert.match(source, /\{link\.source\?\.id \? \(/);
+  assert.match(source, /Reprocess Source/);
 });
 
 test("manual note intake renders a bound textarea and explicit source type state", () => {
