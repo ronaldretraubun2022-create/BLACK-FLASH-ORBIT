@@ -60,6 +60,8 @@ const CLAIM_VERB_PATTERN =
   /\b(adalah|merupakan|mengatakan|menyatakan|melaporkan|mencatat|menunjukkan|mengumumkan|disebut|akan|telah|sudah|belum|memiliki|berada|terjadi|dimulai|mulai|selesai|menargetkan|mengklaim|confirmed|reported|said|will|has|is|are|was)\b/i;
 const NON_CLAIM_FRAGMENT_PATTERN =
   /^(loading|search|filter|refresh|source type|manual note|process source|apply|entity|claim|timeline|evidence|dashboard|overview)\b/i;
+const STRONG_LOCATION_CONTEXT_PATTERN =
+  /\b(?:di|dari|menuju|berlokasi\s+di|berada\s+di)\s+$/i;
 
 function createHttpError(message, statusCode = 500, code = "INTELLIGENCE_ERROR") {
   const error = new Error(message);
@@ -191,7 +193,15 @@ function splitSentences(content) {
     .slice(0, 80);
 }
 
-function inferEntityType(name, sentence = "") {
+function hasStrongLocationContext(sentence = "", startIndex = -1) {
+  if (startIndex < 0) return false;
+
+  const prefix = sentence.slice(Math.max(0, startIndex - 32), startIndex);
+
+  return STRONG_LOCATION_CONTEXT_PATTERN.test(prefix);
+}
+
+function inferEntityType(name, sentence = "", options = {}) {
   const cleanName = sanitizeText(name, 120);
   const cleanSentence = sentence.toLowerCase();
 
@@ -219,6 +229,10 @@ function inferEntityType(name, sentence = "") {
     return "event";
   }
 
+  if (options.hasStrongLocationContext) {
+    return "location";
+  }
+
   if (/\b(kabupaten|provinsi|kota|distrik|kampung|jalan|papua|merauke|jayapura|asmat|mappi|boven digoel)\b/i.test(cleanName)) {
     return "location";
   }
@@ -233,6 +247,8 @@ function extractNamedEntities(sentences) {
   const entities = new Map();
   const capitalizedPhrasePattern =
     /\b([A-Z][\p{L}\p{N}.&'-]*(?:\s+(?:[A-Z][\p{L}\p{N}.&'-]*|di|dan|of|for|the)){0,5})\b/gu;
+  const contextualLocationPattern =
+    /\b(?:di|dari|menuju|berlokasi\s+di|berada\s+di)\s+([A-Z][\p{L}\p{N}.&'-]*(?:\s+[A-Z][\p{L}\p{N}.&'-]*){0,3})\b/gu;
 
   function addEntity({ confidence = 0.62, entityType, name, sentence }) {
     const normalizedName = normalizeKeyword(name, 120);
@@ -256,6 +272,20 @@ function extractNamedEntities(sentences) {
   }
 
   sentences.forEach((sentence) => {
+    for (const match of sentence.matchAll(contextualLocationPattern)) {
+      const name = sanitizeText(match[1], 120);
+      const normalizedName = normalizeKeyword(name, 120);
+
+      if (!normalizedName || normalizedName.length < 3) continue;
+      if (isMonthName(name)) continue;
+
+      const entityType = inferEntityType(name, sentence, {
+        hasStrongLocationContext: true,
+      });
+      if (!entityType) continue;
+      addEntity({ confidence: 0.7, entityType, name, sentence });
+    }
+
     for (const match of sentence.matchAll(capitalizedPhrasePattern)) {
       const name = sanitizeText(match[1], 120);
       const normalizedName = normalizeKeyword(name, 120);
@@ -282,7 +312,9 @@ function extractNamedEntities(sentences) {
         continue;
       }
 
-      const entityType = inferEntityType(name, sentence);
+      const entityType = inferEntityType(name, sentence, {
+        hasStrongLocationContext: hasStrongLocationContext(sentence, match.index),
+      });
       if (!entityType) continue;
       addEntity({ entityType, name, sentence });
     }

@@ -200,6 +200,120 @@ test("Indonesian declarative project start sentence creates unverified dated cla
   );
 });
 
+test("Indonesian location context classifies place names without month false positives", () => {
+  const {
+    extractIntelligence,
+    normalizeSourceInput,
+  } = require("../../server/services/intelligence/intelligenceExtractor");
+  const source = normalizeSourceInput(
+    {
+      content:
+        "ORBIT Reprocess Test melaporkan Project Gamma dimulai pada 15 Oktober 2026 di Sorong. Project Gamma disebut kembali di Jayapura dan dari Merauke.",
+      sourceId: "manual-location-context",
+      sourceType: "manual_note",
+      title: "Location context regression",
+    },
+    "user-1",
+  );
+  const extracted = extractIntelligence(source);
+  const hasEntity = (normalizedName, entityType) =>
+    extracted.entities.some(
+      (entity) =>
+        entity.normalizedName === normalizedName &&
+        entity.entityType === entityType,
+    );
+
+  assert(hasEntity("sorong", "location"));
+  assert(hasEntity("jayapura", "location"));
+  assert(hasEntity("merauke", "location"));
+  assert(hasEntity("orbit", "organization"));
+  assert(hasEntity("project gamma", "project"));
+  assert(!extracted.entities.some((entity) => entity.normalizedName === "oktober"));
+  assert(!hasEntity("sorong", "organization"));
+  assert(
+    extracted.claims.some(
+      (claim) =>
+        claim.status === "unverified" &&
+        claim.observedAt === "2026-10-15T00:00:00.000Z",
+    ),
+  );
+});
+
+test("location context does not override stronger deterministic entity evidence", () => {
+  const {
+    extractIntelligence,
+    normalizeSourceInput,
+  } = require("../../server/services/intelligence/intelligenceExtractor");
+  const source = normalizeSourceInput(
+    {
+      content:
+        "Rapat berlangsung di PT Papua Media. Project Gamma berada di Sorong.",
+      sourceId: "manual-location-stronger-evidence",
+      sourceType: "manual_note",
+      title: "Location stronger evidence regression",
+    },
+    "user-1",
+  );
+  const extracted = extractIntelligence(source);
+
+  assert(
+    extracted.entities.some(
+      (entity) =>
+        entity.normalizedName === "pt papua media" &&
+        entity.entityType === "organization",
+    ),
+  );
+  assert(
+    extracted.entities.some(
+      (entity) =>
+        entity.normalizedName === "project gamma" &&
+        entity.entityType === "project",
+    ),
+  );
+  assert(
+    extracted.entities.some(
+      (entity) =>
+        entity.normalizedName === "sorong" &&
+        entity.entityType === "location",
+    ),
+  );
+});
+
+test("repeated extraction for the same source remains stable for reprocess idempotency", () => {
+  const {
+    extractIntelligence,
+    normalizeSourceInput,
+  } = require("../../server/services/intelligence/intelligenceExtractor");
+  const input = {
+    content:
+      "ORBIT Reprocess Test melaporkan Project Gamma dimulai pada 15 Oktober 2026 di Sorong.",
+    createdAt: "2026-08-24T05:00:00.000Z",
+    sourceId: "manual-reprocess-idempotent",
+    sourceType: "manual_note",
+    title: "Reprocess idempotent fixture",
+  };
+  const first = extractIntelligence(normalizeSourceInput(input, "user-1"));
+  const second = extractIntelligence(normalizeSourceInput(input, "user-1"));
+  const entityKey = (entity) => `${entity.entityType}:${entity.normalizedName}`;
+  const claimKey = (claim) => `${claim.normalizedClaim}:${claim.observedAt}`;
+
+  assert.deepStrictEqual(
+    first.entities.map(entityKey).sort(),
+    second.entities.map(entityKey).sort(),
+  );
+  assert.deepStrictEqual(
+    first.claims.map(claimKey).sort(),
+    second.claims.map(claimKey).sort(),
+  );
+  assert.deepStrictEqual(
+    first.dates.map((date) => date.isoDate).sort(),
+    second.dates.map((date) => date.isoDate).sort(),
+  );
+  assert.strictEqual(new Set(first.entities.map(entityKey)).size, first.entities.length);
+  assert.strictEqual(new Set(first.claims.map(claimKey)).size, first.claims.length);
+  assert.strictEqual(first.dates[0].isoDate, "2026-10-15");
+});
+
 test("controlled notes keep recurring entities and contradictory start claims comparable", () => {
   const {
     buildConflictKey,
