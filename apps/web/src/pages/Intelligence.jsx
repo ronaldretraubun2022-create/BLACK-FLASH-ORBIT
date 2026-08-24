@@ -121,6 +121,8 @@ export function Intelligence() {
   const [intakeMessage, setIntakeMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [reprocessMessage, setReprocessMessage] = useState("");
+  const [reprocessingSourceId, setReprocessingSourceId] = useState("");
   const canProcessManualNote = canSubmitManualNote({
     content: manualNote.content,
     isProcessing,
@@ -236,6 +238,30 @@ export function Intelligence() {
       setError(getSafeIntelligenceIntakeError(processError));
     } finally {
       setIsProcessing(false);
+    }
+  }
+
+  async function handleReprocessSource(source) {
+    if (!source?.id || reprocessingSourceId) return;
+
+    const confirmed = window.confirm(
+      "Reprocess this source with the current intelligence extractor?",
+    );
+
+    if (!confirmed) return;
+
+    setReprocessingSourceId(source.id);
+    setError("");
+    setReprocessMessage("");
+
+    try {
+      await api.reprocessIntelligenceSource(source.id);
+      setReprocessMessage("Source reprocessed.");
+      await loadIntelligence(filters);
+    } catch (reprocessError) {
+      setError(getSafeIntelligenceIntakeError(reprocessError));
+    } finally {
+      setReprocessingSourceId("");
     }
   }
 
@@ -356,6 +382,11 @@ export function Intelligence() {
                         {intakeMessage}
                       </p>
                     ) : null}
+                    {reprocessMessage ? (
+                      <p className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-bold text-emerald-100">
+                        {reprocessMessage}
+                      </p>
+                    ) : null}
                     <button
                       className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-[#d9ad57]/35 bg-[#d9ad57]/15 px-4 text-sm font-black text-[#f1c36f] transition hover:bg-[#d9ad57]/20 disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={!canProcessManualNote}
@@ -453,7 +484,12 @@ export function Intelligence() {
                   <Timeline items={timeline} isLoading={isLoading} />
                 </Panel>
                 <Panel icon={Link2} kicker="Evidence" title="Source Evidence">
-                  <EvidencePanel links={sourceLinks} isLoading={isLoading} />
+                  <EvidencePanel
+                    links={sourceLinks}
+                    isLoading={isLoading}
+                    onReprocessSource={handleReprocessSource}
+                    reprocessingSourceId={reprocessingSourceId}
+                  />
                 </Panel>
               </section>
             </div>
@@ -634,7 +670,12 @@ function SearchResults({ results }) {
   );
 }
 
-function EvidencePanel({ isLoading, links }) {
+function EvidencePanel({
+  isLoading,
+  links,
+  onReprocessSource,
+  reprocessingSourceId,
+}) {
   if (isLoading) return <EmptyState label="Loading source evidence..." />;
   if (!links.length) return <EmptyState label="No source links yet." />;
 
@@ -655,6 +696,18 @@ function EvidencePanel({ isLoading, links }) {
             </div>
             <Link2 className="shrink-0 text-zinc-500" size={16} />
           </div>
+          {link.source?.id ? (
+            <button
+              className="mt-3 inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-[#d9ad57]/30 bg-[#d9ad57]/10 px-3 text-xs font-black text-[#f1c36f] transition hover:bg-[#d9ad57]/15 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={Boolean(reprocessingSourceId)}
+              onClick={() => onReprocessSource(link.source)}
+              type="button">
+              <RefreshCcw size={14} />
+              {reprocessingSourceId === link.source.id
+                ? "Reprocessing..."
+                : "Reprocess Source"}
+            </button>
+          ) : null}
           <div className="mt-3 flex flex-wrap gap-2">
             {getLinkTypes(link).map((type) => (
               <span
